@@ -1,6 +1,6 @@
 # AI Supermarket Shopping Assistant — Design
 
-Date: 2026-07-26
+Date: 2026-07-27
 Status: Approved for planning
 
 ## 1. Problem & Scope
@@ -8,18 +8,27 @@ Status: Approved for planning
 **Problem**: Shopping across Israeli supermarket chains requires users to manually search
 for each product, compare package sizes and prices, verify whether all requested items are
 listed, and repeat the process when shopping from a recipe. This is time-consuming and makes
-it difficult to understand which single retailer offers the best complete cart.
+it difficult to understand which single retailer offers the best complete cart — and even
+after deciding, the user still has to manually re-enter every item on the retailer's own
+website.
 
 **Proposed solution**: The system converts a natural-language request into a structured
 shopping list, retrieves matching products and offers from normalized supermarket
-price-transparency data, and produces the best single-retailer cart while respecting budget,
-dietary, brand, and retailer preferences. The agent understands requests for groceries,
-recipes, cleaning products, personal care, and other supermarket items across two Israeli
-chains (Shufersal and Rami Levy). For recipe requests, the agent extracts ingredients via a
-recipe API before searching for matching products.
+price-transparency data, and builds an optimized internal cart for the single best retailer,
+respecting budget, dietary, brand, and retailer preferences. Once the user explicitly
+approves that proposed cart, the system attempts to prepare the corresponding **real
+retailer cart** on the retailer's own website through browser automation — searching for
+each item, matching it, and adding it with the right quantity. The system prepares the
+selected retailer's online cart but never proceeds to checkout, payment, or order
+submission. The agent understands requests for groceries, recipes, cleaning products,
+personal care, and other supermarket items across two Israeli chains (Shufersal and Rami
+Levy). For recipe requests, the agent extracts ingredients via a recipe API before searching
+for matching products.
 
-**Hard constraint**: the system never places an order or makes a payment. It stops after
-preparing the cart and returns product/cart-adjacent links where possible.
+**Hard constraint**: the system never places an order or makes a payment, never logs into a
+retailer account, and never completes checkout. Browser automation only begins after the
+user explicitly approves the proposed cart, and stops before any checkout/login/payment
+step.
 
 **Project context**: solo developer, several weeks to build. This is a course/capstone final
 project with a fixed checklist of required technologies (see Requirements Traceability, §9).
@@ -37,392 +46,420 @@ project with a fixed checklist of required technologies (see Requirements Tracea
                                   │   LangGraph Agent      │
                                   │ (Claude via Amazon     │
                                   │  Bedrock Converse API) │
-                                  └──────┬─────────┬───────┘
-                          MCP tool calls │         │ MCP tool calls
-                                         ▼         ▼
-                       ┌──────────────────┐   ┌───────────────────────┐
-                       │  Recipe MCP       │   │  Supermarket-Data MCP  │
-                       │  server           │   │  server                │
-                       │  (wraps           │   │  (product search/      │
-                       │   Spoonacular)    │   │   offer lookup only)   │
-                       └───────────────────┘   └───────────┬────────────┘
-                                                            │ queries (SQLAlchemy)
-                                                            ▼
-                                                ┌────────────────────────┐
-                                                │ Product DB              │
-                                                │ SQLite — local dev/tests │
-                                                │ PostgreSQL — deployed    │
-                                                │   dev & prod namespaces  │
-                                                └────────────────────────┘
-                                                            ▲
-                                              validated staging load,
-                                              atomic dataset activation
-                                                            │
-                                                ┌────────────────────────┐
-                                                │ Ingestion job            │
-                                                │ (K8s CronJob in deployed  │
-                                                │  dev/prod; manual run     │
-                                                │  against local/sample     │
-                                                │  data for local dev) —    │
-                                                │  downloads/parses         │
-                                                │  Shufersal & Rami Levy    │
-                                                │  price-transparency feeds │
-                                                └────────────────────────┘
+                                  └──┬──────────┬───────┬──┘
+                         MCP calls   │          │       │ MCP call (only after
+                                     ▼          ▼        │  user approves cart)
+                   ┌──────────────────┐  ┌──────────────────────┐   ▼
+                   │  Recipe MCP       │  │  Supermarket-Data MCP │  ┌───────────────────────┐
+                   │  server           │  │  server                │  │  Retailer-Cart MCP     │
+                   │  (wraps           │  │  (product search/      │  │  server (Playwright)   │
+                   │   Spoonacular)    │  │   offer lookup only)   │  │  — opens the retailer's │
+                   └───────────────────┘  └───────────┬────────────┘  │  site, searches, adds   │
+                                                        │ queries      │  matched items+qty to    │
+                                                        ▼              │  the real cart, stops    │
+                                            ┌────────────────────────┐│  before checkout/login/  │
+                                            │ Product DB              ││  payment                 │
+                                            │ SQLite — local dev/tests ││                         │
+                                            │ PostgreSQL — deployed    │└───────────────────────┘
+                                            │   dev & prod namespaces  │
+                                            └────────────────────────┘
+                                                        ▲
+                                          validated staging load,
+                                          atomic dataset activation
+                                                        │
+                                            ┌────────────────────────┐
+                                            │ Ingestion job            │
+                                            │ (K8s CronJob in deployed  │
+                                            │  dev/prod; manual run     │
+                                            │  against local/sample     │
+                                            │  data for local dev) —    │
+                                            │  downloads/parses         │
+                                            │  Shufersal & Rami Levy    │
+                                            │  price-transparency feeds │
+                                            └────────────────────────┘
 
 LangGraph checkpoint/state → DynamoDB (deployed dev/prod namespaces) or
 in-memory/SQLite (local development & automated tests) — enables
-interrupt/resume for clarification questions.
+interrupt/resume both for clarification questions and for the cart-approval
+gate before browser automation runs.
 ```
 
 **Division of responsibility**: the Supermarket-Data MCP server is a data-access tool only
-(search, offer lookup, comparison of specific candidates). All "shopping intelligence" —
-cart optimization, applying budget/dietary/brand/retailer preferences — lives in the
-LangGraph agent layer, not in the MCP server.
+(search, offer lookup, comparison of specific candidates), and remains solely responsible
+for feed-based product/price lookup. The Retailer-Cart MCP server (Playwright) is
+responsible **only** for interacting with the retailer's live website and preparing the
+real online cart — it does not search, price, or optimize anything itself; it acts strictly
+on the already-optimized cart handed to it. All "shopping intelligence" — cart optimization,
+applying budget/dietary/brand/retailer preferences — lives in the LangGraph agent layer, not
+in either MCP server. These responsibilities are kept deliberately separate.
 
 **Data source**: Israeli supermarkets are legally required (Price Transparency Law) to
-publish machine-readable price/product feeds. This project ingests those bulk XML/GZIP files
-rather than scraping live sites or using an unofficial API. Consequence: "availability" means
-*the product is listed in the retailer's published feed*, not a live/real-time stock
-guarantee. There is no official add-to-cart API, so the system never attempts real
-cart/checkout — only best-effort product or retailer-search links.
+publish machine-readable price/product feeds. This project ingests those bulk data files
+rather than scraping live sites for search/pricing, or using an unofficial API. Consequence:
+"availability" means *the product is listed in the retailer's published feed*, not a
+live/real-time stock guarantee. The retailer website is only touched later, and only for the
+narrow purpose of preparing the real cart after approval — never for search/pricing
+decisions.
 
 ## 3. Components
 
-- **LangGraph Agent** — graph nodes: `parse_request` → (recipe path: `search_recipes` →
-  [interrupt if ambiguous] → `get_recipe_ingredients`) → `search_products` →
-  [interrupt if ambiguous match] → `optimize_cart` → `finalize`. Runs on Claude via the
-  Amazon Bedrock Converse API. State persisted via a checkpointer so paused
-  (awaiting-clarification) threads resume correctly.
+- **LangGraph Agent** — interprets the request, orchestrates the recipe and product-search
+  tools, pauses to ask the user a clarifying question when needed, builds the proposed cart,
+  pauses again to get the user's explicit approval, and — only if approved — invokes the
+  Retailer-Cart MCP server to prepare the real cart. Runs on Claude via the Amazon Bedrock
+  Converse API. Conversation state is persisted so a paused (awaiting-clarification or
+  awaiting-cart-approval) conversation resumes correctly rather than starting over.
 
-- **Recipe MCP server** (custom, domain-specific) — tools:
-  - `search_recipes(query)` — candidate recipes from Spoonacular.
-  - `get_recipe(recipe_id)` — full recipe detail.
-  - `get_recipe_ingredients(recipe_id, servings?)` — structured ingredient list, scaled to
-    servings where Spoonacular supports it.
+- **Recipe MCP server** (custom, domain-specific) — looks up recipes and extracts their
+  ingredient lists from an external recipe API (Spoonacular), scaling quantities to the
+  requested number of servings where supported.
 
-- **Supermarket-Data MCP server** (custom, domain-specific) — tools:
-  - `search_product(query, retailer?)` — lightweight candidate list (name, `product_id`,
-    basic price where cheaply available).
-  - `get_product_offers(product_id)` — full per-retailer offer detail (aggregated across
-    that retailer's branches — see Data Model below): price, `listed_in_feed`,
-    `last_updated_at`. Called only for shortlisted candidates from `search_product`, to
-    minimize MCP round-trips.
-  - `compare_product(candidates[])` — compare a specific set of candidates.
+- **Supermarket-Data MCP server** (custom, domain-specific) — searches for candidate
+  products and retrieves per-retailer pricing/listing information for a shortlist of likely
+  candidates, to keep lookups efficient. This server only retrieves data — it does not
+  decide which product is "best"; that judgment stays in the agent layer.
 
-- **Dietary rule engine** — a deterministic, structured rule set (not LLM judgment) that
-  tags products/ingredients with attributes (e.g. `contains_dairy`, `contains_gluten`,
-  `vegan`) and hard-filters/flags matches against the request's stated dietary constraints.
-  The LLM (via `parse_request`) only extracts the constraint text and proposes candidate
-  substitution products for the graph to check against this engine — it cannot override or
-  reinterpret an explicit restriction.
+- **Retailer-Cart MCP server (Playwright)** (custom, domain-specific) — after the user
+  approves the proposed cart, opens the selected retailer's website in an automated browser,
+  searches for each approved item, matches it against the product the agent selected, adds
+  the matched product with the correct quantity to the site's real shopping cart, and stops.
+  It never proceeds to checkout, never logs in, and never enters payment details — those
+  actions are simply not implemented anywhere in this component, not just avoided at
+  runtime. If an item can't be matched or added on the site, automation continues with the
+  remaining items and reports the failure for that item. If the site presents a CAPTCHA,
+  bot-blocking challenge, a login wall, or has changed in a way the automation doesn't
+  recognize, it stops gracefully and reports a partial result rather than failing the whole
+  request.
 
-- **Ingestion job** — downloads, validates, and loads Shufersal & Rami Levy
-  price-transparency feeds via a validated staging load with atomic dataset activation (see
-  §5). Runs as a Kubernetes CronJob in deployed dev/prod namespaces; run manually against
-  sample/snapshot data for local development.
+- **Dietary rule engine** — a deterministic, rule-based component (not left to the
+  language model's judgment) that tags products/ingredients with dietary attributes and
+  enforces the user's stated dietary restrictions. The language model may propose candidate
+  substitutions, but cannot override or reinterpret an explicit restriction.
 
-- **FastAPI backend** — REST endpoints (`POST /chat`, etc.) fronting the LangGraph agent.
-  No authentication in the MVP. Generates the `thread_id` (see §4 API Contract Example).
+- **Ingestion job** — downloads and loads the two retailers' published price-transparency
+  data on a schedule. A feed is fully validated before it replaces previously loaded data, so
+  a failed or partial download never corrupts what's already there. Runs as a scheduled job
+  in deployed environments; run manually against sample data for local development.
 
-- **React SPA** — chat-style UI: message input, agent responses, inline clarification
-  prompts, final cart display (items, retailer, unit price, subtotal, total vs. budget,
-  per-item product/search link), missing-items and warning/staleness banners.
+- **FastAPI backend** — the REST API fronting the agent. Issues a per-conversation
+  identifier so multi-step interactions (like clarification questions and cart approval) can
+  be resumed correctly. No user authentication in the MVP.
 
-- **Product DB** — SQLAlchemy ORM + repository pattern. Models, repositories, and business
-  logic are identical across environments; only `DATABASE_URL` changes:
-  - Local development/tests: `sqlite:///./app.db`
-  - Deployed dev & prod namespaces: `postgresql+psycopg://user:password@host:5432/supermarket`
+- **React SPA** — the chat-style web interface: request input, agent responses, inline
+  clarification prompts, the proposed cart (items, retailer, pricing, totals vs. budget) with
+  an explicit approve/decline action, and — after approval — the real-cart preparation
+  result (items successfully added, items that failed and why, and a link to the retailer's
+  cart/site if available), with missing items and warnings clearly separated.
 
-- **LangGraph checkpointer** — DynamoDB in deployed dev/prod namespaces; in-memory or SQLite
-  checkpointer for local development and automated tests. Swappable via config only.
+- **Product data storage** — holds canonical product and pricing data behind an ORM/
+  repository layer, so the same application code runs against a lightweight database
+  locally and a full database when deployed — only configuration changes between
+  environments.
 
-### Data Model: Canonical Products & Retailer Offers
+- **Conversation state storage** — persists in-progress/paused conversations so multi-turn
+  interactions (e.g., waiting on a clarification answer, or waiting on cart approval) resume
+  correctly; a lightweight option is used for local development and automated tests, a
+  managed option when deployed.
 
-Prices are not shared across retailers by a common SKU. The data model separates:
+### Data Model (conceptual)
 
-- **CanonicalProduct** — `product_id` (internal), `barcode` (EAN/UPC, when known and
-  reliable), `name`, `category`, `package_size` (numeric), `package_unit` (normalized:
-  g / kg / ml / l / unit).
-- **RetailerOffer** — `retailer` (`shufersal` | `rami_levy`), `branch_id` (the specific
-  physical branch published in that retailer's price-transparency feed — retailers publish
-  per-branch, and prices can differ by branch), `retailer_product_code` (the retailer's own
-  item code from the feed), `barcode` (as published by that retailer, used to join to a
-  `CanonicalProduct`), `price`, `listed_in_feed`, `last_updated_at`.
+Products are modeled at two levels: a **canonical product** (a single logical product,
+matched across retailers primarily by barcode when available, with a fuzzy name/size match
+as a fallback) and a **retailer offer** (that product's price and listing status at a
+specific retailer — and, since each retailer publishes data per physical branch, at a
+specific branch within that retailer). This separation avoids assuming that a single product
+identifier is shared across retailers.
 
-Canonical products are matched across retailers primarily by `barcode` when present and
-consistent; when the barcode is missing or unreliable, matching falls back to fuzzy
-name+package-size similarity (used by `search_product`'s candidate shortlist).
+"Store" in casual language means **retailer** (the chain — Shufersal or Rami Levy), not a
+specific physical branch. For the MVP, cart optimization treats a retailer's offer as the
+minimum price across its branches; choosing a specific branch/location is a future
+enhancement, not built now.
 
-**Retailer vs. branch**: "store" in earlier drafts of this spec meant **retailer** (the
-chain — Shufersal or Rami Levy), not a specific physical branch. Since feeds are published
-per-branch, cart optimization's `single_store` mode is precisely scoped as
-**`single_retailer`**: for MVP, `get_product_offers` aggregates to retailer level by taking
-the **minimum price across that retailer's branches** (retaining the winning `branch_id` for
-traceability/links). Letting the user pick or filter by a specific branch/location is a
-future enhancement, not built now.
+Prices are normalized to a per-unit basis (e.g., per kilogram or per liter) so
+differently-sized packages of the same or substitute products can be compared fairly, rather
+than comparing raw shelf prices.
 
-**Package/unit normalization**: every offer's price is normalized to a `unit_price`
-(price ÷ normalized quantity, e.g. ₪/kg, ₪/liter, ₪/unit) so differently-sized packages of
-the same product (or candidate substitute products) can be compared on a like-for-like
-basis. Cart optimization and substitution scoring use this `unit_price`, never raw shelf
-price.
+This feed-based data model and the optimization it powers are unaffected by browser
+automation: the Retailer-Cart MCP server consumes the already-decided cart (product names,
+quantities, and the chosen retailer) — it does not re-derive pricing or matching decisions
+from what it sees on the live site.
 
 ## 4. Data Flow
 
 **Recipe request** (e.g. "shakshuka for 4 people, budget 150 shekels, no dairy"):
 
-1. React SPA sends `POST /chat`. For a new conversation, the **FastAPI backend generates**
-   the `thread_id` and returns it in the first response; the client only **reuses** that
-   same `thread_id` on every follow-up (including clarification answers) — it never
-   generates its own — so the LangGraph checkpointer resumes the correct paused thread
-   instead of starting a new one.
-2. `parse_request` (Claude) classifies the request as a recipe request and extracts
-   `{recipe_query, servings, budget, dietary constraints, retailer/brand preferences}`.
-   Preferences are always supplied inline in the request — there is no persisted user
-   profile in the MVP.
-3. `search_recipes("shakshuka")` — if there is one clear top match, continue automatically;
-   if multiple plausible matches, **interrupt** and ask the user to pick, before calling
-   `get_recipe_ingredients` at all.
-4. `get_recipe_ingredients(id, servings=4)` returns the scaled ingredient list.
-5. For each ingredient: `search_product(name)` → shortlist candidates → `get_product_offers`
-   only for the shortlist, across both retailers.
-6. **Dietary constraints** are applied at two points via the deterministic dietary rule
-   engine (not left to LLM discretion): at recipe selection (avoid recipes fundamentally
-   incompatible with the constraint) and at product matching (a conflicting ingredient —
-   e.g. dairy in a "no dairy" request — first tries a substitution; only if no substitution
-   exists is it flagged/asked-about, never silently dropped). The LLM may propose candidate
-   substitutions, but the rule engine has final say on whether a product violates a stated
-   restriction.
-7. If a specific ingredient has multiple plausible product matches, the graph **interrupts**
-   and asks the user to choose, using the checkpointed thread to resume correctly.
-8. `optimize_cart` runs in `shopping_mode: single_retailer` (the only mode in the MVP): check
-   whether either retailer alone can cover the full cart; if one or both can, pick the
-   cheaper fully-covering retailer; if neither can, score each retailer by a coverage+cost
-   combination and pick the best-scoring single retailer. `cheapest_split` (mixing retailers
-   per item) is a documented future enhancement, not built now.
-9. `finalize` returns the cart (items, retailer, price, product/search link), totals vs.
-   budget, and a missing-items list with reasons.
-10. React SPA renders the cart, inline clarification prompts, and missing items/warnings
-    clearly separated.
+1. The user sends a message. For a new conversation, the backend creates and returns a
+   conversation identifier; the client includes that same identifier on every follow-up
+   message (including answers to clarification questions and the cart-approval decision) so
+   the correct in-progress conversation resumes rather than starting over.
+2. The agent classifies the request as a recipe request and extracts the recipe, requested
+   servings, budget, dietary constraints, and any retailer/brand preferences. Preferences are
+   always provided inline in the request — there is no persisted user profile in the MVP.
+3. The agent looks up matching recipes. If there's one clear match, it proceeds
+   automatically; if several plausible recipes match, it pauses and asks the user to choose
+   before going further.
+4. The agent retrieves the recipe's ingredient list, scaled to the requested servings.
+5. For each ingredient, the agent searches for candidate products and retrieves
+   pricing/availability for a short list of the most likely matches, across both retailers.
+6. Dietary constraints are checked at both the recipe-selection and product-matching stages,
+   using the deterministic dietary rule engine: a conflicting ingredient is first substituted
+   where a suitable alternative exists, and only flagged/asked about when no substitution is
+   available — it is never silently dropped.
+7. If a specific ingredient has multiple plausible product matches, the agent pauses and asks
+   the user to choose, then resumes from that point once answered.
+8. The agent builds the proposed cart using single-retailer optimization (the only mode in
+   the MVP): it checks whether either retailer alone can supply everything; if so, it picks
+   the cheaper of those; if neither can fully cover the list, it picks the retailer offering
+   the best combination of coverage and cost, and reports what's missing. Splitting a cart
+   across multiple retailers to minimize cost is a documented future enhancement, not built
+   now.
+9. The agent presents the proposed cart (items, retailer, pricing, totals vs. budget, any
+   missing items) and **pauses, asking the user to explicitly approve or decline** preparing
+   this cart for real on the retailer's website. This is a distinct approval step, separate
+   from the clarification interrupts in steps 3 and 7.
+10. If the user declines, the conversation ends there — the proposed cart stands as the
+    result, and no browser automation ever runs.
+11. If the user approves, the agent invokes the Retailer-Cart MCP server with the approved
+    retailer, items, and quantities. The automation opens that retailer's site, searches for
+    and adds each matched item to the real cart, and stops before any checkout, login, or
+    payment step. If an item can't be matched or added, automation continues with the rest
+    and records that item as failed, with a reason.
+12. The agent returns the final result: the proposed cart, and — if approved — which items
+    were successfully added to the real retailer cart, which failed and why, and a link to
+    the retailer's cart/site if the automation could obtain one. If the site blocked
+    automation partway through (CAPTCHA, bot detection, login wall, or an unrecognized page
+    layout), this is reported clearly rather than treated as a crash.
+13. The web UI displays the proposed cart with its approve/decline control, any clarification
+    questions inline, and — once resolved — the real-cart preparation result, with missing
+    items and warnings clearly separated from successfully handled items.
 
-**Direct grocery-list request** ("milk, bread, 2kg rice, dish soap") skips the recipe branch
-(steps 3–4) — `parse_request` extracts the item list directly and proceeds to step 5.
-
-### API Contract Example — `POST /chat`
-
-First request (new conversation):
-
-```json
-{ "message": "shakshuka for 4 people, budget 150 shekels, no dairy" }
-```
-
-Response — `needs_clarification` (ambiguous recipe match; backend-generated `thread_id`):
-
-```json
-{
-  "thread_id": "b3f1c2e0-9e2a-4b7a-8b1a-3d2f6a9c0e11",
-  "status": "needs_clarification",
-  "clarification": {
-    "reason": "ambiguous_recipe",
-    "question": "I found a few shakshuka recipes — which one did you mean?",
-    "options": [
-      { "id": "rec_101", "label": "Classic Shakshuka" },
-      { "id": "rec_204", "label": "Green Shakshuka (spinach)" }
-    ]
-  },
-  "cart": null,
-  "warnings": []
-}
-```
-
-Follow-up request (client reuses the returned `thread_id`; it never generates its own):
-
-```json
-{ "thread_id": "b3f1c2e0-9e2a-4b7a-8b1a-3d2f6a9c0e11", "message": "the classic one" }
-```
-
-Final response:
-
-```json
-{
-  "thread_id": "b3f1c2e0-9e2a-4b7a-8b1a-3d2f6a9c0e11",
-  "status": "partial_success",
-  "clarification": null,
-  "cart": {
-    "retailer": "shufersal",
-    "items": [
-      {
-        "product_id": "p_5521",
-        "name": "Eggs, 12ct",
-        "unit_price": 1.5,
-        "qty": 1,
-        "subtotal": 18.0,
-        "link": "https://www.shufersal.co.il/online/he/search?text=eggs"
-      }
-    ],
-    "total": 142.0,
-    "budget": 150.0,
-    "over_budget_by": 0
-  },
-  "warnings": [
-    { "code": "product_not_found", "message": "Couldn't find harissa paste at either retailer." }
-  ]
-}
-```
+**Direct grocery-list request** (e.g. "milk, bread, 2kg rice, dish soap") skips the
+recipe-specific steps (3–4) — the agent extracts the item list directly from the request and
+proceeds to product search (step 5) — but still goes through the same cart-approval and
+(if approved) browser-automation steps (9–13).
 
 ## 5. Error Handling
 
-- **Partial-failure tolerance**: a single failed MCP call never fails the whole request —
-  the graph continues with what it has and reports the gap. **HTTP 503** is reserved for
-  cases where the request cannot meaningfully continue at all (e.g. the entire
-  Supermarket-Data MCP is unreachable, or the underlying Bedrock/LLM call fails).
-- **Typed error codes**: `recipe_api_unavailable`, `recipe_not_found`, `mcp_timeout`,
-  `product_not_found`, `product_lookup_failed`, `dietary_conflict`, `ingestion_failed`,
-  `budget_exceeded`, `invalid_request`.
-- **Retry policy**: only transient failures are retried (timeouts, rate limits, network
-  errors, temporary 5xx) with one backoff retry. Validation errors and not-found results are
-  never retried.
-- **Response status vs. warnings**: API responses carry a `status` of `success`,
-  `partial_success`, or `needs_clarification` (set whenever the graph has interrupted and is
-  waiting on a clarification answer — recipe ambiguity or product-match ambiguity).
-  Conditions like `budget_exceeded`, stale retailer data, or a failed lookup for one item
-  produce `partial_success` with a `warnings` array — these remain **HTTP 200**, since a
-  usable cart was still produced.
-- **Over-budget reporting**: response includes `total`, `budget`, and `over_budget_by`; the
-  agent may suggest cheaper substitutions but never auto-removes items.
-- **Atomic ingestion**: each run downloads and validates the *complete* feed for a chain,
-  loads it into a staging table/transaction, and activates it as the active dataset only
-  after full validation succeeds — a validated staging load followed by atomic dataset
-  activation. A failed/partial run never corrupts the live Product DB.
-- **Per-retailer freshness**: each retailer's data carries its own independent
-  `last_updated_at` and `stale` flag — e.g. Shufersal can be fresh while Rami Levy is stale,
-  and this is surfaced per-retailer (never collapsed into one global flag) in both the API
-  and the UI.
-- **Demo resilience fallback**: if a live retailer feed is temporarily unavailable (e.g. at
-  demo time), the ingestion job can be pointed at a recent stored feed snapshot instead of
-  the live URL — same fetch interface, same download→validate→stage→atomic-activate code
-  path — so the demo isn't blocked by an external feed being unreachable.
-- **Malformed/unintelligible request**: if `parse_request` extracts nothing actionable, the
-  agent asks a clarifying question rather than guessing.
+- A single failed lookup (e.g., one product that couldn't be checked) never fails the whole
+  request — the agent continues with what it has and reports the gap. A full failure
+  response is reserved for cases where the request cannot meaningfully continue at all (e.g.
+  the product-data service is entirely unreachable, or the underlying language model call
+  fails).
+- The system distinguishes transient problems (timeouts, rate limits, temporary
+  network/service errors) — which are retried once — from permanent ones (invalid input,
+  genuinely not found) — which are not retried and are reported immediately.
+- Responses distinguish between a fully successful result, a result with warnings (e.g., over
+  budget, one item not found, one retailer's data is stale) that still contains a usable
+  cart, and a paused result awaiting a clarification answer or cart-approval decision.
+  Warnings never block returning a usable cart.
+- If the total cost exceeds the stated budget, the system reports the total, the budget, and
+  the amount over budget; it may suggest cheaper substitutions, but never removes items
+  automatically — the user decides.
+- Ingestion is atomic: a feed is fully downloaded and validated before it replaces previously
+  loaded data, so a failed or partial download never corrupts what's already there.
+- Each retailer's data freshness (last updated time, and whether it's considered stale) is
+  tracked and reported independently — one retailer being stale doesn't hide the other's
+  freshness.
+- If a live retailer feed is temporarily unavailable (e.g., during a demo), a recent stored
+  snapshot can be used instead, through the same ingestion process, so a temporary external
+  outage doesn't block a demonstration.
+- If the request itself is too vague or unintelligible to act on, the agent asks a
+  clarifying question rather than guessing.
+- **Browser automation never fails the whole request on a single item's failure.** If a
+  specific item can't be found or added on the retailer's site, automation continues with
+  the remaining items and that item is reported as failed, with a reason (not found on site,
+  ambiguous match, add-to-cart action didn't succeed, etc.).
+- **CAPTCHA, bot-blocking, login walls, or unrecognized site changes stop automation
+  gracefully.** The moment any of these is detected, the automation stops taking further
+  actions on the site and returns whatever partial result it already achieved (items added
+  so far) along with a clear reason for stopping — this is treated as an expected, handled
+  outcome, never as a crash or an unhandled exception reaching the user.
+- **Approval is required before any browser automation.** The agent will not invoke the
+  Retailer-Cart MCP server until the user has explicitly approved the proposed cart; a
+  declined or not-yet-answered approval never triggers site automation.
 
 ## 6. Testing Strategy
 
-- **Unit tests**: recipe ingredient parsing/scaling, product matching/scoring, cart
-  optimization (`single_retailer` selection, budget math, dietary-substitution logic),
-  ingestion feed parsing (XML/GZIP → normalized records) — pure logic, fixture data, no
-  network.
-- **Integration tests**: FastAPI endpoints against a real test DB (SQLite) and the two MCP
-  servers exercised against recorded fixture responses (not live Spoonacular / live feeds),
-  so tests are deterministic and independent of external services or rate limits.
-- **MCP contract tests**: each MCP tool's request/response is validated against its
-  documented schema independently of the agent graph, catching drift between an MCP server's
-  actual behavior and what the agent expects.
-- **Agent/graph tests**: the LangGraph graph run end-to-end with mocked MCP tool responses
-  for key scenarios — direct grocery list, recipe path, ambiguous-recipe interrupt/resume,
-  ambiguous-product interrupt/resume, missing-item reporting, over-budget reporting,
-  dietary-substitution — using the in-memory/SQLite checkpointer.
-- **Concurrent thread_id isolation tests**: verify that two different `thread_id`s
-  progressing concurrently never leak state into each other's checkpoint.
-- **PostgreSQL/Alembic CI compatibility test**: a CI job runs Alembic migrations (and a
-  representative query smoke test) against a real PostgreSQL service container — not just
-  SQLite — catching SQLite-only-compatible migrations/queries that would break in deployed
-  dev/prod.
-- **Ingestion tests**: atomic-swap behavior (a failed/partial download must not corrupt
-  existing data) and staleness detection.
-- **CI**: GitHub Actions runs lint + unit + integration tests (including the Postgres/Alembic
-  job) on every PR.
-- **Not in scope**: automated tests making live calls to Shufersal/Rami Levy feeds or
-  Spoonacular (manual/exploratory checks only), and load/performance testing.
+- **Unit tests** cover the core logic in isolation: ingredient scaling, product
+  matching/scoring, cart optimization, and feed parsing — using fixture data, no network
+  calls.
+- **Integration tests** exercise the API layer against a real test database and the MCP
+  servers, using recorded fixture responses rather than live external services, so tests are
+  deterministic and independent of external rate limits or downtime.
+- **Contract tests** verify each MCP server's inputs/outputs match what the agent expects,
+  independent of the full agent flow.
+- **End-to-end agent tests** run the full request-handling flow with simulated tool
+  responses, covering the key scenarios: direct grocery list, recipe path, ambiguous
+  recipe/product matches requiring clarification, missing items, over-budget carts, dietary
+  substitution, cart-approval declined, and cart-approval approved.
+- A dedicated test verifies conversations with different conversation identifiers never
+  interfere with each other's state.
+- A dedicated test verifies the application works correctly against the production database
+  engine, not only the lightweight one used for local development.
+- **Ingestion tests** verify that a failed or partial feed load never corrupts existing data,
+  and that stale data is correctly detected.
+- **Browser-automation tests run against a controlled mock retailer site**, not the real
+  Shufersal/Rami Levy sites, covering: successful search-and-add, an item that can't be
+  matched (automation continues with the rest), and simulated CAPTCHA/bot-block/login-wall
+  pages (automation stops gracefully and reports why). A dedicated test asserts the
+  automation never interacts with any checkout/payment/login element, even when the mock
+  site's structure would make that outwardly possible.
+- Automation against the real, live retailer websites is **not** part of the automated test
+  suite — it is exercised manually and treated as best-effort, since CAPTCHA, bot detection,
+  login requirements, and unannounced site changes are outside this project's control.
+- CI runs linting and the full automated test suite (including the mock-site browser
+  automation tests) on every change.
+- Out of scope for automated testing: live calls to external recipe or retailer data sources,
+  or live browser automation against the real retailer sites (all used only for manual/
+  exploratory checks), and load/performance testing.
 
-## 7. CI/CD & Deployment (GitOps)
+## 7. CI/CD & Deployment
 
-**Repo structure**: single repo; application code plus top-level `k8s/dev/` and `k8s/prod/`
-manifest directories.
+The repository holds both application code and the Kubernetes configuration for the dev and
+prod environments, organized as separate top-level directories.
 
-**GitHub Actions (CI)**: on every PR — lint, unit/integration tests. On merge to `main` —
-build Docker images for all services (FastAPI/agent, Recipe MCP, Supermarket-Data MCP,
-ingestion job, React SPA), tag each image with the **immutable Git commit SHA** (never
-`latest` or another mutable tag), push to Docker Hub, then commit that exact SHA into
-`k8s/dev/`'s manifests. This manifest-bump commit is pushed using the default `GITHUB_TOKEN`
-(not a personal access token) — GitHub does not trigger new workflow runs for pushes made
-with the default token, so this commit does not re-trigger CI and cause a loop.
+On every change, automated checks (linting, tests — including mock-site browser-automation
+tests) run before anything is merged. Once merged, container images are built and published,
+and the deployment configuration for the dev environment is updated automatically to
+reference the newly published version.
 
-**ArgoCD (CD)**, running in the kubeadm cluster:
-- **Dev `Application`**: watches `k8s/dev/`. Automated sync enabled, self-heal enabled,
-  prune enabled — a merge to `main` flows through to the dev namespace automatically.
-- **Prod `Application`**: watches `k8s/prod/`. Automated sync **disabled**. Promotion is a
-  PR that copies the exact, already-validated image SHA tag(s) from `k8s/dev/` into
-  `k8s/prod/` (never a different or newer build) ; once reviewed and merged, a human
-  triggers a **manual ArgoCD sync** — prod never changes from a bare merge to main.
-- **Bootstrap (one-time)**: during initial cluster setup (M3), ArgoCD is installed into the
-  cluster and the `dev` and `prod` `Application` manifests are applied once, directly
-  (`kubectl apply`), not through the pipeline. After this one-time bootstrap, all further
-  deployments are GitOps-only — no direct `kubectl apply` or Terraform steps for application
-  changes, only Git commits to `k8s/dev/` or `k8s/prod/` that ArgoCD picks up.
+Deployment itself follows a GitOps model: a deployment tool running inside the Kubernetes
+cluster continuously watches the repository and automatically applies whatever the dev
+configuration says. The production environment is watched the same way, but changes there
+are never applied automatically — promoting to production means deliberately updating the
+production configuration (through review) and then manually triggering the deployment, so
+production only changes as a result of a conscious decision.
 
-**Infrastructure**: Terraform provisions the EC2 instance(s) for the kubeadm cluster.
-Kubernetes itself is self-managed via `kubeadm` (not EKS, not k3s) — one cluster with `dev`
-and `prod` namespaces (not separate clusters).
+Infrastructure (the underlying servers) is provisioned with Terraform. Kubernetes itself is
+self-managed (kubeadm) on AWS EC2 rather than a managed Kubernetes service — one cluster,
+with separate namespaces for dev and prod.
 
-**Monitoring**: Prometheus + Grafana track request latency, MCP call success/failure rates,
-ingestion success and per-retailer staleness, and error-code counts.
+Prometheus and Grafana provide operational visibility: request latency, success/failure
+rates of calls to the recipe and product-data services, data-ingestion success and
+per-retailer freshness, error rates by category, and the success/failure/blocked rate of
+retailer-cart preparation attempts.
 
-## 8. MVP & Milestones (vertical slices)
+## 8. MVP & Milestones
 
-MVP has **no authentication** — preferences (budget, dietary, brand, retailer) are supplied
-inline in each request. Auth/Cognito + persisted user profiles are an explicit future
-enhancement, not built now.
+The MVP does not include user accounts or authentication — preferences (budget, dietary
+needs, brand, retailer) are provided inline with each request. Login and persisted user
+profiles are a planned future enhancement, not part of the MVP.
 
-- **M1 — Core agent, local only.** LangGraph agent (parse → search → `single_retailer`
-  optimize → finalize, with ambiguity interrupt/resume on an in-memory/SQLite checkpointer),
-  Supermarket-Data MCP server, FastAPI, minimal React chat UI. Runs via docker-compose;
-  local SQLite DB seeded from a small sample of transparency data via a manual ingestion
-  script run. Direct grocery-list requests only, no recipes yet.
-- **M2 — Recipe path.** Recipe MCP server (`search_recipes`/`get_recipe`/
-  `get_recipe_ingredients` with serving scaling), recipe-selection interrupt, dietary rule
-  engine + substitution logic at both recipe and product-matching stages.
-- **M3 — Containerize & deploy to dev.** Dockerfiles for all services; Terraform provisions
-  EC2 + kubeadm cluster; one-time ArgoCD bootstrap; `k8s/dev/` manifests; real ingestion
-  CronJob against live Shufersal/Rami Levy feeds with validated staging load + atomic
-  activation; switch to PostgreSQL + DynamoDB checkpointer in this deployed environment via
-  config only.
-- **M4 — CI/CD, prod, monitoring.** GitHub Actions pipeline (lint/test/build/push/manifest
-  update with immutable SHA tags) wired to ArgoCD dev auto-sync; `k8s/prod/` + manual-sync
-  promotion flow; Prometheus + Grafana dashboards/alerts.
-- **M5 — Hardening & polish.** Full test suite per §6; UI polish (clarification prompts,
-  missing-items/warnings/stale-data display, over-budget reporting); README/docs.
-- **Future enhancements (explicitly out of MVP)**: Cognito auth + persisted user profiles,
-  `cheapest_split` multi-retailer cart optimization, branch-specific (vs. retailer-wide
-  minimum-price) optimization, additional retailers.
+- **M1 — Core agent, local only.** The agent handles direct grocery-list requests
+  end-to-end (search, single-retailer cart optimization, clarification when needed) with a
+  minimal chat interface, running entirely locally against a small sample of product data.
+- **M2 — Recipe path.** Adds the recipe lookup, ingredient extraction and scaling, and
+  dietary substitution logic to the flow.
+- **M3 — Retailer cart preparation (Playwright).** Adds the cart-approval step and the
+  Retailer-Cart MCP server: once the user approves the proposed cart, browser automation
+  prepares the real cart on the retailer's site, handling partial failures and
+  CAPTCHA/bot-block/login-wall situations gracefully. Automated tests run against a
+  controlled mock retailer site; real-site behavior is verified manually.
+- **M4 — Containerize & deploy to dev.** All services are containerized and deployed to
+  the dev environment on the Kubernetes cluster; ingestion runs against the real, live
+  retailer data feeds on a schedule.
+- **M5 — CI/CD, production, monitoring.** The automated build/deploy pipeline and GitOps
+  promotion flow are wired up; the production environment and monitoring dashboards go live.
+- **M6 — Hardening & polish.** The full test suite is completed, and the interface and
+  reporting (clarifications, cart approval, real-cart results, missing items, warnings,
+  over-budget handling) are polished.
+- **Future enhancements (explicitly out of MVP)**: user accounts and persisted preferences,
+  splitting a cart across multiple retailers to minimize cost, branch-specific (rather than
+  retailer-wide) optimization, additional retailers, automatically retrying/solving
+  CAPTCHA or bot-detection challenges.
 
 ## 9. Requirements Traceability
 
 | Requirement | Where addressed |
 |---|---|
-| Natural-language shopping requests (groceries, recipes, cleaning, personal care, etc.) | §4 `parse_request`, both request paths |
+| Natural-language shopping requests (groceries, recipes, cleaning, personal care, etc.) | §4, both request paths |
 | Search Shufersal & Rami Levy, compare price/size/availability/preferences | §3 Supermarket-Data MCP + Data Model, §4 steps 5–8 |
 | Recipe requests via recipe API through custom MCP tool | §3 Recipe MCP server (Spoonacular) |
-| Never orders/pays; stops after cart; returns links where possible | §1, §3 product/search links, §2 no cart/checkout API |
+| Prepares the retailer's online cart but never proceeds to checkout, payment, or order submission | §1, §3 Retailer-Cart MCP server, §4 steps 9–12, §5 |
+| Real cart preparation only after explicit user approval | §3, §4 step 9–11, §5 |
 | LangGraph or LangChain agent | §2–§3 LangGraph agent |
-| At least one MCP server | §3 (two: Recipe MCP, Supermarket-Data MCP) |
-| Custom domain-specific MCP server | §3 (both are custom & domain-specific) |
+| At least one MCP server | §3 (three: Recipe MCP, Supermarket-Data MCP, Retailer-Cart MCP) |
+| Custom domain-specific MCP server | §3 (all three are custom & domain-specific) |
 | FastAPI | §3 FastAPI backend |
 | Web UI | §3 React SPA |
 | Kubernetes on AWS EC2 | §7 kubeadm cluster on Terraform-provisioned EC2 |
 | Terraform | §7 |
-| Dev and prod namespaces | §7, §8 M3/M4 |
-| CI/CD | §7 GitHub Actions + ArgoCD GitOps |
+| Dev and prod namespaces | §7, §8 M4/M5 |
+| CI/CD | §7 GitHub Actions + GitOps |
 | Prometheus and Grafana | §7 Monitoring |
 | Unit and integration tests | §6 |
 
 ## 10. Out of Scope (MVP)
 
-- User authentication, accounts, persisted preference profiles (Cognito planned as future
+- User authentication, accounts, persisted preference profiles (planned as a future
   enhancement).
-- `cheapest_split` multi-retailer cart optimization.
+- Multi-retailer cart splitting to minimize cost.
 - Branch-specific cart optimization (MVP uses each retailer's minimum price across its
   branches).
 - Real-time inventory guarantees (feed-based availability only).
-- Live checkout/cart creation on retailer sites.
+- Checkout, login to a retailer account, or payment of any kind, at any point.
+- Automatically solving or bypassing CAPTCHA or bot-detection challenges — the system stops
+  gracefully instead.
+- Automated tests against the real, live retailer websites (manual/exploratory only).
 - Load/performance testing.
 - Additional retailers beyond Shufersal and Rami Levy.
+
+## 11. Risks
+
+- The two retailers' published price/product feeds could change format, or be temporarily
+  unavailable — mitigated by a stored-snapshot fallback and by validating a feed fully
+  before it replaces existing data.
+- Without a universal product identifier shared across retailers, matching the "same"
+  product between two chains is inherently approximate — mitigated by barcode matching where
+  available, a fuzzy fallback, and asking the user to clarify genuinely ambiguous matches
+  rather than guessing.
+- **Live retailer websites may block automated browsers** (CAPTCHA, bot detection), require
+  login for cart actions unexpectedly, or change their page structure and break the
+  automation's selectors — mitigated by treating live-site automation as best-effort,
+  stopping gracefully and reporting partial results the moment a block or unrecognized page
+  is detected, and by only testing live sites manually rather than depending on them in CI.
+- The full technology checklist (agent framework, three MCP servers, browser automation, API,
+  web UI, self-managed Kubernetes, Terraform, CI/CD, monitoring) is broad for a solo
+  developer on a multi-week timeline — mitigated by building in small, independently
+  demonstrable milestones rather than all pieces at once.
+- Self-managed Kubernetes (rather than a managed service) carries more operational risk
+  (cluster bootstrap, networking, upgrades) — mitigated by treating cluster setup as its own
+  milestone, separate from application feature work.
+- The language model could misclassify a request or otherwise behave unpredictably —
+  mitigated by keeping dietary-constraint enforcement and all product/pricing facts outside
+  the model's discretion (a deterministic rule engine and real ingested data, never
+  model-invented information), and by never letting the model itself decide to invoke
+  browser automation without the user's explicit approval.
+- The recipe API's free tier may have rate limits that affect availability during
+  development or demonstration.
+
+## 12. Acceptance Criteria
+
+- A natural-language grocery-list request produces a proposed cart from a single retailer
+  with matched items and total cost, without ever placing an order or making a payment.
+- A recipe request produces a matching proposed cart with ingredients scaled to the
+  requested number of servings, using ingredients retrieved via the recipe MCP server.
+- When multiple plausible recipe or product matches exist, the system asks a clarifying
+  question and correctly resumes the same conversation once answered, rather than guessing
+  or starting over.
+- When an item can't be found at either retailer, the cart is still produced, with that item
+  clearly reported as missing and why.
+- Dietary constraints stated in the request are respected: conflicting items are substituted
+  where possible, or clearly flagged — never silently included.
+- The system never begins browser automation on the retailer's site until the user has
+  explicitly approved the proposed cart; declining ends the interaction with only the
+  proposed cart shown.
+- After approval, the system attempts to add the matched items and quantities to the real
+  retailer cart on the retailer's website, stopping before any checkout, login, or payment
+  action, and reports which items were added, which failed and why, and — if the site
+  blocked automation (CAPTCHA, bot detection, login wall, unrecognized layout) — that this
+  happened, without the request failing outright.
+- The system runs on a self-managed Kubernetes cluster on AWS EC2, provisioned with
+  Terraform, with separate dev and prod namespaces.
+- Merged changes automatically reach the dev environment; production only changes through a
+  deliberate, reviewed promotion step.
+- Prometheus/Grafana dashboards show request latency, error rates, data freshness, and
+  retailer-cart-preparation success/failure/blocked rates.
+- Unit and integration tests — including browser-automation tests against a controlled mock
+  retailer site — cover the core matching/optimization logic and the API layer, and pass in
+  CI.
