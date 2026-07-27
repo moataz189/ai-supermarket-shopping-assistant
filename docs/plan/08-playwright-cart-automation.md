@@ -90,11 +90,16 @@ web/src/components/RetailerCartResultView.tsx
    class CartItemRequest(BaseModel):
        name: str
        product_id: str
+       item_code: str  # the resolved product's ItemCode at this retailer (spec §3) —
+                        # carried through for traceability/logging; the automation still
+                        # searches the live site by name (item codes aren't a searchable
+                        # field on the retailer's website), so this is not used for matching.
        quantity: float
 
 
    class CartItemResult(BaseModel):
        name: str
+       item_code: str
        status: Literal["added", "not_found", "error"]
        reason: str | None = None
 
@@ -129,7 +134,9 @@ web/src/components/RetailerCartResultView.tsx
        async def get_cart_url(self, page: Page) -> str | None: ...
 
 
-   async def prepare_cart_for_retailer(adapter: RetailerAdapter, items: list[dict]) -> dict:
+   async def prepare_cart_for_retailer(
+       adapter: RetailerAdapter, items: list[dict], storage_state_path: str | None = None
+   ) -> dict:
        from playwright.async_api import async_playwright
 
        added: list[dict] = []
@@ -139,14 +146,24 @@ web/src/components/RetailerCartResultView.tsx
 
        async with async_playwright() as p:
            browser = await p.chromium.launch(headless=True)
-           page = await browser.new_page()
+           # storage_state_path is optional: if the user has manually logged in out of
+           # band and exported a Playwright storage-state file (cookies/local storage),
+           # passing it here reuses that session so cart actions on an authenticated
+           # retailer site work without the automation ever performing a login itself
+           # (spec §1/§3 — the automation never logs in on the user's behalf). Absent a
+           # storage_state_path, this is a fresh, anonymous browser context, exactly as
+           # before.
+           context = await browser.new_context(storage_state=storage_state_path)
+           page = await context.new_page()
            await adapter.open_site(page)
 
            for index, item in enumerate(items):
                try:
                    match = await adapter.search_and_match(page, item["name"])
                except Exception as exc:
-                   failed.append({"name": item["name"], "status": "error", "reason": str(exc)})
+                   failed.append(
+                       {"name": item["name"], "item_code": item["item_code"], "status": "error", "reason": str(exc)}
+                   )
                    continue
 
                block = await adapter.detect_block(page)
@@ -156,21 +173,28 @@ web/src/components/RetailerCartResultView.tsx
                    break
 
                if match is None:
-                   failed.append({"name": item["name"], "status": "not_found"})
+                   failed.append({"name": item["name"], "item_code": item["item_code"], "status": "not_found"})
                    continue
 
                try:
                    await adapter.add_to_cart(page, match, item["quantity"])
-                   added.append({"name": item["name"], "status": "added"})
+                   added.append({"name": item["name"], "item_code": item["item_code"], "status": "added"})
                except Exception as exc:
-                   failed.append({"name": item["name"], "status": "error", "reason": str(exc)})
+                   failed.append(
+                       {"name": item["name"], "item_code": item["item_code"], "status": "error", "reason": str(exc)}
+                   )
 
            if blocked_reason:
                handled = {a["name"] for a in added} | {f["name"] for f in failed}
                for remaining in items[stopped_at:]:
                    if remaining["name"] not in handled:
                        failed.append(
-                           {"name": remaining["name"], "status": "error", "reason": "skipped_after_block"}
+                           {
+                               "name": remaining["name"],
+                               "item_code": remaining["item_code"],
+                               "status": "error",
+                               "reason": "skipped_after_block",
+                           }
                        )
 
            cart_url = await adapter.get_cart_url(page) if not blocked_reason else None
@@ -425,7 +449,12 @@ web/src/components/RetailerCartResultView.tsx
         async def prepare_retailer_cart(state):
             cart = state["final_cart"]
             items = [
-                {"name": line["name"], "product_id": line["product_id"], "quantity": line["qty"]}
+                {
+                    "name": line["name"],
+                    "product_id": line["product_id"],
+                    "item_code": line["item_code"],
+                    "quantity": line["qty"],
+                }
                 for line in cart["items"]
             ]
             result = await retailer_cart_client.prepare_retailer_cart(cart["retailer"], items)
@@ -578,6 +607,12 @@ verified by an automated counter in the mock site tests.
 This checkpoint is the only place browser automation exists in the system. Do not add any
 method to `RetailerAdapter` (or any adapter) that could interact with checkout, login, or
 payment — the safety guarantee here is structural, not a runtime flag to remember to check.
+
+The optional `storage_state_path` parameter on `prepare_cart_for_retailer` (step 2) supports
+reusing a session from a manual, out-of-band login (spec §1/§3) — it is not required for the
+MVP demo (both retailers' Online-store carts are expected to work anonymously) and is not
+covered by automated tests; treat it as a manual/best-effort feature, consistent with how
+real-site automation is verified in this project.
 
 ## Definition of Done
 

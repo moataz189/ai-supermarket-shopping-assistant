@@ -54,6 +54,8 @@ tests/mcp/test_supermarket_mcp_contract.py
 
    class RetailerOfferView(BaseModel):
        retailer: str
+       store_id: str
+       item_code: str
        price: float
        unit_price: float
        listed_in_feed: bool
@@ -118,6 +120,8 @@ tests/mcp/test_supermarket_mcp_contract.py
            offers = [
                RetailerOfferView(
                    retailer=retailer,
+                   store_id=offer.store_id,
+                   item_code=offer.item_code,
                    price=offer.price,
                    unit_price=unit_price(offer.price, product.package_size, product.package_unit),
                    listed_in_feed=offer.listed_in_feed,
@@ -154,7 +158,8 @@ tests/mcp/test_supermarket_mcp_contract.py
 ## Testing Tasks
 
 - [ ] `search_product` returns lightweight candidates matching a fixture query.
-- [ ] `get_product_offers` returns one offer per retailer with correct `unit_price`.
+- [ ] `get_product_offers` returns one offer per retailer with correct `unit_price`,
+      `item_code`, and `store_id` (`413` for `shufersal`, `39` for `rami_levy`).
 - [ ] Per-retailer `stale` flags are independent (one stale, one fresh, in the same
       response).
 - [ ] `compare_product` returns combined offers for multiple candidate ids.

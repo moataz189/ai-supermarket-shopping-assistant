@@ -34,7 +34,6 @@ app/dietary/rules.py
 app/agent/nodes/search_recipes.py
 app/agent/nodes/resolve_recipe_ambiguity.py
 app/agent/nodes/get_recipe_ingredients.py
-app/agent/nodes/apply_dietary_constraints.py
 tests/dietary/test_rules.py
 tests/agent/test_graph_recipe_happy_path.py
 tests/agent/test_graph_recipe_ambiguous_interrupt.py
@@ -45,6 +44,11 @@ tests/agent/test_dietary_substitution_flow.py
 
 - `app/agent/nodes/parse_request.py` — extend the schema/prompt with `request_type`,
   `recipe_query`, `servings`.
+- `app/agent/nodes/search_products.py` — filter/substitute each item's candidates against
+  dietary constraints *before* auto-resolving them (see step 8 below for why the ordering
+  matters); `_resolve_candidate` itself is unchanged.
+- `app/agent/nodes/optimize_cart.py` — distinguish `dietary_conflict` from `not_found` in
+  the zero-candidate branch.
 - `app/agent/mcp_clients.py` — add `McpRecipeClient` (mirrors `McpSupermarketDataClient`,
   targets CP6's server).
 - `app/agent/graph.py` — wire the new nodes and the recipe-vs-grocery-list routing.
@@ -128,11 +132,14 @@ tests/agent/test_dietary_substitution_flow.py
        dietary_constraints: list[str] = []
        retailer_preference: str | None = None
        brand_preference: str | None = None
+       selection_preference: Literal["cheapest", "no_preference"] = "no_preference"
    ```
-   Update `PARSE_PROMPT` to instruct: classify `request_type`; if `"recipe"`, fill
-   `recipe_query`/`servings` and leave `items` empty; if `"grocery_list"`, fill `items` and
-   leave `recipe_query`/`servings` null. Update `make_parse_request`'s return dict to carry
-   `request_type`, `recipe_query`, `servings` into `parsed_request`.
+   (`selection_preference` already existed on CP4's version of this schema — carry it
+   forward unchanged here; it's not recipe-specific.) Update `PARSE_PROMPT` to instruct:
+   classify `request_type`; if `"recipe"`, fill `recipe_query`/`servings` and leave `items`
+   empty; if `"grocery_list"`, fill `items` and leave `recipe_query`/`servings` null. Update
+   `make_parse_request`'s return dict to carry `request_type`, `recipe_query`, `servings`
+   into `parsed_request`, keeping the existing `selection_preference` passthrough from CP4.
 4. Add `McpRecipeClient` to `app/agent/mcp_clients.py`, structurally identical to
    `McpSupermarketDataClient` but targeting the CP6 server and its three tool names
    (`search_recipes`, `get_recipe`, `get_recipe_ingredients`), returning `.get("recipes")` /
@@ -184,42 +191,75 @@ tests/agent/test_dietary_substitution_flow.py
 
        return get_recipe_ingredients
    ```
-8. Write `app/agent/nodes/apply_dietary_constraints.py` — runs after `search_products`,
-   filters each item's candidates against forbidden tags, and substitutes or flags:
+8. Modify `app/agent/nodes/search_products.py` to filter each item's candidates against
+   forbidden tags, and substitute or flag, before resolving:
+   ```python
+   from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
+   ```
+   **Important ordering fix**: dietary filtering must happen *before* an item is
+   auto-resolved, not after — otherwise CP4's `_resolve_candidate` could auto-select a
+   dietary-violating candidate (e.g. the one exact-name match happens to be a dairy
+   product) and populate `resolved_choices` before any dietary check ever ran, and a
+   separate later filtering step would have no effect on an already-resolved item. So this
+   is **not** a new standalone node — it's a modification to CP4's `make_search_products`
+   itself, filtering/substituting each item's candidates *before* calling
+   `_resolve_candidate` on them:
    ```python
    from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 
-   def make_apply_dietary_constraints(client):
-       async def apply_dietary_constraints(state):
-           constraints = state["parsed_request"].get("dietary_constraints", [])
-           forbidden = forbidden_tags(constraints)
-           if not forbidden:
-               return {}
-
+   def make_search_products(client):
+       async def search_products(state):
+           parsed = state["parsed_request"]
            item_candidates = dict(state.get("item_candidates", {}))
+           resolved_choices = dict(state.get("resolved_choices", {}))
            dietary_conflicts = list(state.get("dietary_conflicts", []))
+           forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
+           ambiguous_item = None
 
-           for item in state["parsed_request"]["items"]:
+           for item in parsed["items"]:
                name = item["name"]
-               candidates = item_candidates.get(name, [])
-               compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
-               if compliant:
-                   item_candidates[name] = compliant
+               if name in resolved_choices:
                    continue
+               if name not in item_candidates:
+                   item_candidates[name] = await client.search_product(name)
+               candidates = item_candidates[name]
 
-               substitute_query = find_substitute_query(name, forbidden)
-               if substitute_query:
-                   item_candidates[name] = await client.search_product(substitute_query)
-               else:
-                   item_candidates[name] = []
-                   if name not in dietary_conflicts:
-                       dietary_conflicts.append(name)
+               if forbidden:
+                   compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+                   if compliant:
+                       candidates = compliant
+                   else:
+                       substitute_query = find_substitute_query(name, forbidden)
+                       if substitute_query:
+                           candidates = await client.search_product(substitute_query)
+                       else:
+                           candidates = []
+                           if name not in dietary_conflicts:
+                               dietary_conflicts.append(name)
+                   item_candidates[name] = candidates
 
-           return {"item_candidates": item_candidates, "dietary_conflicts": dietary_conflicts}
+               resolved_id, still_ambiguous = await _resolve_candidate(
+                   client, name, candidates,
+                   parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
+               )
+               if resolved_id is not None:
+                   resolved_choices[name] = resolved_id
+               elif still_ambiguous and ambiguous_item is None:
+                   ambiguous_item = name
 
-       return apply_dietary_constraints
+           return {
+               "item_candidates": item_candidates,
+               "resolved_choices": resolved_choices,
+               "dietary_conflicts": dietary_conflicts,
+               "pending_clarification_item": ambiguous_item,
+           }
+
+       return search_products
    ```
+   When `dietary_constraints` is empty, `forbidden` is an empty set and the `if forbidden:`
+   block never runs — this is exactly CP4's original behavior, unchanged for the
+   grocery-list-only case. `_resolve_candidate` itself (CP4) is untouched.
 9. Modify `app/agent/nodes/optimize_cart.py`'s zero-candidate branch to distinguish reason:
    ```python
    elif not candidates:
@@ -227,10 +267,11 @@ tests/agent/test_dietary_substitution_flow.py
        missing_items.append({"name": name, "reason": reason})
        continue
    ```
-10. Modify `app/agent/graph.py`: add the new nodes; route `parse_request` to
+10. Modify `app/agent/graph.py`: add the new recipe-path nodes; route `parse_request` to
     `search_recipes` when `request_type == "recipe"` and straight to `search_products`
-    otherwise (unchanged CP4 path); insert `apply_dietary_constraints` between
-    `search_products` and the ambiguity-routing conditional:
+    otherwise (unchanged CP4 path). Since dietary filtering now lives *inside*
+    `search_products` (step 8), there is no separate dietary node to wire in — the
+    `search_products → _route_after_search` edge from CP4 is unchanged:
     ```python
     def route_after_parse(state) -> str:
         return "search_recipes" if state["parsed_request"]["request_type"] == "recipe" else "search_products"
@@ -243,7 +284,6 @@ tests/agent/test_dietary_substitution_flow.py
         graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
         graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
         graph.add_node("search_products", make_search_products(supermarket_client))
-        graph.add_node("apply_dietary_constraints", make_apply_dietary_constraints(supermarket_client))
         graph.add_node("resolve_ambiguity", resolve_ambiguity)
         graph.add_node("optimize_cart", make_optimize_cart(supermarket_client))
         graph.add_node("finalize", finalize)
@@ -255,9 +295,8 @@ tests/agent/test_dietary_substitution_flow.py
         )
         graph.add_edge("resolve_recipe_ambiguity", "get_recipe_ingredients")
         graph.add_edge("get_recipe_ingredients", "search_products")
-        graph.add_edge("search_products", "apply_dietary_constraints")
         graph.add_conditional_edges(
-            "apply_dietary_constraints", _route_after_search, ["resolve_ambiguity", "optimize_cart"]
+            "search_products", _route_after_search, ["resolve_ambiguity", "optimize_cart"]
         )
         graph.add_edge("resolve_ambiguity", "search_products")
         graph.add_edge("optimize_cart", "finalize")
@@ -265,8 +304,9 @@ tests/agent/test_dietary_substitution_flow.py
 
         return graph.compile(checkpointer=checkpointer)
     ```
-    (`_route_after_search` now reads state produced by `apply_dietary_constraints`, unchanged
-    from CP4.)
+    (`_route_after_search` itself is unchanged from CP4 — it just now reads
+    `pending_clarification_item` as produced by the dietary-aware `search_products` from
+    step 8.)
 11. Modify `app/api/dependencies.py`'s `get_agent_app` to construct an `McpRecipeClient`
     (pointed at `mcp_servers.recipe_mcp.server`) and pass it into `build_graph`.
 12. Write `tests/agent/test_graph_recipe_happy_path.py`: fake recipe client returns one
@@ -313,6 +353,15 @@ engine, never the LLM.
 Do not let the LLM (`parse_request`) make dietary compliance decisions — it only extracts
 the constraint text; `app/dietary/rules.py` is the sole authority on violations and
 substitutions, per spec §3/§4.
+
+Every ingredient `get_recipe_ingredients` returns becomes a plain item in
+`parsed_request["items"]` (step 7) and is resolved by the same
+`search_products`/`_resolve_candidate`/`resolve_ambiguity` logic as a directly-typed
+grocery item — this checkpoint only adds a dietary-filtering step at the top of
+`search_products` (step 8), it does not fork a separate resolution path. The same
+auto-select rules (single candidate, brand match, cheapest preference) and the same
+interrupt-and-ask behavior apply either way. Do not add a
+second, recipe-specific product-resolution path here.
 
 ## Definition of Done
 

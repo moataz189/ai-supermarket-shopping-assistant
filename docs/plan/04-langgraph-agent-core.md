@@ -5,8 +5,12 @@ Spec milestone: M1. Depends on: CP2, CP3.
 ## Goal
 
 Build the LangGraph agent for the **direct grocery-list path only** (no recipes yet):
-parse → search → interrupt-on-ambiguity → single-retailer optimize → finalize, using an
-in-memory/SQLite checkpointer so a paused (awaiting-clarification) run resumes correctly.
+parse → search → resolve ambiguity (auto-select where possible, interrupt otherwise) →
+single-retailer optimize → finalize, using an in-memory/SQLite checkpointer so a paused
+(awaiting-clarification) run resumes correctly. The product-selection/ambiguity-resolution
+logic built here (spec §3, Product Selection & Ambiguity Resolution) is not
+grocery-list-specific — CP7 feeds recipe-derived ingredients through this exact same logic
+without modifying it.
 
 ## Scope
 
@@ -19,8 +23,9 @@ so tests run with fakes — no live network calls.
 
 - `build_graph(client, llm, checkpointer)` returns a compiled, invokable LangGraph app.
 - Given a fake supermarket client and a fake LLM, the graph resolves a direct grocery list
-  to a single-retailer cart, pauses correctly on ambiguous product matches, and reports
-  missing items — all covered by tests, no network calls.
+  to a single-retailer cart: auto-selecting when a choice isn't genuinely ambiguous (one
+  candidate, a brand match, or a "cheapest" standing preference), pausing to ask only when
+  it is, and reporting missing items — all covered by tests, no network calls.
 
 ## Files to Create
 
@@ -42,6 +47,7 @@ tests/agent/test_graph_grocery_list_happy_path.py
 tests/agent/test_graph_ambiguous_product_interrupt.py
 tests/agent/test_graph_missing_item.py
 tests/agent/test_optimize_cart_unit.py
+tests/agent/test_ambiguity_resolution_rules.py
 ```
 
 ## Detailed Implementation Steps
@@ -62,6 +68,7 @@ tests/agent/test_optimize_cart_unit.py
        dietary_constraints: list[str]
        retailer_preference: str | None
        brand_preference: str | None
+       selection_preference: Literal["cheapest", "no_preference"]
 
 
    class AgentState(TypedDict, total=False):
@@ -130,8 +137,17 @@ tests/agent/test_optimize_cart_unit.py
            temperature=0,
        )
    ```
-5. Write `app/agent/nodes/parse_request.py` as a factory so the LLM is injectable:
+5. Write `app/agent/nodes/parse_request.py` as a factory so the LLM is injectable. Besides
+   the shopping list itself, this extracts the standing **product-selection preference**
+   (spec §3): `"cheapest"` if the user said something like "whatever's cheapest" / "the
+   cheapest option", otherwise `"no_preference"` (the default — ask when a choice is
+   ambiguous and material). Note that "vegan only" / "gluten-free only" standing preferences
+   are **not** a separate field — they're captured the same way any other dietary
+   restriction is, via `dietary_constraints` (already enforced deterministically by CP7's
+   dietary rule engine, not duplicated here):
    ```python
+   from typing import Literal
+
    from pydantic import BaseModel
 
    from app.agent.state import AgentState
@@ -141,8 +157,12 @@ tests/agent/test_optimize_cart_unit.py
        "List each grocery/household item as a separate string in `items`, "
        "singular, without quantities. Extract `budget` (a number, no currency "
        "symbol) if stated. Extract `dietary_constraints` as short tags "
-       "(e.g. 'no dairy', 'vegan'). Extract `retailer_preference` "
-       "('shufersal' or 'rami_levy') and `brand_preference` only if explicitly stated."
+       "(e.g. 'no dairy', 'vegan', 'gluten free') — this is also where a stated "
+       "'vegan only' or 'gluten-free only' preference belongs, not a separate field. "
+       "Extract `retailer_preference` ('shufersal' or 'rami_levy') and "
+       "`brand_preference` only if explicitly stated. Extract `selection_preference` "
+       "as 'cheapest' only if the user asked for the cheapest/lowest-price option "
+       "whenever a choice comes up; otherwise 'no_preference'."
    )
 
 
@@ -152,6 +172,7 @@ tests/agent/test_optimize_cart_unit.py
        dietary_constraints: list[str] = []
        retailer_preference: str | None = None
        brand_preference: str | None = None
+       selection_preference: Literal["cheapest", "no_preference"] = "no_preference"
 
 
    def make_parse_request(llm):
@@ -168,51 +189,107 @@ tests/agent/test_optimize_cart_unit.py
                    "dietary_constraints": result.dietary_constraints,
                    "retailer_preference": result.retailer_preference,
                    "brand_preference": result.brand_preference,
+                   "selection_preference": result.selection_preference,
                }
            }
 
        return parse_request
    ```
-6. Write `app/agent/nodes/search_products.py`:
+6. Write `app/agent/nodes/search_products.py`. This implements spec §3's Product Selection
+   & Ambiguity Resolution rules — applied identically to every item regardless of whether it
+   came from a direct grocery list (this checkpoint) or a recipe (CP7 feeds ingredients into
+   the same node unchanged):
+   - Zero or one candidate → nothing to ask (handled downstream as missing / auto-selected).
+   - Exactly one candidate's name exactly matches the query → auto-select it.
+   - A `brand_preference` is set and exactly one candidate's name contains it → auto-select
+     that one.
+   - `selection_preference == "cheapest"` and at least one candidate has offer data → fetch
+     offers for each candidate and auto-select the one with the lowest `unit_price`.
+   - Otherwise → still ambiguous; the caller will interrupt and show the (≤5) candidates.
    ```python
    from app.agent.state import AgentState
 
 
-   def _is_ambiguous(query: str, candidates: list[dict]) -> bool:
+   async def _resolve_candidate(
+       client, name: str, candidates: list[dict], brand_preference: str | None,
+       selection_preference: str,
+   ) -> tuple[str | None, bool]:
+       """Returns (resolved_product_id_or_None, still_ambiguous)."""
        if len(candidates) <= 1:
-           return False
-       exact = [c for c in candidates if c["name"].strip().lower() == query.strip().lower()]
-       return len(exact) != 1
+           return (candidates[0]["product_id"] if candidates else None), False
+
+       exact = [c for c in candidates if c["name"].strip().lower() == name.strip().lower()]
+       if len(exact) == 1:
+           return exact[0]["product_id"], False
+
+       if brand_preference:
+           brand_matches = [
+               c for c in candidates if brand_preference.strip().lower() in c["name"].strip().lower()
+           ]
+           if len(brand_matches) == 1:
+               return brand_matches[0]["product_id"], False
+
+       if selection_preference == "cheapest":
+           priced: list[tuple[str, float]] = []
+           for candidate in candidates:
+               offers = await client.get_product_offers(candidate["product_id"])
+               if offers:
+                   cheapest_offer = min(offers, key=lambda o: o["unit_price"])
+                   priced.append((candidate["product_id"], cheapest_offer["unit_price"]))
+           if priced:
+               best_id, _ = min(priced, key=lambda p: p[1])
+               return best_id, False
+
+       return None, True
 
 
    def make_search_products(client):
        async def search_products(state: AgentState) -> AgentState:
+           parsed = state["parsed_request"]
            item_candidates = dict(state.get("item_candidates", {}))
+           resolved_choices = dict(state.get("resolved_choices", {}))
            ambiguous_item = None
 
-           for item in state["parsed_request"]["items"]:
+           for item in parsed["items"]:
                name = item["name"]
-               if name in state.get("resolved_choices", {}) or name in item_candidates:
+               if name in resolved_choices:
                    continue
-               candidates = await client.search_product(name)
-               item_candidates[name] = candidates
-               if ambiguous_item is None and _is_ambiguous(name, candidates):
+               if name not in item_candidates:
+                   item_candidates[name] = await client.search_product(name)
+               candidates = item_candidates[name]
+
+               resolved_id, still_ambiguous = await _resolve_candidate(
+                   client, name, candidates,
+                   parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
+               )
+               if resolved_id is not None:
+                   resolved_choices[name] = resolved_id
+               elif still_ambiguous and ambiguous_item is None:
                    ambiguous_item = name
 
-           return {"item_candidates": item_candidates, "pending_clarification_item": ambiguous_item}
+           return {
+               "item_candidates": item_candidates,
+               "resolved_choices": resolved_choices,
+               "pending_clarification_item": ambiguous_item,
+           }
 
        return search_products
    ```
-7. Write `app/agent/nodes/resolve_ambiguity.py`:
+7. Write `app/agent/nodes/resolve_ambiguity.py`. Per spec §3, show a small, relevant
+   shortlist (3–5), never an exhaustive list — cap at 5 even though `search_product`
+   already defaults to a limit of 5 candidates (CP2), so this stays correct even if that
+   default ever changes:
    ```python
    from langgraph.types import interrupt
 
    from app.agent.state import AgentState
 
+   MAX_CANDIDATES_SHOWN = 5
+
 
    async def resolve_ambiguity(state: AgentState) -> AgentState:
        item_name = state["pending_clarification_item"]
-       candidates = state["item_candidates"][item_name]
+       candidates = state["item_candidates"][item_name][:MAX_CANDIDATES_SHOWN]
        answer = interrupt(
            {
                "reason": "ambiguous_product",
@@ -225,7 +302,11 @@ tests/agent/test_optimize_cart_unit.py
    ```
 8. Write `app/agent/nodes/optimize_cart.py` implementing single-retailer selection
    (spec §4 step 8: prefer a retailer that fully covers the cart; if none does, best
-   coverage+cost combination):
+   coverage+cost combination). Each resolved item's `product_id` is looked up via
+   `get_product_offers`, which returns that same product's offer — identified by its
+   `ItemCode` — at each retailer's Online store (`StoreId 413` / `39`); the `item_code` and
+   `store_id` are carried through onto each cart line so the final cart is traceable back to
+   exactly what was compared:
    ```python
    from app.agent.state import AgentState
 
@@ -255,6 +336,8 @@ tests/agent/test_optimize_cart_unit.py
                            "product_id": product_id,
                            "name": name,
                            "retailer": offer["retailer"],
+                           "item_code": offer["item_code"],
+                           "store_id": offer["store_id"],
                            "unit_price": offer["unit_price"],
                            "price": offer["price"],
                        }
@@ -390,7 +473,17 @@ tests/agent/test_optimize_cart_unit.py
 15. Write `tests/agent/test_optimize_cart_unit.py`: call `make_optimize_cart(fake_client)`
     directly with a hand-built state where neither retailer fully covers the list; assert
     it picks the retailer with the best coverage+cost combination, per spec §4 step 8.
-16. Run `pytest tests/agent -v`, iterate to green; `ruff check`; commit.
+16. Write `tests/agent/test_ambiguity_resolution_rules.py`, calling `_resolve_candidate`
+    directly (unit-level, no graph):
+    - Three candidates, `brand_preference="Tara"`, exactly one candidate name contains
+      "Tara" → resolves to that candidate's `product_id`, `still_ambiguous is False`.
+    - Three candidates, `selection_preference="cheapest"`, fake client's
+      `get_product_offers` returns different `unit_price`s per candidate → resolves to the
+      candidate with the lowest `unit_price`.
+    - Three candidates, no brand preference, `selection_preference="no_preference"`, no
+      exact name match → returns `(None, True)` (still ambiguous — the caller must ask).
+    - One candidate → resolves to it automatically regardless of any preference.
+17. Run `pytest tests/agent -v`, iterate to green; `ruff check`; commit.
 
 ## Testing Tasks
 
@@ -399,13 +492,18 @@ tests/agent/test_optimize_cart_unit.py
       resolution.
 - [ ] Missing item → reported with reason, rest of cart unaffected.
 - [ ] `optimize_cart` unit test for the no-full-coverage scoring branch.
+- [ ] Ambiguity-resolution rules unit tests: brand-preference auto-select, cheapest-preference
+      auto-select, no-preference-still-ambiguous, single-candidate auto-select.
+- [ ] Resolved cart lines carry `item_code` and `store_id` through to the final cart.
 - [ ] All tests run with fakes only — zero live network/Bedrock/MCP-process calls.
 
 ## Acceptance Criteria
 
 Given a fake LLM and fake MCP client, the compiled graph correctly handles: full-coverage
 happy path, ambiguous-match interrupt/resume (using the checkpointer, keyed by `thread_id`),
-and missing items — matching spec §4 and §8 exactly, with no recipe-path code yet (CP7).
+missing items, and the auto-select rules (single candidate, brand match, cheapest
+preference) that avoid asking when the choice isn't genuinely ambiguous — matching spec §3,
+§4, and §8 exactly, with no recipe-path code yet (CP7).
 
 ## Risks
 
@@ -415,6 +513,10 @@ and missing items — matching spec §4 and §8 exactly, with no recipe-path cod
 - Running `search_product` sequentially per item is simple but slow for long lists — track
   as a possible follow-up optimization (parallelize with `asyncio.gather`), not required for
   MVP correctness.
+- The `selection_preference == "cheapest"` path calls `get_product_offers` once per
+  candidate to compare prices before resolving — more MCP round-trips than the other
+  auto-select paths, but only triggered when a choice would otherwise require asking, so the
+  trade-off favors fewer clarification questions over raw speed.
 
 ## Notes
 

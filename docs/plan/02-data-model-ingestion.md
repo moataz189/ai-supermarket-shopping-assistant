@@ -5,8 +5,9 @@ Spec milestone: M1. Depends on: CP1.
 ## Goal
 
 Implement the canonical-product / retailer-offer data model behind SQLAlchemy, and the
-ingestion pipeline that turns Shufersal and Rami Levy price-transparency feeds into that
-model via a validated staging load with atomic dataset activation (spec §5).
+ingestion pipeline that turns Shufersal Online (`StoreId 413`) and Rami Levy Online
+(`StoreId 39`) price-transparency feeds into that model via a validated staging load with
+atomic dataset activation (spec §5).
 
 ## Scope
 
@@ -17,9 +18,8 @@ and fixture feed data for local dev/tests. No MCP server yet (CP3 consumes this 
 ## Deliverables
 
 - `python -m app.ingestion.run --source fixtures` loads sample data into local SQLite.
-- `ProductRepository` can search candidates by name and return per-retailer offers
-  (aggregated to each retailer's minimum price across its branches, per spec's Data Model
-  section).
+- `ProductRepository` can search candidates by name and return each retailer's offer for a
+  product, keyed by `retailer`, sourced from that retailer's fixed Online `StoreId`.
 - A corrupted/partial feed load never mutates previously-activated data.
 
 ## Files to Create
@@ -46,12 +46,17 @@ tests/ingestion/test_freshness.py
 
 ## Detailed Implementation Steps
 
-1. Write `app/db/models.py`:
+1. Write `app/db/models.py`. Each retailer offer is keyed by that retailer's own `ItemCode`
+   at a **fixed** `StoreId` — Shufersal Online is always `413`, Rami Levy Online is always
+   `39` — since the MVP only ever ingests, prices, and later automates against each
+   retailer's Online store (spec §2/§3):
    ```python
    from datetime import datetime
 
    from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String
    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+   ONLINE_STORE_IDS = {"shufersal": "413", "rami_levy": "39"}
 
 
    class Base(DeclarativeBase):
@@ -79,9 +84,9 @@ tests/ingestion/test_freshness.py
        product_id: Mapped[str] = mapped_column(
            ForeignKey("canonical_products.product_id"), index=True
        )
-       retailer: Mapped[str] = mapped_column(String(32), index=True)
-       branch_id: Mapped[str] = mapped_column(String(32))
-       retailer_product_code: Mapped[str] = mapped_column(String(64))
+       retailer: Mapped[str] = mapped_column(String(32), index=True)  # "shufersal" | "rami_levy"
+       store_id: Mapped[str] = mapped_column(String(16))  # ONLINE_STORE_IDS[retailer]
+       item_code: Mapped[str] = mapped_column(String(64))  # the retailer's ItemCode from the feed
        price: Mapped[float] = mapped_column(Float)
        listed_in_feed: Mapped[bool] = mapped_column(Boolean, default=True)
        last_updated_at: Mapped[datetime] = mapped_column(DateTime)
@@ -122,7 +127,11 @@ tests/ingestion/test_freshness.py
    Modify `app/api/main.py` (CP1) to call `init_db()` once at import time (module-level
    call, right after the FastAPI `app` is created) so both `uvicorn` runs and the ingestion
    CLI (which also imports `app.db.session`) get the schema created on first use.
-3. Write the unit price helper and `ProductRepository` in `app/db/repositories.py`:
+3. Write the unit price helper and `ProductRepository` in `app/db/repositories.py`. Because
+   each retailer is only ever ingested from its one fixed Online `StoreId`, there is at most
+   one offer row per `(product_id, retailer)` — no branch aggregation/minimum-picking is
+   needed (a deliberate simplification unlocked by always using the Online store, per
+   spec §3):
    ```python
    from sqlalchemy import select
    from sqlalchemy.orm import Session
@@ -150,32 +159,30 @@ tests/ingestion/test_freshness.py
            return list(self.session.scalars(stmt))
 
        def get_offers_by_retailer(self, product_id: str) -> dict[str, RetailerOffer]:
-           """Best (minimum-price) offer per retailer, across that retailer's branches."""
+           """This product's offer at each retailer's Online store, keyed by retailer."""
            stmt = select(RetailerOffer).where(RetailerOffer.product_id == product_id)
-           offers = list(self.session.scalars(stmt))
-           best: dict[str, RetailerOffer] = {}
-           for offer in offers:
-               current = best.get(offer.retailer)
-               if current is None or offer.price < current.price:
-                   best[offer.retailer] = offer
-           return best
+           return {offer.retailer: offer for offer in self.session.scalars(stmt)}
    ```
 4. Write the failing test `tests/db/test_repositories.py` covering `search_candidates` and
-   `get_offers_by_retailer` (assert it picks the minimum-price branch per retailer) against
-   an in-memory SQLite session fixture; run it, watch it fail (no data yet), then seed rows
-   directly via the model classes in the test and confirm it passes.
+   `get_offers_by_retailer` against an in-memory SQLite session fixture; run it, watch it
+   fail (no data yet), then seed rows directly via the model classes in the test and confirm
+   it passes.
 5. Build two tiny, real-shaped fixture feeds by hand in
    `tests/fixtures/feeds/shufersal_sample.xml` and `rami_levy_sample.xml` (a handful of
-   items each, matching the real chains' published price-transparency XML structure — check
-   one real downloaded sample file from each chain's transparency portal first, so the
-   fixture schema is accurate) and one corrupt/truncated variant,
-   `shufersal_corrupt.xml`.
+   items each, matching the real chains' published Online-store price-transparency XML
+   structure — check one real downloaded sample file from each chain's transparency portal
+   first, so the fixture schema is accurate, including a `<StoreId>` element matching
+   `413`/`39` respectively) and one corrupt/truncated variant, `shufersal_corrupt.xml`.
 6. Write `app/ingestion/feeds/shufersal.py` and `rami_levy.py`, each exposing
    `parse(xml_bytes: bytes) -> list[ParsedOffer]` where `ParsedOffer` is a small dataclass
-   (`barcode`, `retailer_product_code`, `name`, `price`, `package_size`, `package_unit`,
-   `branch_id`). Write `tests/ingestion/test_feed_parsers.py` against the two sample
-   fixtures first (red, then implement until green); add a case asserting `parse()` raises
-   a `FeedValidationError` on `shufersal_corrupt.xml`.
+   (`barcode`, `item_code`, `name`, `price`, `package_size`, `package_unit`, `store_id`).
+   `parse()` must validate that every row's `store_id` matches the expected
+   `ONLINE_STORE_IDS` value for that module's retailer (`"413"` for `shufersal.py`, `"39"`
+   for `rami_levy.py`) and raise `FeedValidationError` if a row's `StoreId` doesn't match —
+   this guards against accidentally ingesting a different branch's feed file. Write
+   `tests/ingestion/test_feed_parsers.py` against the two sample fixtures first (red, then
+   implement until green); add cases asserting `parse()` raises a `FeedValidationError` on
+   `shufersal_corrupt.xml` and on a fixture row with an unexpected `StoreId`.
 7. Write `app/ingestion/pipeline.py` implementing stage→validate→activate:
    ```python
    from datetime import datetime, timezone
@@ -196,7 +203,7 @@ tests/ingestion/test_freshness.py
        with session.begin():
            for item in parsed_offers:
                product = session.get(CanonicalProduct, item.barcode) or CanonicalProduct(
-                   product_id=item.barcode or item.retailer_product_code,
+                   product_id=item.barcode or item.item_code,
                    barcode=item.barcode,
                    name=item.name,
                    category="uncategorized",
@@ -209,10 +216,10 @@ tests/ingestion/test_freshness.py
            for item in parsed_offers:
                session.add(
                    RetailerOffer(
-                       product_id=item.barcode or item.retailer_product_code,
+                       product_id=item.barcode or item.item_code,
                        retailer=retailer,
-                       branch_id=item.branch_id,
-                       retailer_product_code=item.retailer_product_code,
+                       store_id=item.store_id,
+                       item_code=item.item_code,
                        price=item.price,
                        listed_in_feed=True,
                        last_updated_at=datetime.now(timezone.utc),
@@ -268,14 +275,16 @@ tests/ingestion/test_freshness.py
         main()
     ```
 11. Run `python -m app.ingestion.run --source fixtures` against local SQLite; inspect the DB
-    (`sqlite3 app.db "select * from retailer_offers;"`) to confirm rows landed.
+    (`sqlite3 app.db "select * from retailer_offers;"`) to confirm rows landed with the
+    expected `store_id` values (`413`/`39`).
 12. Run the full test suite (`pytest tests/db tests/ingestion -v`), fix failures, then
     `ruff check`, then commit.
 
 ## Testing Tasks
 
-- [ ] `test_repositories.py` — candidate search + per-retailer minimum-price aggregation.
-- [ ] `test_feed_parsers.py` — both retailers parse correctly; corrupt feed raises.
+- [ ] `test_repositories.py` — candidate search + per-retailer offer lookup.
+- [ ] `test_feed_parsers.py` — both retailers parse correctly; corrupt feed raises; a
+      mismatched `StoreId` row raises.
 - [ ] `test_pipeline_atomic_swap.py` — failed load leaves existing data untouched; zero-row
       feed refuses to activate.
 - [ ] `test_freshness.py` — staleness threshold logic.
@@ -283,8 +292,9 @@ tests/ingestion/test_freshness.py
 ## Acceptance Criteria
 
 Running the ingestion CLI against fixture feeds populates SQLite with the expected canonical
-products and per-retailer offers; a corrupted feed is rejected without side effects; the
-repository returns the cheapest branch's price per retailer for a given product.
+products and per-retailer Online-store offers; a corrupted feed, or one with an unexpected
+`StoreId`, is rejected without side effects; the repository returns each retailer's offer for
+a given product.
 
 ## Risks
 

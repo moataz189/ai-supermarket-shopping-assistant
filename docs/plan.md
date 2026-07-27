@@ -46,12 +46,26 @@ them.
   automation run; remaining items are still attempted, and the failure is reported per item.
 - A detected CAPTCHA, bot-block, or login wall stops browser automation gracefully with a
   clear reason — never as an unhandled exception.
-- Preferences (budget, dietary, brand, retailer) are always supplied inline in the request —
-  no user accounts/auth/persisted profiles in the MVP.
+- Preferences (budget, dietary, brand, retailer, and the standing product-selection
+  preference — cheapest / brand / vegan only / gluten-free only / no preference) are always
+  supplied inline in the request/conversation — no user accounts/auth/persisted profiles in
+  the MVP.
+- Product-selection/ambiguity resolution applies identically to every shopping-list item
+  regardless of source — an explicitly-named grocery item and a recipe-extracted ingredient
+  go through the exact same search → shortlist → resolve step. Never special-case one path
+  to skip asking when the other would ask.
+- Auto-select only when there is truly one reasonable candidate, or the user already
+  specified the exact product, or a standing preference resolves it; otherwise show a small
+  shortlist (typically 3–5) and ask. Never silently pick a brand, package size, fat
+  percentage, flavor, or dietary version when the choice is ambiguous and material.
+- Once a product is resolved, its `ItemCode` is the fixed identifier used to compare that
+  item across both retailers' Online stores — Shufersal Online is `StoreId 413`, Rami Levy
+  Online is `StoreId 39` — for the rest of that request. If unavailable at one retailer,
+  mark it unavailable there; never silently substitute a different product.
 - Cart optimization is `single_retailer` only — never split a cart across retailers.
-- "Availability" means *listed in the retailer's ingested feed*, never live/real-time stock;
-  the retailer website is touched only for cart preparation after approval, never for
-  search/pricing decisions.
+- "Availability" means *listed in the retailer's Online-store ingested feed*, never
+  live/real-time stock; the retailer website is touched only for cart preparation after
+  approval, never for search/pricing decisions.
 - Application code must be identical across environments; only configuration
   (`DATABASE_URL`, checkpointer backend) changes between local dev/tests and deployed
   dev/prod namespaces.
@@ -179,6 +193,8 @@ Mirrors `docs/spec.md` §9, mapped to the checkpoints that implement each requir
 |---|---|
 | Natural-language shopping requests (groceries, recipes, cleaning, personal care, etc.) | CP4, CP7 |
 | Search Shufersal & Rami Levy, compare price/size/availability/preferences | CP2, CP3, CP4 |
+| Product selection/ambiguity resolution applies uniformly to explicit items and recipe-derived ingredients | CP4, CP7 |
+| Cross-retailer comparison by the same `ItemCode` at each retailer's Online store (`StoreId` 413 / 39) | CP2, CP3, CP4 |
 | Recipe requests via recipe API through custom MCP tool | CP6, CP7 |
 | Prepares the retailer's online cart but never proceeds to checkout, payment, or order submission | CP8 |
 | Real cart preparation only after explicit user approval | CP8 |

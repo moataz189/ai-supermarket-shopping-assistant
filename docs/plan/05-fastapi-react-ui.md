@@ -72,6 +72,7 @@ web/src/components/CartView.tsx
 
    class CartLine(BaseModel):
        product_id: str
+       item_code: str
        name: str
        retailer: str
        unit_price: float
