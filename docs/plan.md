@@ -7,21 +7,22 @@
 > syntax for tracking.
 
 **Goal:** Build an agent that turns a natural-language shopping request (grocery list or
-recipe) into an optimized single-retailer shopping cart across Shufersal and Rami Levy,
-respecting budget/dietary/brand/retailer preferences — and, once the user explicitly
-approves that proposed cart, prepares the corresponding **real cart on the retailer's own
-website** via browser automation, stopping before checkout, login, or payment. Ship it on a
-self-managed Kubernetes cluster on AWS EC2 with GitOps CI/CD and monitoring.
+recipe) into two independently-optimized shopping carts — one per retailer (Shufersal
+Online, Rami Levy Online) — respecting budget/dietary/brand preferences, and lets the user
+choose which to proceed with. Once chosen, prepares the corresponding **real cart on that
+retailer's own website** via browser automation, stopping before checkout, login, or
+payment. Ship it on a self-managed Kubernetes cluster on AWS EC2 with GitOps CI/CD and
+monitoring.
 
 **Architecture:** A LangGraph agent (Claude via Amazon Bedrock) orchestrates three custom MCP
-servers — a Recipe MCP (wraps Spoonacular), a Supermarket-Data MCP (searches/prices ingested
-retailer data), and a Retailer-Cart MCP (Playwright browser automation, invoked only after
-user approval) — plus a deterministic dietary rule engine, behind a FastAPI backend and a
-React chat UI. Retailer price-transparency feeds are ingested into a SQLAlchemy-backed
-product database (SQLite locally, PostgreSQL when deployed). The Retailer-Cart MCP server
-never performs search/pricing/optimization itself — it only acts on the cart the agent has
-already decided, and only interacts with the retailer site to search for and add items,
-never to check out. The whole stack runs on a kubeadm Kubernetes cluster on
+servers — a Recipe MCP (wraps Spoonacular), a Supermarket-Data MCP (searches/prices **one
+retailer's own catalog per call** — never cross-retailer), and a Retailer-Cart MCP
+(Playwright, invoked only for the retailer the user chose) — plus a deterministic dietary
+rule engine, behind a FastAPI backend and a React chat UI. Each retailer's price-transparency
+feed is ingested into its **own independent catalog** in a SQLAlchemy-backed database (SQLite
+locally, PostgreSQL when deployed) — there is no canonical cross-retailer product table. The
+Retailer-Cart MCP server never searches/prices/optimizes; it only acts on the already-built
+cart for the one retailer chosen. The whole stack runs on a kubeadm Kubernetes cluster on
 Terraform-provisioned EC2, with `dev`/`prod` namespaces deployed via ArgoCD GitOps and
 observed with Prometheus/Grafana. Full detail: `docs/spec.md`.
 
@@ -37,40 +38,34 @@ them.
 
 - The system never places an order, makes a payment, or logs into a retailer account, at any
   point, in any checkpoint.
-- Browser automation (Retailer-Cart MCP) only ever runs **after** the user has explicitly
-  approved the proposed cart — never automatically, never speculatively.
+- Browser automation (Retailer-Cart MCP) only ever runs for the retailer the user **chose**
+  after seeing both proposed carts — never automatically, never for the retailer not chosen.
 - The Retailer-Cart MCP server's interface exposes only search/add-to-cart/cart-url actions.
-  Checkout, login, and payment interactions are not implemented anywhere in that component —
-  this is a structural guarantee, not just a runtime check.
-- A failure to match or add a single item during browser automation never aborts the whole
-  automation run; remaining items are still attempted, and the failure is reported per item.
+  Checkout, login, and payment are not implemented anywhere in that component — structural,
+  not a runtime check.
+- A failure to match/add one item during browser automation never aborts the run; the
+  failure is reported per item.
 - A detected CAPTCHA, bot-block, or login wall stops browser automation gracefully with a
-  clear reason — never as an unhandled exception.
+  clear reason — never an unhandled exception.
 - Preferences (budget, dietary, brand, retailer, and the standing product-selection
   preference — cheapest / brand / vegan only / gluten-free only / no preference) are always
-  supplied inline in the request/conversation — no user accounts/auth/persisted profiles in
-  the MVP.
-- Product-selection/ambiguity resolution applies identically to every shopping-list item
-  regardless of source — an explicitly-named grocery item and a recipe-extracted ingredient
-  go through the exact same search → shortlist → resolve step. Never special-case one path
-  to skip asking when the other would ask.
-- Auto-select only when there is truly one reasonable candidate, or the user already
-  specified the exact product, or a standing preference resolves it; otherwise show a small
-  shortlist (typically 3–5) and ask. Never silently pick a brand, package size, fat
-  percentage, flavor, or dietary version when the choice is ambiguous and material.
-- Once a product is resolved, its `ItemCode` is the fixed identifier used to compare that
-  item across both retailers' Online stores — Shufersal Online is `StoreId 413`, Rami Levy
-  Online is `StoreId 39` — for the rest of that request. If unavailable at one retailer,
-  mark it unavailable there; never silently substitute a different product.
-- Cart optimization is `single_retailer` only — never split a cart across retailers.
-- "Availability" means *listed in the retailer's Online-store ingested feed*, never
-  live/real-time stock; the retailer website is touched only for cart preparation after
-  approval, never for search/pricing decisions.
+  supplied inline in the conversation — no user accounts/auth/persisted profiles in the MVP.
+- Item resolution/ambiguity handling applies identically regardless of source (typed vs.
+  recipe-derived), **once per item, not once per retailer**: a merged shortlist across both
+  retailers' catalogs, auto-selected when unambiguous, asked about otherwise.
+- **No canonical cross-retailer product identity.** Each retailer's catalog is independent,
+  keyed by `(retailer, item_code)` at a fixed `StoreId` (Shufersal `413`, Rami Levy `39`).
+  The agent builds a complete cart **independently for each retailer**, then compares totals
+  — it never tries to match "the same" product across retailers.
+- Budget is a **soft, best-effort** constraint per retailer, never a hard failure. An
+  over-budget cart is still shown with trade-off suggestions (cheaper brand, private-label,
+  smaller package, last-resort item removal) — never auto-applied without explicit approval.
+- "Availability" means *listed in that retailer's Online-store feed*, never live stock; the
+  retailer website is touched only after the user's choice, never for search/pricing.
 - Application code must be identical across environments; only configuration
   (`DATABASE_URL`, checkpointer backend) changes between local dev/tests and deployed
   dev/prod namespaces.
-- Dietary-restriction enforcement is deterministic (rule engine), never left to the LLM's
-  discretion.
+- Dietary-restriction enforcement is deterministic (rule engine), never left to the LLM.
 - No automated test may make a live call to Spoonacular, the Shufersal/Rami Levy feeds, or
   the real retailer websites; use recorded fixtures and a controlled mock retailer site.
 - Every task ends with a passing test suite and a commit — do not move to the next
@@ -90,7 +85,7 @@ later ones depend on earlier ones being done and committed.
 | CP5 | FastAPI backend & React chat UI | `docs/plan/05-fastapi-react-ui.md` | M1 |
 | CP6 | Recipe MCP server | `docs/plan/06-recipe-mcp-server.md` | M2 |
 | CP7 | Recipe flow integration & dietary rule engine | `docs/plan/07-recipe-flow-dietary-engine.md` | M2 |
-| CP8 | Retailer-Cart MCP server (Playwright) & cart-approval gate | `docs/plan/08-playwright-cart-automation.md` | M3 |
+| CP8 | Retailer-Cart MCP server (Playwright) | `docs/plan/08-playwright-cart-automation.md` | M3 |
 | CP9 | Containerization & docker-compose | `docs/plan/09-containerization.md` | M4 |
 | CP10 | Terraform + kubeadm cluster on EC2 | `docs/plan/10-terraform-kubeadm-cluster.md` | M4 |
 | CP11 | ArgoCD GitOps bootstrap & dev deployment | `docs/plan/11-argocd-gitops-dev.md` | M4 |
@@ -102,19 +97,20 @@ later ones depend on earlier ones being done and committed.
 
 ## Deliverables
 
-By the end of CP5 (M1): a runnable, tested, local-only system (docker-compose, from CP9
-onward) that turns a direct grocery-list request into a single-retailer proposed cart, with
-clarification on ambiguous product matches, over a minimal chat UI.
+By the end of CP5 (M1): a runnable, tested, local-only system that turns a direct
+grocery-list request into **two independent proposed carts** (one per retailer), with
+clarification on ambiguous items and budget status/trade-offs shown for each, over a minimal
+chat UI that lets the user choose one or decline.
 
 By the end of CP7 (M2): the same system additionally accepts recipe requests, extracts and
-scales ingredients via the Recipe MCP server, and enforces dietary constraints with
-substitution-or-clarification behavior.
+scales ingredients via the Recipe MCP server, and enforces dietary constraints (substitution
+or clear flagging) independently within each retailer's cart.
 
-By the end of CP8 (M3): once the user explicitly approves a proposed cart, the system opens
-the chosen retailer's website via Playwright, searches for and adds matched items/quantities
-to the real cart, stops before checkout/login/payment, handles partial per-item failures
-gracefully, and reports blocked automation (CAPTCHA/bot-detection/login-wall) as a clean
-partial result — verified against a controlled mock retailer site in automated tests.
+By the end of CP8 (M3): once the user chooses a retailer, the system opens that retailer's
+site via Playwright, searches for and adds its cart's items, stops before checkout/login/
+payment, handles partial per-item failures gracefully, and reports blocked automation
+(CAPTCHA/bot-detection/login-wall) as a clean partial result — verified against a controlled
+mock retailer site in automated tests.
 
 By the end of CP11 (M4): the full stack (including the Retailer-Cart MCP server) runs in the
 `dev` namespace of a kubeadm cluster on AWS EC2 (provisioned by Terraform), deployed via
@@ -129,9 +125,9 @@ preparation success/failure/blocked rates.
 
 By the end of CP16 (M6): the full test suite (unit, integration, contract, agent/graph,
 ingestion, concurrency, Postgres-compatibility, mock-site browser automation) passes in CI,
-the UI clearly surfaces clarifications/cart-approval/real-cart results/missing
-items/warnings/staleness, and the project is demo-ready end-to-end — including a live
-(manually verified) walkthrough of real-site cart preparation as best-effort.
+the UI clearly surfaces clarifications/the two-cart comparison/real-cart results/warnings,
+and the project is demo-ready end-to-end — including a live (manually verified) walkthrough
+of real-site cart preparation as best-effort.
 
 ## Files Created/Modified (module map)
 
@@ -140,14 +136,14 @@ app/
   agent/           # LangGraph graph, nodes, state, checkpointer config      (CP4, CP7, CP8)
   dietary/         # deterministic dietary rule engine                       (CP7)
   db/
-    models.py      # SQLAlchemy models: CanonicalProduct, RetailerOffer, ... (CP2)
+    models.py      # SQLAlchemy: RetailerProduct, RetailerFeedStatus          (CP2)
     repositories.py# repository layer used by MCP server + ingestion         (CP2)
     session.py     # DATABASE_URL-driven engine/session setup                (CP2)
   ingestion/       # feed download, parse, validate, atomic staging load     (CP2, CP15)
   api/             # FastAPI app, routes, request/response schemas           (CP5, CP8)
 mcp_servers/
   recipe_mcp/      # Recipe MCP server (Spoonacular)                        (CP6)
-  supermarket_mcp/ # Supermarket-Data MCP server                            (CP3)
+  supermarket_mcp/ # Supermarket-Data MCP server (per-retailer only)        (CP3)
   retailer_cart_mcp/ # Retailer-Cart MCP server (Playwright)                 (CP8)
 web/               # React chat SPA                                        (CP5, CP8, CP16)
 infra/
@@ -172,7 +168,7 @@ docker-compose.yml # local dev stack                                       (CP9)
 - [ ] CP5 — FastAPI backend & React chat UI
 - [ ] CP6 — Recipe MCP server
 - [ ] CP7 — Recipe flow integration & dietary rule engine
-- [ ] CP8 — Retailer-Cart MCP server (Playwright) & cart-approval gate
+- [ ] CP8 — Retailer-Cart MCP server (Playwright)
 - [ ] CP9 — Containerization & docker-compose
 - [ ] CP10 — Terraform + kubeadm cluster on EC2
 - [ ] CP11 — ArgoCD GitOps bootstrap & dev deployment
@@ -194,10 +190,11 @@ Mirrors `docs/spec.md` §9, mapped to the checkpoints that implement each requir
 | Natural-language shopping requests (groceries, recipes, cleaning, personal care, etc.) | CP4, CP7 |
 | Search Shufersal & Rami Levy, compare price/size/availability/preferences | CP2, CP3, CP4 |
 | Product selection/ambiguity resolution applies uniformly to explicit items and recipe-derived ingredients | CP4, CP7 |
-| Cross-retailer comparison by the same `ItemCode` at each retailer's Online store (`StoreId` 413 / 39) | CP2, CP3, CP4 |
+| Independent per-retailer cart optimization (no cross-retailer product matching required) | CP2, CP3, CP4 |
+| Budget as a first-class, best-effort optimization constraint with approved trade-offs | CP4 |
 | Recipe requests via recipe API through custom MCP tool | CP6, CP7 |
 | Prepares the retailer's online cart but never proceeds to checkout, payment, or order submission | CP8 |
-| Real cart preparation only after explicit user approval | CP8 |
+| Real cart preparation only after the user chooses a retailer | CP4, CP8 |
 | LangGraph or LangChain agent | CP4 |
 | At least one MCP server | CP3 |
 | Custom domain-specific MCP server | CP3, CP6, CP8 |

@@ -52,8 +52,9 @@ tests/db/test_postgres_compatibility.py
 4. Generate the initial migration from CP2's existing models:
    `alembic revision --autogenerate -m "initial"`; review the generated
    `migrations/versions/0001_initial.py` against `app/db/models.py`'s
-   `CanonicalProduct`/`RetailerOffer`/`RetailerFeedStatus` tables and fix anything the
-   autogenerate step got wrong (index names, nullability).
+   `RetailerProduct`/`RetailerFeedStatus` tables (including the `(retailer, item_code)`
+   unique constraint) and fix anything the autogenerate step got wrong (index names,
+   nullability).
 5. Run `alembic upgrade head` against local SQLite and confirm the schema matches what CP2's
    `init_db()` produced; run the CP2 test suite against it to confirm nothing broke.
 6. Remove the `init_db()` call from `app/api/main.py` (CP2/CP5) now that Alembic is the
@@ -123,7 +124,7 @@ tests/db/test_postgres_compatibility.py
    from sqlalchemy import create_engine
    from sqlalchemy.orm import sessionmaker
 
-   from app.db.models import CanonicalProduct, RetailerOffer
+   from app.db.models import RetailerProduct
    from app.db.repositories import ProductRepository
 
    pytestmark = pytest.mark.skipif(
@@ -132,27 +133,21 @@ tests/db/test_postgres_compatibility.py
    )
 
 
-   def test_search_and_offer_aggregation_against_postgres():
+   def test_search_and_get_product_against_postgres():
        engine = create_engine(os.environ["DATABASE_URL"])
        Session = sessionmaker(bind=engine)
        with Session() as session:
-           session.add(
-               CanonicalProduct(
-                   product_id="p1", barcode="123", name="Milk 1L", category="dairy",
-                   package_size=1.0, package_unit="l",
-               )
-           )
-           session.add(RetailerOffer(
-               product_id="p1", retailer="shufersal", branch_id="b1",
-               retailer_product_code="rp1", price=6.9, listed_in_feed=True,
-               last_updated_at=__import__("datetime").datetime.now(),
+           session.add(RetailerProduct(
+               retailer="shufersal", store_id="413", item_code="rp1", name="Milk 1L",
+               category="dairy", package_size=1.0, package_unit="l", price=6.9,
+               listed_in_feed=True, last_updated_at=__import__("datetime").datetime.now(),
            ))
            session.commit()
 
            repo = ProductRepository(session)
-           assert repo.search_candidates("Milk")
-           offers = repo.get_offers_by_retailer("p1")
-           assert offers["shufersal"].price == 6.9
+           assert repo.search_candidates("Milk", "shufersal")
+           product = repo.get_product("shufersal", "rp1")
+           assert product.price == 6.9
    ```
 10. Run this locally against a `docker run -p 5432:5432 -e POSTGRES_PASSWORD=app -e
     POSTGRES_USER=app -e POSTGRES_DB=supermarket_test postgres:16` container to confirm it

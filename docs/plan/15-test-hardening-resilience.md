@@ -76,9 +76,9 @@ data/snapshots/rami_levy_latest.xml
            run("thread-b", "rice and oil"),
        )
 
-       assert result_a["final_cart"] != result_b["final_cart"]
-       names_a = {item["name"] for item in result_a["final_cart"]["items"]}
-       names_b = {item["name"] for item in result_b["final_cart"]["items"]}
+       assert result_a["final_result"]["carts"] != result_b["final_result"]["carts"]
+       names_a = {item["name"] for item in result_a["final_result"]["carts"]["shufersal"]["items"]}
+       names_b = {item["name"] for item in result_b["final_result"]["carts"]["shufersal"]["items"]}
        assert names_a.isdisjoint(names_b - names_a)  # no cross-contamination of items
    ```
    Adapt the exact fixture names to whatever CP4/CP7/CP8's test fakes ended up being called
@@ -157,8 +157,8 @@ data/snapshots/rami_levy_latest.xml
     corresponding test file from CP1–CP15; record the mapping directly in this checkpoint's
     PR description (not a new doc file) so it's reviewable once, not maintained forever.
     Expected mapping:
-    - Unit tests → CP2 (ingestion parsing), CP4 (optimize_cart unit test), CP7 (dietary
-      rules)
+    - Unit tests → CP2 (ingestion parsing), CP4 (`_resolve_item` rules, per-retailer cart
+      building, budget trade-off logic), CP7 (dietary rules)
     - Integration tests → CP5 (chat endpoint), CP12 (Postgres compatibility)
     - Contract tests → CP3, CP6, CP8
     - End-to-end agent tests → CP4, CP7, CP8

@@ -4,27 +4,25 @@ Spec milestone: M2 (completes M2). Depends on: CP4, CP6.
 
 ## Goal
 
-Add the recipe branch to the LangGraph agent — classify recipe vs. grocery-list requests,
-select a recipe (with interrupt-on-ambiguity), fetch and scale its ingredients — and add the
-deterministic dietary rule engine that enforces dietary constraints at both recipe-selection
-and product-matching stages, per spec §4/§3.
+Add the recipe branch — classify recipe vs. grocery-list requests, select a recipe (with
+interrupt-on-ambiguity), fetch and scale its ingredients — and add the deterministic dietary
+rule engine, applied both to the cross-retailer shortlist (`resolve_items`) and to each
+retailer's own candidate pool (`build_retailer_cart`), per spec §3/§4.
 
 ## Scope
 
-New graph nodes for the recipe path, a new `app/dietary` module, and the routing changes in
-`app/agent/graph.py` that plug them in ahead of the existing (CP4) product-search path. The
-grocery-list-only path from CP4 must continue to work unchanged when `request_type` is not
-`"recipe"`.
+New graph nodes for the recipe path, a new `app/dietary` module, and routing changes in
+`app/agent/graph.py` ahead of CP4's existing `resolve_items`. The grocery-list-only path must
+keep working unchanged when `request_type != "recipe"`.
 
 ## Deliverables
 
-- A recipe request ("shakshuka for 4 people, no dairy") resolves to scaled ingredients,
-  applies dietary filtering/substitution, and reaches the same `optimize_cart`/`finalize`
-  nodes as the grocery-list path.
-- Ambiguous recipe matches interrupt and resume correctly, mirroring CP4's product-match
-  interrupt.
-- A dietary-conflicting ingredient is substituted when a substitute exists, and reported as
-  a `dietary_conflict` missing item when it doesn't — never silently dropped.
+- A recipe request ("shakshuka for 4, no dairy") resolves to scaled ingredients and reaches
+  the same `resolve_items` → per-retailer cart building CP4 already built — not a separate
+  path.
+- Ambiguous recipe matches interrupt/resume, mirroring CP4's item-ambiguity interrupt.
+- A dietary-conflicting ingredient is substituted where possible (per retailer where it
+  matters), else reported with `reason: "dietary_conflict"` — never silently dropped.
 
 ## Files to Create
 
@@ -44,65 +42,50 @@ tests/agent/test_dietary_substitution_flow.py
 
 - `app/agent/nodes/parse_request.py` — extend the schema/prompt with `request_type`,
   `recipe_query`, `servings`.
-- `app/agent/nodes/search_products.py` — filter/substitute each item's candidates against
-  dietary constraints *before* auto-resolving them (see step 8 below for why the ordering
-  matters); `_resolve_candidate` itself is unchanged.
-- `app/agent/nodes/optimize_cart.py` — distinguish `dietary_conflict` from `not_found` in
-  the zero-candidate branch.
-- `app/agent/mcp_clients.py` — add `McpRecipeClient` (mirrors `McpSupermarketDataClient`,
-  targets CP6's server).
-- `app/agent/graph.py` — wire the new nodes and the recipe-vs-grocery-list routing.
+- `app/agent/nodes/resolve_items.py` — filter the merged shortlist by dietary constraints
+  before auto-resolving; substitute or flag when nothing compliant remains.
+- `app/agent/nodes/build_retailer_cart.py` — filter that retailer's own candidates by
+  dietary constraints; substitute, or report `dietary_conflict`, independently per retailer.
+- `app/agent/mcp_clients.py` — add `McpRecipeClient`.
+- `app/agent/graph.py` — wire the new nodes and recipe-vs-grocery-list routing.
 - `app/api/dependencies.py` — `build_graph` now also takes a recipe client.
 
 ## Detailed Implementation Steps
 
-1. Write `app/dietary/rules.py` — the deterministic tagging + substitution engine (spec
-   §3: "not left to LLM judgment"):
+1. Write `app/dietary/rules.py` — deterministic tagging + substitution, not LLM judgment:
    ```python
    DIETARY_TAG_KEYWORDS = {
        "contains_dairy": ["milk", "cheese", "cream", "butter", "yogurt", "yoghurt"],
        "contains_gluten": ["wheat", "flour", "bread", "pasta", "barley"],
        "contains_meat": ["chicken", "beef", "pork", "lamb", "turkey"],
    }
-
    CONSTRAINT_TO_FORBIDDEN_TAGS = {
-       "no dairy": {"contains_dairy"},
-       "dairy free": {"contains_dairy"},
-       "no gluten": {"contains_gluten"},
-       "gluten free": {"contains_gluten"},
-       "vegetarian": {"contains_meat"},
-       "vegan": {"contains_meat", "contains_dairy"},
+       "no dairy": {"contains_dairy"}, "dairy free": {"contains_dairy"},
+       "no gluten": {"contains_gluten"}, "gluten free": {"contains_gluten"},
+       "vegetarian": {"contains_meat"}, "vegan": {"contains_meat", "contains_dairy"},
    }
-
    SUBSTITUTES = {
        "contains_dairy": {
-           "milk": "oat milk",
-           "cheese": "dairy-free cheese",
-           "cream": "coconut cream",
-           "butter": "margarine",
-           "yogurt": "coconut yogurt",
+           "milk": "oat milk", "cheese": "dairy-free cheese", "cream": "coconut cream",
+           "butter": "margarine", "yogurt": "coconut yogurt",
        },
    }
 
 
    def tags_for_name(name: str) -> set[str]:
        lowered = name.lower()
-       return {
-           tag for tag, keywords in DIETARY_TAG_KEYWORDS.items() if any(k in lowered for k in keywords)
-       }
+       return {tag for tag, kws in DIETARY_TAG_KEYWORDS.items() if any(k in lowered for k in kws)}
 
 
    def forbidden_tags(constraints: list[str]) -> set[str]:
        forbidden: set[str] = set()
-       for constraint in constraints:
-           forbidden |= CONSTRAINT_TO_FORBIDDEN_TAGS.get(constraint.strip().lower(), set())
+       for c in constraints:
+           forbidden |= CONSTRAINT_TO_FORBIDDEN_TAGS.get(c.strip().lower(), set())
        return forbidden
 
 
    def violates(name: str, constraints: list[str]) -> bool:
-       if not constraints:
-           return False
-       return bool(tags_for_name(name) & forbidden_tags(constraints))
+       return bool(tags_for_name(name) & forbidden_tags(constraints)) if constraints else False
 
 
    def find_substitute_query(name: str, forbidden: set[str]) -> str | None:
@@ -113,12 +96,9 @@ tests/agent/test_dietary_substitution_flow.py
                    return substitute
        return None
    ```
-2. Write `tests/dietary/test_rules.py`: `tags_for_name("Whole Milk 1L")` includes
-   `"contains_dairy"`; `violates("Cheddar Cheese", ["no dairy"])` is `True`;
-   `violates("Cheddar Cheese", [])` is `False`; `find_substitute_query("Whole Milk",
-   {"contains_dairy"})` returns `"oat milk"`; a name/tag with no mapping returns `None`. Run,
-   make green.
-3. Extend `app/agent/nodes/parse_request.py`'s `ParsedRequestSchema` and `PARSE_PROMPT`:
+2. Write `tests/dietary/test_rules.py`: tagging, `violates`, `find_substitute_query` —
+   including the empty-constraints and no-mapping cases.
+3. Extend `parse_request.py`'s schema/prompt:
    ```python
    from typing import Literal
 
@@ -134,16 +114,12 @@ tests/agent/test_dietary_substitution_flow.py
        brand_preference: str | None = None
        selection_preference: Literal["cheapest", "no_preference"] = "no_preference"
    ```
-   (`selection_preference` already existed on CP4's version of this schema — carry it
-   forward unchanged here; it's not recipe-specific.) Update `PARSE_PROMPT` to instruct:
-   classify `request_type`; if `"recipe"`, fill `recipe_query`/`servings` and leave `items`
-   empty; if `"grocery_list"`, fill `items` and leave `recipe_query`/`servings` null. Update
-   `make_parse_request`'s return dict to carry `request_type`, `recipe_query`, `servings`
-   into `parsed_request`, keeping the existing `selection_preference` passthrough from CP4.
-4. Add `McpRecipeClient` to `app/agent/mcp_clients.py`, structurally identical to
-   `McpSupermarketDataClient` but targeting the CP6 server and its three tool names
-   (`search_recipes`, `get_recipe`, `get_recipe_ingredients`), returning `.get("recipes")` /
-   `.get("ingredients")` respectively from each tool's structured content.
+   Update `PARSE_PROMPT`: classify `request_type`; if `"recipe"`, fill `recipe_query`/
+   `servings`, leave `items` empty; if `"grocery_list"`, the reverse. Carry
+   `selection_preference` through unchanged (it already existed on CP4's schema).
+4. Add `McpRecipeClient` to `mcp_clients.py` — same stdio pattern as
+   `McpSupermarketDataClient`, targeting CP6's server (`search_recipes`, `get_recipe`,
+   `get_recipe_ingredients`).
 5. Write `app/agent/nodes/search_recipes.py`:
    ```python
    def make_search_recipes(recipe_client):
@@ -154,7 +130,6 @@ tests/agent/test_dietary_substitution_flow.py
                r["title"].strip().lower() == query.strip().lower() for r in recipes
            )
            return {"recipe_candidates": recipes, "recipe_ambiguous": ambiguous}
-
        return search_recipes
 
 
@@ -168,13 +143,11 @@ tests/agent/test_dietary_substitution_flow.py
 
    async def resolve_recipe_ambiguity(state):
        candidates = state["recipe_candidates"]
-       answer = interrupt(
-           {
-               "reason": "ambiguous_recipe",
-               "question": "I found a few recipes — which one did you mean?",
-               "options": [{"id": str(r["id"]), "label": r["title"]} for r in candidates],
-           }
-       )
+       answer = interrupt({
+           "reason": "ambiguous_recipe",
+           "question": "I found a few recipes — which one did you mean?",
+           "options": [{"id": str(r["id"]), "label": r["title"]} for r in candidates],
+       })
        chosen = next(r for r in candidates if str(r["id"]) == answer)
        return {"chosen_recipe_id": chosen["id"], "recipe_ambiguous": False}
    ```
@@ -185,96 +158,55 @@ tests/agent/test_dietary_substitution_flow.py
            recipe_id = state.get("chosen_recipe_id") or state["recipe_candidates"][0]["id"]
            servings = state["parsed_request"].get("servings")
            result = await recipe_client.get_recipe_ingredients(recipe_id, servings)
-           items = [{"name": ing["name"], "quantity": ing["amount"]} for ing in result["ingredients"]]
-           updated_request = {**state["parsed_request"], "items": items}
-           return {"parsed_request": updated_request}
-
+           items = [{"name": i["name"], "quantity": i["amount"]} for i in result["ingredients"]]
+           return {"parsed_request": {**state["parsed_request"], "items": items}}
        return get_recipe_ingredients
    ```
-8. Modify `app/agent/nodes/search_products.py` to filter each item's candidates against
-   forbidden tags, and substitute or flag, before resolving:
-   ```python
-   from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
-   ```
-   **Important ordering fix**: dietary filtering must happen *before* an item is
-   auto-resolved, not after — otherwise CP4's `_resolve_candidate` could auto-select a
-   dietary-violating candidate (e.g. the one exact-name match happens to be a dairy
-   product) and populate `resolved_choices` before any dietary check ever ran, and a
-   separate later filtering step would have no effect on an already-resolved item. So this
-   is **not** a new standalone node — it's a modification to CP4's `make_search_products`
-   itself, filtering/substituting each item's candidates *before* calling
-   `_resolve_candidate` on them:
+8. Modify `resolve_items.py`'s `_merged_candidates` to filter by dietary constraints before
+   dedup, and `resolve_items` to substitute or flag when nothing compliant remains:
    ```python
    from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 
-   def make_search_products(client):
-       async def search_products(state):
-           parsed = state["parsed_request"]
-           item_candidates = dict(state.get("item_candidates", {}))
-           resolved_choices = dict(state.get("resolved_choices", {}))
-           dietary_conflicts = list(state.get("dietary_conflicts", []))
-           forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
-           ambiguous_item = None
-
-           for item in parsed["items"]:
-               name = item["name"]
-               if name in resolved_choices:
+   async def _merged_candidates(client, name: str, forbidden: set[str]) -> list[dict]:
+       merged: dict[str, dict] = {}
+       for retailer in RETAILERS:
+           for c in await client.search_product(name, retailer):
+               if forbidden and (tags_for_name(c["name"]) & forbidden):
                    continue
-               if name not in item_candidates:
-                   item_candidates[name] = await client.search_product(name)
-               candidates = item_candidates[name]
-
-               if forbidden:
-                   compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
-                   if compliant:
-                       candidates = compliant
-                   else:
-                       substitute_query = find_substitute_query(name, forbidden)
-                       if substitute_query:
-                           candidates = await client.search_product(substitute_query)
-                       else:
-                           candidates = []
-                           if name not in dietary_conflicts:
-                               dietary_conflicts.append(name)
-                   item_candidates[name] = candidates
-
-               resolved_id, still_ambiguous = await _resolve_candidate(
-                   client, name, candidates,
-                   parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
-               )
-               if resolved_id is not None:
-                   resolved_choices[name] = resolved_id
-               elif still_ambiguous and ambiguous_item is None:
-                   ambiguous_item = name
-
-           return {
-               "item_candidates": item_candidates,
-               "resolved_choices": resolved_choices,
-               "dietary_conflicts": dietary_conflicts,
-               "pending_clarification_item": ambiguous_item,
-           }
-
-       return search_products
+               merged.setdefault(c["name"].strip().lower(), c)
+       return list(merged.values())[:5]
    ```
-   When `dietary_constraints` is empty, `forbidden` is an empty set and the `if forbidden:`
-   block never runs — this is exactly CP4's original behavior, unchanged for the
-   grocery-list-only case. `_resolve_candidate` itself (CP4) is untouched.
-9. Modify `app/agent/nodes/optimize_cart.py`'s zero-candidate branch to distinguish reason:
+   In `make_resolve_items`, compute `forbidden = forbidden_tags(parsed.get("dietary_constraints", []))`
+   once per call, pass it into `_merged_candidates(client, name, forbidden)`. If the result
+   is empty *because of filtering* (i.e. `forbidden` is non-empty), try
+   `find_substitute_query(name, forbidden)`: if found, redo the merged search on the
+   substitute query; if not, record `name` in a new `dietary_conflicts` state list instead of
+   marking it ambiguous, and skip asking about it.
+9. Modify `build_retailer_cart.py` similarly — filter that retailer's own `search_product`
+   results by `forbidden`, try the same substitute-query fallback for candidates missing at
+   *this* retailer specifically, and set `"reason": "dietary_conflict"` (instead of
+   `"not_found"`) on the missing-item entry when the item was filtered out for dietary
+   reasons rather than genuinely absent:
    ```python
-   elif not candidates:
+   candidates = await client.search_product(label, retailer)
+   if forbidden:
+       compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+       if not compliant:
+           sub_query = find_substitute_query(name, forbidden)
+           compliant = await client.search_product(sub_query, retailer) if sub_query else []
+       candidates = compliant
+   if not candidates:
        reason = "dietary_conflict" if name in state.get("dietary_conflicts", []) else "not_found"
-       missing_items.append({"name": name, "reason": reason})
+       missing.append({"name": name, "reason": reason})
        continue
    ```
-10. Modify `app/agent/graph.py`: add the new recipe-path nodes; route `parse_request` to
-    `search_recipes` when `request_type == "recipe"` and straight to `search_products`
-    otherwise (unchanged CP4 path). Since dietary filtering now lives *inside*
-    `search_products` (step 8), there is no separate dietary node to wire in — the
-    `search_products → _route_after_search` edge from CP4 is unchanged:
+10. Modify `graph.py`: add the recipe nodes ahead of `resolve_items`; route
+    `parse_request` to `search_recipes` when `request_type == "recipe"`, else straight to
+    `resolve_items` (unchanged CP4 path):
     ```python
     def route_after_parse(state) -> str:
-        return "search_recipes" if state["parsed_request"]["request_type"] == "recipe" else "search_products"
+        return "search_recipes" if state["parsed_request"]["request_type"] == "recipe" else "resolve_items"
 
 
     def build_graph(supermarket_client, recipe_client, llm, checkpointer):
@@ -283,89 +215,70 @@ tests/agent/test_dietary_substitution_flow.py
         graph.add_node("search_recipes", make_search_recipes(recipe_client))
         graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
         graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
-        graph.add_node("search_products", make_search_products(supermarket_client))
+        graph.add_node("resolve_items", make_resolve_items(supermarket_client))
         graph.add_node("resolve_ambiguity", resolve_ambiguity)
-        graph.add_node("optimize_cart", make_optimize_cart(supermarket_client))
+        graph.add_node("build_shufersal_cart", make_build_retailer_cart("shufersal", supermarket_client))
+        graph.add_node("build_rami_levy_cart", make_build_retailer_cart("rami_levy", supermarket_client))
+        graph.add_node("choose_retailer", choose_retailer)
         graph.add_node("finalize", finalize)
 
         graph.add_edge(START, "parse_request")
-        graph.add_conditional_edges("parse_request", route_after_parse, ["search_recipes", "search_products"])
+        graph.add_conditional_edges("parse_request", route_after_parse, ["search_recipes", "resolve_items"])
         graph.add_conditional_edges(
             "search_recipes", route_after_search_recipes, ["resolve_recipe_ambiguity", "get_recipe_ingredients"]
         )
         graph.add_edge("resolve_recipe_ambiguity", "get_recipe_ingredients")
-        graph.add_edge("get_recipe_ingredients", "search_products")
-        graph.add_conditional_edges(
-            "search_products", _route_after_search, ["resolve_ambiguity", "optimize_cart"]
-        )
-        graph.add_edge("resolve_ambiguity", "search_products")
-        graph.add_edge("optimize_cart", "finalize")
+        graph.add_edge("get_recipe_ingredients", "resolve_items")
+        graph.add_conditional_edges("resolve_items", route_after_resolve, ["resolve_ambiguity", "build_shufersal_cart"])
+        graph.add_edge("resolve_ambiguity", "resolve_items")
+        graph.add_edge("build_shufersal_cart", "build_rami_levy_cart")
+        graph.add_edge("build_rami_levy_cart", "choose_retailer")
+        graph.add_edge("choose_retailer", "finalize")
         graph.add_edge("finalize", END)
-
         return graph.compile(checkpointer=checkpointer)
     ```
-    (`_route_after_search` itself is unchanged from CP4 — it just now reads
-    `pending_clarification_item` as produced by the dietary-aware `search_products` from
-    step 8.)
 11. Modify `app/api/dependencies.py`'s `get_agent_app` to construct an `McpRecipeClient`
-    (pointed at `mcp_servers.recipe_mcp.server`) and pass it into `build_graph`.
-12. Write `tests/agent/test_graph_recipe_happy_path.py`: fake recipe client returns one
-    clear recipe match and fixed ingredients; fake supermarket client resolves all of them
-    unambiguously; assert the graph reaches `finalize` with a populated cart derived from
-    the recipe's ingredients.
-13. Write `tests/agent/test_graph_recipe_ambiguous_interrupt.py`: fake recipe client returns
-    two non-exact-matching recipes; assert the graph interrupts with `reason:
-    "ambiguous_recipe"` and the expected options; resume with the chosen id using the same
-    `thread_id`; assert it proceeds to ingredient fetch and finalize correctly.
-14. Write `tests/agent/test_dietary_substitution_flow.py`: parsed request with
-    `dietary_constraints: ["no dairy"]` and an ingredient `"milk"`; fake supermarket client
-    returns only dairy-tagged candidates for `"milk"` but valid candidates for the
-    substitute query `"oat milk"`; assert the final cart contains the substitute, not the
-    original dairy item. A second test: same constraint, no substitute mapping exists for
-    the conflicting ingredient (e.g. `"chicken stock"` under `"vegan"` with no matching
-    keyword) — assert it lands in `missing_items` with `reason: "dietary_conflict"`.
-15. Run `pytest tests/dietary tests/agent -v`, iterate to green; `ruff check`; commit.
+    (targeting `mcp_servers.recipe_mcp.server`) and pass it into `build_graph`.
+12. Write `tests/agent/test_graph_recipe_happy_path.py` (recipe → scaled ingredients →
+    both retailer carts built) and `test_graph_recipe_ambiguous_interrupt.py` (two recipe
+    matches → interrupt → resume → proceeds).
+13. Write `tests/agent/test_dietary_substitution_flow.py`: `dietary_constraints: ["no
+    dairy"]`, ingredient `"milk"`; fake client returns only dairy candidates for `"milk"`
+    but valid ones for `"oat milk"` — assert both retailer carts contain the substitute, not
+    the original. A second case: no substitute mapping exists — assert `missing_items` shows
+    `reason: "dietary_conflict"` at whichever retailer(s) lack a compliant option.
+14. Run `pytest tests/dietary tests/agent -v`; confirm CP4's grocery-list tests still pass
+    unmodified; `ruff check`; commit.
 
 ## Testing Tasks
 
-- [ ] Dietary rule engine unit tests (tagging, violation check, substitute lookup).
-- [ ] Recipe happy path end-to-end (fakes only).
-- [ ] Recipe ambiguity interrupt/resume end-to-end (fakes only).
-- [ ] Dietary substitution success case and dietary-conflict-no-substitute case.
-- [ ] Confirm CP4's grocery-list tests still pass unmodified (regression check).
+- [ ] Dietary rule engine unit tests.
+- [ ] Recipe happy path and ambiguity interrupt/resume (fakes only).
+- [ ] Dietary substitution success case and no-substitute `dietary_conflict` case.
+- [ ] CP4's grocery-list tests still pass unmodified (regression check).
 
 ## Acceptance Criteria
 
-A recipe request resolves through recipe selection (with interrupt on ambiguity), ingredient
-scaling, dietary substitution/flagging, and into the same single-retailer cart-building path
-as CP4 — matching spec §4 exactly, with all dietary decisions made by the deterministic rule
-engine, never the LLM.
+A recipe request resolves through recipe selection (interrupt on ambiguity), ingredient
+scaling, and dietary-aware item resolution/cart-building — reaching the exact same
+`resolve_items`/`build_retailer_cart`/`choose_retailer` path as a grocery list, with all
+dietary decisions made by the deterministic rule engine, never the LLM.
 
 ## Risks
 
-- The keyword-based tagging/substitution approach in `app/dietary/rules.py` is intentionally
-  simple for MVP scope and will miss more subtle dietary conflicts (e.g. hidden dairy in a
-  processed ingredient's name) — acceptable per spec §11 Risks; do not over-build this in
-  CP7, revisit only if CP15 hardening surfaces concrete gaps.
+- The keyword-based tagging/substitution in `app/dietary/rules.py` is intentionally simple
+  for MVP scope and will miss subtler conflicts (e.g. hidden dairy in a processed
+  ingredient's name) — acceptable per spec §11; revisit only if CP15 hardening surfaces
+  concrete gaps.
 
 ## Notes
 
-Do not let the LLM (`parse_request`) make dietary compliance decisions — it only extracts
-the constraint text; `app/dietary/rules.py` is the sole authority on violations and
-substitutions, per spec §3/§4.
-
-Every ingredient `get_recipe_ingredients` returns becomes a plain item in
-`parsed_request["items"]` (step 7) and is resolved by the same
-`search_products`/`_resolve_candidate`/`resolve_ambiguity` logic as a directly-typed
-grocery item — this checkpoint only adds a dietary-filtering step at the top of
-`search_products` (step 8), it does not fork a separate resolution path. The same
-auto-select rules (single candidate, brand match, cheapest preference) and the same
-interrupt-and-ask behavior apply either way. Do not add a
-second, recipe-specific product-resolution path here.
+The LLM (`parse_request`) only extracts constraint text — `app/dietary/rules.py` is the sole
+authority on violations/substitutions, applied independently in the cross-retailer shortlist
+and in each retailer's own cart-building, never once globally.
 
 ## Definition of Done
 
-- [ ] All new nodes and dietary engine implemented and wired; CP4 grocery-list tests still
-      pass unmodified.
-- [ ] All new tests listed above pass; `ruff check` clean.
+- [ ] All new nodes and dietary integration implemented; CP4 tests still pass unmodified.
+- [ ] All new tests pass; `ruff check` clean.
 - [ ] Committed with message referencing CP7. **M2 milestone complete at this point.**
