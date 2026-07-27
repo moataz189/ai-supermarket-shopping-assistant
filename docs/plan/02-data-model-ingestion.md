@@ -96,18 +96,32 @@ tests/ingestion/test_freshness.py
        last_updated_at: Mapped[datetime] = mapped_column(DateTime)
        stale: Mapped[bool] = mapped_column(Boolean, default=False)
    ```
-2. Write `app/db/session.py`:
+2. Write `app/db/session.py`, including an `init_db()` helper that creates all tables if
+   they don't already exist — called once at application startup (wired into
+   `app/api/main.py` in CP5) so both a fresh local SQLite file and a fresh deployed Postgres
+   database (CP11) get their schema without any manual step. (CP12 later introduces Alembic
+   migrations as the permanent schema-management mechanism; see that checkpoint's note on
+   reconciling this with an already `init_db()`-created database.)
    ```python
    import os
 
    from sqlalchemy import create_engine
    from sqlalchemy.orm import sessionmaker
 
+   from app.db.models import Base
+
    DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
 
    engine = create_engine(DATABASE_URL, future=True)
    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+   def init_db() -> None:
+       Base.metadata.create_all(bind=engine)
    ```
+   Modify `app/api/main.py` (CP1) to call `init_db()` once at import time (module-level
+   call, right after the FastAPI `app` is created) so both `uvicorn` runs and the ingestion
+   CLI (which also imports `app.db.session`) get the schema created on first use.
 3. Write the unit price helper and `ProductRepository` in `app/db/repositories.py`:
    ```python
    from sqlalchemy import select
@@ -281,7 +295,7 @@ repository returns the cheapest branch's price per retailer for a given product.
 ## Notes
 
 CP3's Supermarket-Data MCP server calls `ProductRepository` directly — do not duplicate
-query logic there. Real live-feed ingestion (network download, CronJob) is CP10; this
+query logic there. Real live-feed ingestion (network download, CronJob) is CP11; this
 checkpoint only proves the parse→stage→activate logic against fixtures.
 
 ## Definition of Done

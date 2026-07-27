@@ -109,34 +109,40 @@ tests/mcp/test_supermarket_mcp_contract.py
    def get_product_offers(product_id: str) -> GetProductOffersResponse:
        with SessionLocal() as session:
            repo = ProductRepository(session)
+           product = session.get(CanonicalProduct, product_id)
            by_retailer = repo.get_offers_by_retailer(product_id)
-           product = session.get_one_or_none = None  # fetched via repo below
-           offers = []
-           for retailer, offer in by_retailer.items():
-               product = session.get(type(offer).product.property.mapper.class_, offer.product_id)
-               offers.append(
-                   RetailerOfferView(
-                       retailer=retailer,
-                       price=offer.price,
-                       unit_price=unit_price(offer.price, product.package_size, product.package_unit),
-                       listed_in_feed=offer.listed_in_feed,
-                       last_updated_at=offer.last_updated_at.isoformat(),
-                       stale=False,  # populated from RetailerFeedStatus in step 4
-                   )
+           statuses = {
+               status.retailer: status
+               for status in session.query(RetailerFeedStatus).all()
+           }
+           offers = [
+               RetailerOfferView(
+                   retailer=retailer,
+                   price=offer.price,
+                   unit_price=unit_price(offer.price, product.package_size, product.package_unit),
+                   listed_in_feed=offer.listed_in_feed,
+                   last_updated_at=offer.last_updated_at.isoformat(),
+                   stale=statuses[retailer].stale if retailer in statuses else False,
                )
+               for retailer, offer in by_retailer.items()
+           ]
            return GetProductOffersResponse(product_id=product_id, offers=offers)
 
 
    @mcp.tool()
    def compare_product(candidate_ids: list[str]) -> GetProductOffersResponse:
        raise NotImplementedError  # implemented in step 5
+
+
+   if __name__ == "__main__":
+       mcp.run()
    ```
-   (Note: the placeholder line for fetching `product` is intentionally simplified here —
-   during implementation, resolve it by calling `session.get(CanonicalProduct, offer.product_id)`
-   directly instead of the reflective `type(offer).product...` expression; import
-   `CanonicalProduct` from `app.db.models`.)
-4. Wire `stale` correctly: query `RetailerFeedStatus` for each retailer and set
-   `stale=status.stale` per the per-retailer freshness rule from `docs/spec.md` §5 (each
+   Add `CanonicalProduct` and `RetailerFeedStatus` to the `app.db.models` import at the top
+   of the file. The `if __name__ == "__main__":` block is required — `McpSupermarketDataClient`
+   (CP4) spawns this server via `python -m mcp_servers.supermarket_mcp.server`, which only
+   starts the MCP server if this entrypoint exists.
+4. Confirm `stale` is wired correctly: each retailer's staleness comes from its own
+   `RetailerFeedStatus` row per the per-retailer freshness rule from `docs/spec.md` §5 (each
    retailer's staleness is independent — do not collapse to one global flag). Add a test
    case in the contract test asserting one retailer can be `stale=True` while the other is
    `stale=False`.

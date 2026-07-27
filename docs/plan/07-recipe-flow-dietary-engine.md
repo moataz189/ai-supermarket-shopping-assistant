@@ -306,7 +306,7 @@ engine, never the LLM.
 - The keyword-based tagging/substitution approach in `app/dietary/rules.py` is intentionally
   simple for MVP scope and will miss more subtle dietary conflicts (e.g. hidden dairy in a
   processed ingredient's name) — acceptable per spec §11 Risks; do not over-build this in
-  CP7, revisit only if CP14 hardening surfaces concrete gaps.
+  CP7, revisit only if CP15 hardening surfaces concrete gaps.
 
 ## Notes
 

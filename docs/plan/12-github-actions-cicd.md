@@ -55,12 +55,21 @@ tests/db/test_postgres_compatibility.py
    `CanonicalProduct`/`RetailerOffer`/`RetailerFeedStatus` tables and fix anything the
    autogenerate step got wrong (index names, nullability).
 5. Run `alembic upgrade head` against local SQLite and confirm the schema matches what CP2's
-   ad-hoc table creation produced; run the CP2 test suite against it to confirm nothing
-   broke.
+   `init_db()` produced; run the CP2 test suite against it to confirm nothing broke.
+6. Remove the `init_db()` call from `app/api/main.py` (CP2/CP5) now that Alembic is the
+   permanent schema-management mechanism — from this point on, schema changes are made only
+   via new Alembic revisions, never by relying on `create_all` again.
+7. The `dev` and `prod` Postgres databases (CP11) already have their schema from
+   `init_db()` having run there before this checkpoint existed. Reconcile them with Alembic
+   by running `alembic stamp head` (which marks the database as up to date **without**
+   re-running the `CREATE TABLE` statements `init_db()` already executed) against each,
+   rather than `alembic upgrade head` (which would try to create tables that already exist
+   and fail). Do this once, manually, against `dev` and `prod` before relying on future
+   `alembic upgrade head` runs for schema changes there.
 
 ### CI workflow
 
-6. Write `.github/workflows/ci.yml`:
+8. Write `.github/workflows/ci.yml`:
    ```yaml
    name: CI
 
@@ -104,7 +113,7 @@ tests/db/test_postgres_compatibility.py
            env:
              DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/supermarket_test
    ```
-7. Write `tests/db/test_postgres_compatibility.py` — runs the same `ProductRepository`
+9. Write `tests/db/test_postgres_compatibility.py` — runs the same `ProductRepository`
    operations from CP2's tests, but against the real Postgres service container instead of
    SQLite, to catch SQLite-only-compatible queries:
    ```python
@@ -145,13 +154,13 @@ tests/db/test_postgres_compatibility.py
            offers = repo.get_offers_by_retailer("p1")
            assert offers["shufersal"].price == 6.9
    ```
-8. Run this locally against a `docker run -p 5432:5432 -e POSTGRES_PASSWORD=app -e
-   POSTGRES_USER=app -e POSTGRES_DB=supermarket_test postgres:16` container to confirm it
-   passes before relying on CI to catch issues.
+10. Run this locally against a `docker run -p 5432:5432 -e POSTGRES_PASSWORD=app -e
+    POSTGRES_USER=app -e POSTGRES_DB=supermarket_test postgres:16` container to confirm it
+    passes before relying on CI to catch issues.
 
 ### CD workflow
 
-9. Write `.github/workflows/build-and-deploy-dev.yml` — builds and pushes immutable,
+11. Write `.github/workflows/build-and-deploy-dev.yml` — builds and pushes immutable,
    Git-SHA-tagged images, then bumps `k8s/dev/`'s image references. The manifest-bump commit
    is pushed using the workflow's default `GITHUB_TOKEN` (not a personal access token) —
    GitHub does not trigger new workflow runs for pushes made with the default token, so this
@@ -210,15 +219,15 @@ tests/db/test_postgres_compatibility.py
              git commit -m "deploy: bump dev images to ${{ needs.build-and-push.outputs.sha }}" || echo "no changes to commit"
              git push
    ```
-10. Add the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets in GitHub's
+12. Add the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets in GitHub's
     repo settings (manual, one-time, outside version control).
-11. Open a trivial PR (e.g. a comment change), confirm `ci.yml` runs and passes, merge it,
+13. Open a trivial PR (e.g. a comment change), confirm `ci.yml` runs and passes, merge it,
     and confirm `build-and-deploy-dev.yml` runs, pushes new images, and commits a manifest
     bump to `main` — then confirm that bump commit does **not** itself trigger another CI/CD
     run (verifying the `GITHUB_TOKEN` loop-prevention behavior).
-12. Confirm ArgoCD (CP11) picks up the bumped `k8s/dev/` manifests within its sync interval
+14. Confirm ArgoCD (CP11) picks up the bumped `k8s/dev/` manifests within its sync interval
     and the dev deployment updates to the new image.
-13. Commit all workflow/migration files.
+15. Commit all workflow/migration files.
 
 ## Testing Tasks
 

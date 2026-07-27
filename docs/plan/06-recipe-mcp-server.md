@@ -190,7 +190,7 @@ servings-doubling case.
 
 - Spoonacular's actual response schema may include fields/edge cases (e.g. missing `amount`
   or non-numeric units) not captured by the two trimmed fixtures — track as a hardening item
-  for CP14 rather than blocking this checkpoint.
+  for CP15 rather than blocking this checkpoint.
 
 ## Notes
 

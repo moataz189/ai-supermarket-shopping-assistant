@@ -11,7 +11,7 @@ in-memory/SQLite checkpointer so a paused (awaiting-clarification) run resumes c
 ## Scope
 
 The graph, its state schema, its nodes, the MCP client wrapper for the Supermarket-Data MCP
-server (CP3), and the checkpointer seam (memory/SQLite now; DynamoDB added in CP10 without
+server (CP3), and the checkpointer seam (memory/SQLite now; DynamoDB added in CP11 without
 changing this code). All external calls (Bedrock, MCP server) are injected as dependencies
 so tests run with fakes — no live network calls.
 
@@ -332,7 +332,7 @@ tests/agent/test_optimize_cart_unit.py
             )
         raise ValueError(
             f"Unsupported CHECKPOINTER_BACKEND {backend!r} as of CP4 "
-            "('dynamodb' is added in CP10)"
+            "('dynamodb' is added in CP11)"
         )
     ```
 11. Write `app/agent/graph.py` wiring the conditional edge that routes to

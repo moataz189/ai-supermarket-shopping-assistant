@@ -150,7 +150,7 @@ A fresh clone of the repo, with only a Python 3.11+ interpreter available, can r
 
 ## Notes
 
-`mcp_servers/` and `web/` are placeholders here — populated in CP3/CP6 and CP5/CP15
+`mcp_servers/` and `web/` are placeholders here — populated in CP3/CP6/CP8 and CP5/CP16
 respectively. Do not add business logic in this checkpoint.
 
 ## Definition of Done
