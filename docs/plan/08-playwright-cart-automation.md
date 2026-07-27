@@ -253,8 +253,14 @@ web/src/components/RetailerCartResultView.tsx
    mcp = create_server()
 
    if __name__ == "__main__":
-       mcp.run()
+       import os
+
+       mcp.settings.host = "0.0.0.0"
+       mcp.settings.port = int(os.environ.get("PORT", 8003))
+       mcp.run(transport="streamable-http")
    ```
+   Like CP3/CP6's servers, this runs as its own long-lived HTTP process (`PORT`, default
+   `8003`) — the agent's `McpRetailerCartClient` connects over HTTP, not stdio.
 6. Add `playwright`, `pytest-playwright`, `flask` to `pyproject.toml`; run `playwright
    install chromium` locally.
 
@@ -295,8 +301,10 @@ web/src/components/RetailerCartResultView.tsx
 
         return prepare_retailer_cart
     ```
-13. Add `McpRetailerCartClient` to `app/agent/mcp_clients.py` (same stdio pattern as
-    `McpSupermarketDataClient`, one tool: `prepare_retailer_cart`).
+13. Add `McpRetailerCartClient` to `app/agent/mcp_clients.py` (same HTTP pattern as
+    `McpSupermarketDataClient` — `streamablehttp_client(base_url)`, CP4 — one tool:
+    `prepare_retailer_cart`), constructed with `base_url` pointed at CP8's own server
+    (`RETAILER_CART_MCP_URL`, e.g. `http://localhost:8003/mcp` locally).
 14. Modify `app/agent/nodes/finalize.py` to include the result if present:
     ```python
     "final_result": {
@@ -357,8 +365,9 @@ web/src/components/RetailerCartResultView.tsx
     `retailer_cart_result=final.get("retailer_cart_result")`. No change to interrupt
     handling — CP5's `retailer_choice` → `awaiting_retailer_choice` mapping already covers
     this checkpoint's interrupt.
-20. Modify `app/api/dependencies.py`'s `get_agent_app` to construct `McpRetailerCartClient`
-    (pointed at `mcp_servers.retailer_cart_mcp.server`) and pass it into `build_graph`.
+20. Modify `app/api/dependencies.py`'s `get_agent_app` to construct
+    `McpRetailerCartClient(base_url=os.environ.get("RETAILER_CART_MCP_URL",
+    "http://localhost:8003/mcp"))` and pass it into `build_graph`.
 21. Extend `tests/api/test_chat_endpoint.py` with `test_choosing_retailer_invokes_playwright`
     (fake retailer-cart client; choose `"shufersal"`; assert `retailer_cart_result` present)
     and `test_declining_skips_playwright` (assert it's absent).

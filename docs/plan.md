@@ -18,13 +18,16 @@ monitoring.
 servers — a Recipe MCP (wraps Spoonacular), a Supermarket-Data MCP (searches/prices **one
 retailer's own catalog per call** — never cross-retailer), and a Retailer-Cart MCP
 (Playwright, invoked only for the retailer the user chose) — plus a deterministic dietary
-rule engine, behind a FastAPI backend and a React chat UI. Each retailer's price-transparency
-feed is ingested into its **own independent catalog** in a SQLAlchemy-backed database (SQLite
-locally, PostgreSQL when deployed) — there is no canonical cross-retailer product table. The
-Retailer-Cart MCP server never searches/prices/optimizes; it only acts on the already-built
-cart for the one retailer chosen. The whole stack runs on a kubeadm Kubernetes cluster on
-Terraform-provisioned EC2, with `dev`/`prod` namespaces deployed via ArgoCD GitOps and
-observed with Prometheus/Grafana. Full detail: `docs/spec.md`.
+rule engine, behind a FastAPI backend and a React chat UI. **All three MCP servers are
+long-lived HTTP services** (MCP's streamable-HTTP transport), each its own process/container/
+Kubernetes Deployment reachable by the backend over the network by URL — not subprocesses
+spawned over stdio. Each retailer's price-transparency feed is ingested into its **own
+independent catalog** in a SQLAlchemy-backed database (SQLite locally, PostgreSQL when
+deployed) — there is no canonical cross-retailer product table. The Retailer-Cart MCP server
+never searches/prices/optimizes; it only acts on the already-built cart for the one retailer
+chosen. The whole stack runs on a kubeadm Kubernetes cluster on Terraform-provisioned EC2,
+with `dev`/`prod` namespaces deployed via ArgoCD GitOps and observed with Prometheus/Grafana.
+Full detail: `docs/spec.md`.
 
 **Tech Stack:** Python, LangGraph, Amazon Bedrock (Claude, Converse API), MCP (Model Context
 Protocol) servers, Playwright (Python, async API), FastAPI, SQLAlchemy, SQLite/PostgreSQL,
@@ -38,6 +41,9 @@ them.
 
 - The system never places an order, makes a payment, or logs into a retailer account, at any
   point, in any checkpoint.
+- All three MCP servers run as **long-lived HTTP services**, each reachable at its own URL —
+  never spawned as a stdio subprocess. Each has its own container/Deployment from CP9/CP11
+  onward; local dev must have them already running before the backend starts.
 - Browser automation (Retailer-Cart MCP) only ever runs for the retailer the user **chose**
   after seeing both proposed carts — never automatically, never for the retailer not chosen.
 - The Retailer-Cart MCP server's interface exposes only search/add-to-cart/cart-url actions.
@@ -141,22 +147,26 @@ app/
     session.py     # DATABASE_URL-driven engine/session setup                (CP2)
   ingestion/       # feed download, parse, validate, atomic staging load     (CP2, CP15)
   api/             # FastAPI app, routes, request/response schemas           (CP5, CP8)
-mcp_servers/
-  recipe_mcp/      # Recipe MCP server (Spoonacular)                        (CP6)
-  supermarket_mcp/ # Supermarket-Data MCP server (per-retailer only)        (CP3)
-  retailer_cart_mcp/ # Retailer-Cart MCP server (Playwright)                 (CP8)
+mcp_servers/         # each an independent HTTP service (own port, own container/Deployment)
+  recipe_mcp/      # Recipe MCP server (Spoonacular), port 8002              (CP6)
+  supermarket_mcp/ # Supermarket-Data MCP server (per-retailer only), 8001   (CP3)
+  retailer_cart_mcp/ # Retailer-Cart MCP server (Playwright), port 8003      (CP8)
 web/               # React chat SPA                                        (CP5, CP8, CP16)
 infra/
   terraform/       # EC2 + kubeadm cluster provisioning                     (CP10)
 k8s/
-  dev/             # ArgoCD-watched dev namespace manifests                 (CP11)
-  prod/            # ArgoCD-watched prod namespace manifests                (CP13)
+  dev/             # ArgoCD-watched dev namespace manifests, one Deployment/
+                   # Service per MCP server + backend + web + postgres      (CP11)
+  prod/            # ArgoCD-watched prod namespace manifests (same shape)   (CP13)
   argocd/          # ArgoCD install + Application manifests                 (CP11)
   monitoring/      # Prometheus + Grafana manifests/dashboards              (CP14)
 .github/workflows/ # CI/CD pipeline definitions                            (CP12)
 tests/             # unit, integration, contract, agent, ingestion,
                    # mock-site browser-automation tests                    (all checkpoints)
-docker-compose.yml # local dev stack                                       (CP9)
+Dockerfile           # shared image: backend, supermarket-mcp, recipe-mcp,
+                     # ingestion (different `command:` per service)         (CP9)
+Dockerfile.retailer-cart-mcp # separate image (needs Playwright browsers)   (CP9)
+docker-compose.yml   # local dev stack — 4 backend-side services + web      (CP9)
 ```
 
 ## Task Checklists

@@ -90,7 +90,7 @@ k8s/monitoring/grafana-service.yaml
 
    async def _call(self, tool_name: str, arguments: dict) -> dict:
        try:
-           async with stdio_client(self._params) as (read, write):
+           async with streamablehttp_client(self.base_url) as (read, write, _):
                async with ClientSession(read, write) as session:
                    await session.initialize()
                    result = await session.call_tool(tool_name, arguments)

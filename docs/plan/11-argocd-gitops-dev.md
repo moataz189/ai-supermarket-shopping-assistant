@@ -19,8 +19,9 @@ yet (CP12) — manifests are applied by hand once, and thereafter ArgoCD takes o
 ## Deliverables
 
 - ArgoCD running in the cluster, reachable via port-forward or NodePort.
-- `k8s/dev/` deployed and healthy: backend, web, Postgres, and the ingestion CronJob all
-  running in the `supermarket-dev` namespace.
+- `k8s/dev/` deployed and healthy: backend, all three MCP servers (each its own
+  Deployment/Service, per CP9's container split), web, Postgres, and the ingestion CronJob,
+  all running in the `supermarket-dev` namespace.
 - The dev `Application` auto-syncs — a manual `kubectl apply -f k8s/dev/backend-deployment.yaml`
   with a changed image tag is picked up by ArgoCD without any further manual command.
 
@@ -32,6 +33,12 @@ k8s/dev/secret.env.example
 k8s/dev/postgres-pv.yaml
 k8s/dev/postgres-statefulset.yaml
 k8s/dev/postgres-service.yaml
+k8s/dev/supermarket-mcp-deployment.yaml
+k8s/dev/supermarket-mcp-service.yaml
+k8s/dev/recipe-mcp-deployment.yaml
+k8s/dev/recipe-mcp-service.yaml
+k8s/dev/retailer-cart-mcp-deployment.yaml
+k8s/dev/retailer-cart-mcp-service.yaml
 k8s/dev/backend-deployment.yaml
 k8s/dev/backend-service.yaml
 k8s/dev/web-deployment.yaml
@@ -174,21 +181,37 @@ k8s/argocd/prod-application.yaml
 13. Write `k8s/dev/postgres-statefulset.yaml` and `postgres-service.yaml` (standard
     `postgres:16` image, env from the `app-secrets` Secret, volume mount to the PVC above, a
     headless/ClusterIP Service named `postgres`).
-14. Write `k8s/dev/backend-deployment.yaml` (image from CP9's `Dockerfile.backend`, env
+14. Write one Deployment+Service pair per MCP server, each its own workload (per CP9's
+    container split), each exposed only inside the cluster (`ClusterIP`, no NodePort needed
+    — only the backend talks to them):
+    - `k8s/dev/supermarket-mcp-deployment.yaml` / `-service.yaml` — image from CP9's
+      `Dockerfile`, `command: ["python", "-m", "mcp_servers.supermarket_mcp.server"]`, env
+      `DATABASE_URL` (same Postgres as the backend) and `PORT=8001`; Service named
+      `supermarket-mcp` exposing `8001`.
+    - `k8s/dev/recipe-mcp-deployment.yaml` / `-service.yaml` — same image, `command:
+      ["python", "-m", "mcp_servers.recipe_mcp.server"]`, env `SPOONACULAR_API_KEY` (from
+      the Secret) and `PORT=8002`; Service named `recipe-mcp` exposing `8002`.
+    - `k8s/dev/retailer-cart-mcp-deployment.yaml` / `-service.yaml` — image from CP9's
+      `Dockerfile.retailer-cart-mcp`, env `PORT=8003`; resource requests/limits generous
+      enough for headless Chromium, e.g. `requests: {cpu: "250m", memory: "512Mi"}, limits:
+      {cpu: "1", memory: "1Gi"}`; Service named `retailer-cart-mcp` exposing `8003`.
+15. Write `k8s/dev/backend-deployment.yaml` (image from CP9's `Dockerfile`, env
     `DATABASE_URL=postgresql+psycopg://app:$(POSTGRES_PASSWORD)@postgres:5432/supermarket`,
     `CHECKPOINTER_BACKEND=dynamodb`, `AWS_REGION`, `BEDROCK_MODEL_ID`,
-    `SPOONACULAR_API_KEY` from the Secret; resource requests/limits generous enough for
-    headless Chromium, e.g. `requests: {cpu: "250m", memory: "512Mi"}, limits: {cpu: "1",
-    memory: "1Gi"}`) and `backend-service.yaml` (`type: NodePort`, exposing `8000` on a
-    NodePort within the range opened in CP10's security group).
-15. Write `k8s/dev/web-deployment.yaml` (image from CP9's `web/Dockerfile`) and
+    `SPOONACULAR_API_KEY` from the Secret, plus the three MCP URLs pointed at the Services
+    from step 14: `SUPERMARKET_MCP_URL=http://supermarket-mcp:8001/mcp`,
+    `RECIPE_MCP_URL=http://recipe-mcp:8002/mcp`,
+    `RETAILER_CART_MCP_URL=http://retailer-cart-mcp:8003/mcp`) and `backend-service.yaml`
+    (`type: NodePort`, exposing `8000` on a NodePort within the range opened in CP10's
+    security group).
+16. Write `k8s/dev/web-deployment.yaml` (image from CP9's `web/Dockerfile`) and
     `web-service.yaml` (`type: NodePort`, exposing `80`).
-16. Write `k8s/dev/ingestion-cronjob.yaml` (image from CP9's `Dockerfile.backend`, `command:
+17. Write `k8s/dev/ingestion-cronjob.yaml` (image from CP9's `Dockerfile`, `command:
     ["python", "-m", "app.ingestion.run", "--source", "live"]` — note this requires the
     `--source live` mode of CP2's ingestion CLI to be added when this checkpoint is
     implemented, since CP2 only built `--source fixtures`; schedule `"0 3 * * *"` for a daily
     run).
-17. Write `k8s/prod/namespace.yaml` (just the namespace — a placeholder so the prod
+18. Write `k8s/prod/namespace.yaml` (just the namespace — a placeholder so the prod
     `Application` created in step 19 has a valid, syncable path; CP13 adds the rest):
     ```yaml
     apiVersion: v1
@@ -199,7 +222,7 @@ k8s/argocd/prod-application.yaml
 
 ### ArgoCD `Application` resources
 
-18. Write `k8s/argocd/dev-application.yaml` (automated sync, self-heal, and prune all
+19. Write `k8s/argocd/dev-application.yaml` (automated sync, self-heal, and prune all
     enabled, per spec §7):
     ```yaml
     apiVersion: argoproj.io/v1alpha1
@@ -223,7 +246,7 @@ k8s/argocd/prod-application.yaml
         syncOptions:
           - CreateNamespace=true
     ```
-19. Write `k8s/argocd/prod-application.yaml` (no `automated` block — manual sync only):
+20. Write `k8s/argocd/prod-application.yaml` (no `automated` block — manual sync only):
     ```yaml
     apiVersion: argoproj.io/v1alpha1
     kind: Application
@@ -243,29 +266,30 @@ k8s/argocd/prod-application.yaml
         syncOptions:
           - CreateNamespace=true
     ```
-20. Apply both once, directly (this one-time bootstrap step is the only manual `kubectl
+21. Apply both once, directly (this one-time bootstrap step is the only manual `kubectl
     apply` for `Application` resources — everything after this is GitOps-only):
     `kubectl apply -f k8s/argocd/dev-application.yaml -f k8s/argocd/prod-application.yaml`.
-21. Watch `kubectl -n argocd get applications` (or the ArgoCD UI) until
+22. Watch `kubectl -n argocd get applications` (or the ArgoCD UI) until
     `supermarket-assistant-dev` shows `Synced`/`Healthy`.
-22. `kubectl -n supermarket-dev get pods` — confirm backend, web, postgres, and the
-    ingestion CronJob's next scheduled run all look correct.
-23. Manually trigger one ingestion run (`kubectl -n supermarket-dev create job --from=cronjob/ingestion-cronjob ingestion-manual-test`)
+23. `kubectl -n supermarket-dev get pods` — confirm backend, all three MCP servers, web,
+    postgres, and the ingestion CronJob's next scheduled run all look correct.
+24. Manually trigger one ingestion run (`kubectl -n supermarket-dev create job --from=cronjob/ingestion-cronjob ingestion-manual-test`)
     and confirm it completes and populates Postgres.
-24. `curl` the backend's and web's NodePorts (from the EC2 worker's public IP) to confirm
+25. `curl` the backend's and web's NodePorts (from the EC2 worker's public IP) to confirm
     both are reachable, then manually walk through the grocery-list, recipe, and
-    cart-approval flows end-to-end against this dev deployment — note that in this deployed
-    environment, an approved cart drives Playwright against the **real** Shufersal/Rami Levy
-    adapters (not the CP8 mock site), consistent with spec §6/§11 treating live-site
-    automation as best-effort and manually verified.
-25. Commit all new/modified files (excluding the real `k8s/dev/secret.env`, `.tfstate`, and
+    retailer-choice flows end-to-end against this dev deployment — note that in this
+    deployed environment, choosing a retailer drives Playwright against the **real**
+    Shufersal/Rami Levy adapters (not the CP8 mock site), consistent with spec §6/§11
+    treating live-site automation as best-effort and manually verified.
+26. Commit all new/modified files (excluding the real `k8s/dev/secret.env`, `.tfstate`, and
     kubeconfig).
 
 ## Testing Tasks
 
 - [ ] ArgoCD installed and reachable.
 - [ ] `supermarket-assistant-dev` Application is `Synced`/`Healthy`.
-- [ ] All dev-namespace pods running; manual ingestion job run succeeds.
+- [ ] All dev-namespace pods running (backend, all three MCP servers, web, postgres);
+      manual ingestion job run succeeds.
 - [ ] Backend `/health` and web root reachable via NodePort from outside the cluster.
 - [ ] Manual end-to-end walkthrough (grocery list, recipe, cart approval) against the dev
       deployment.
@@ -274,7 +298,8 @@ k8s/argocd/prod-application.yaml
 
 ## Acceptance Criteria
 
-The `dev` namespace runs the full application (backend, web, Postgres, ingestion) on the
+The `dev` namespace runs the full application (backend, all three MCP servers, web,
+Postgres, ingestion) on the
 kubeadm cluster, deployed and kept in sync by ArgoCD; the `prod` namespace exists with a
 placeholder, ready for CP13.
 

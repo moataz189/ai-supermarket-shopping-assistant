@@ -72,7 +72,7 @@ tests/agent/test_resolve_item_rules.py
    class AgentState(TypedDict, total=False):
        raw_message: str
        parsed_request: ParsedRequest
-       item_candidates: dict[str, list[dict]]   # merged, cross-retailer candidates per item
+       item_candidates: dict[str, dict[str, list[dict]]]  # item name -> retailer -> candidates
        resolved_choices: dict[str, str]          # item name -> resolved label
        pending_clarification_item: str | None
        retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
@@ -85,12 +85,14 @@ tests/agent/test_resolve_item_rules.py
    `retailer_preference` is extracted but not used to skip building a cart in the MVP — both
    retailers are always built; it may only inform how the choice is presented later (CP16).
 2. Write `app/agent/mcp_clients.py`. `search_product` and `get_product_price` both take a
-   required `retailer` — this server never mixes retailers in one call:
+   required `retailer` — this server never mixes retailers in one call. **All MCP servers in
+   this project are long-lived HTTP services** (CP3/CP6/CP8), not subprocesses spawned per
+   call — the client connects to a URL over the MCP "streamable HTTP" transport:
    ```python
    from typing import Protocol
 
-   from mcp import ClientSession, StdioServerParameters
-   from mcp.client.stdio import stdio_client
+   from mcp import ClientSession
+   from mcp.client.streamable_http import streamablehttp_client
 
 
    class SupermarketDataClient(Protocol):
@@ -99,11 +101,11 @@ tests/agent/test_resolve_item_rules.py
 
 
    class McpSupermarketDataClient:
-       def __init__(self, command: str, args: list[str]):
-           self._params = StdioServerParameters(command=command, args=args)
+       def __init__(self, base_url: str):
+           self.base_url = base_url  # e.g. "http://supermarket-mcp:8001/mcp"
 
        async def _call(self, tool_name: str, arguments: dict) -> dict | None:
-           async with stdio_client(self._params) as (read, write):
+           async with streamablehttp_client(self.base_url) as (read, write, _):
                async with ClientSession(read, write) as session:
                    await session.initialize()
                    result = await session.call_tool(tool_name, arguments)
@@ -116,6 +118,8 @@ tests/agent/test_resolve_item_rules.py
        async def get_product_price(self, retailer: str, item_code: str) -> dict | None:
            return await self._call("get_product_price", {"retailer": retailer, "item_code": item_code})
    ```
+   Verify `streamablehttp_client`'s exact import path/signature against the pinned `mcp` SDK
+   version (this transport is relatively new and the API has moved between releases).
 3. Write `tests/agent/fakes.py`: `FakeSupermarketDataClient`, constructed with a
    `{(query, retailer): [candidates]}` map and a `{(retailer, item_code): price_dict}` map,
    so a test can give Shufersal and Rami Levy different candidates/prices for the same item
@@ -189,10 +193,18 @@ tests/agent/test_resolve_item_rules.py
    RETAILERS = ["shufersal", "rami_levy"]
 
 
-   async def _merged_candidates(client, name: str) -> list[dict]:
+   async def _candidates_by_retailer(client, name: str) -> dict[str, list[dict]]:
+       """Keeps each retailer's candidates separate — never merged away — so the user can
+       see which retailer actually carries which option before choosing (spec §3)."""
+       return {retailer: await client.search_product(name, retailer) for retailer in RETAILERS}
+
+
+   def _unique_labels(candidates_by_retailer: dict[str, list[dict]]) -> list[dict]:
+       """Dedups by name *across* retailers into the set of distinct 'kinds' the user might
+       mean — used only to decide/present what to resolve, never to build a cart directly."""
        merged: dict[str, dict] = {}
-       for retailer in RETAILERS:
-           for c in await client.search_product(name, retailer):
+       for candidates in candidates_by_retailer.values():
+           for c in candidates:
                merged.setdefault(c["name"].strip().lower(), c)
        return list(merged.values())[:5]
 
@@ -200,8 +212,9 @@ tests/agent/test_resolve_item_rules.py
    async def _resolve_item(
        name: str, candidates: list[dict], brand_preference: str | None, selection_preference: str,
    ) -> tuple[str | None, bool]:
-       """Returns (resolved_label_or_None, still_ambiguous). A resolved label is a product
-       name used as the search query in each retailer's own catalog later — not an item_code."""
+       """`candidates` is the deduped, cross-retailer set from `_unique_labels`. Returns
+       (resolved_label_or_None, still_ambiguous). A resolved label is a product name used as
+       the search query in each retailer's own catalog later — not an item_code."""
        if not candidates:
            return name, False  # nothing matched anywhere; let per-retailer building report it missing
        if len(candidates) == 1:
@@ -234,11 +247,12 @@ tests/agent/test_resolve_item_rules.py
                if name in resolved_choices:
                    continue
                if name not in item_candidates:
-                   item_candidates[name] = await _merged_candidates(client, name)
-               candidates = item_candidates[name]
+                   item_candidates[name] = await _candidates_by_retailer(client, name)
+               by_retailer = item_candidates[name]
 
                label, still_ambiguous = await _resolve_item(
-                   name, candidates, parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference")
+                   name, _unique_labels(by_retailer),
+                   parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
                )
                if label is not None:
                    resolved_choices[name] = label
@@ -253,20 +267,34 @@ tests/agent/test_resolve_item_rules.py
 
        return resolve_items
    ```
-7. Write `app/agent/nodes/resolve_ambiguity.py`:
+   `item_candidates` is now `dict[str, dict[str, list[dict]]]` — item name → retailer →
+   that retailer's own candidates (update the type hint in `app/agent/state.py`,
+   step 1, accordingly: `item_candidates: dict[str, dict[str, list[dict]]]`).
+7. Write `app/agent/nodes/resolve_ambiguity.py` — when asking, show **both** the
+   selectable (deduped) options *and* the per-retailer breakdown, e.g. "Shufersal: Tnuva,
+   Tara / Rami Levy: Tnuva, President", so the user knows what's actually available where
+   before picking:
    ```python
    from langgraph.types import interrupt
+
+   from app.agent.nodes.resolve_items import _unique_labels
 
    MAX_CANDIDATES_SHOWN = 5
 
 
    async def resolve_ambiguity(state):
        item_name = state["pending_clarification_item"]
-       candidates = state["item_candidates"][item_name][:MAX_CANDIDATES_SHOWN]
+       by_retailer = state["item_candidates"][item_name]
+       unique = _unique_labels(by_retailer)[:MAX_CANDIDATES_SHOWN]
+
        answer = interrupt({
            "reason": "ambiguous_product",
            "question": f"I found a few options for '{item_name}' — which one did you mean?",
-           "options": [{"id": c["name"], "label": c["name"]} for c in candidates],
+           "options": [{"id": c["name"], "label": c["name"]} for c in unique],
+           "availability_by_retailer": {
+               retailer: sorted({c["name"] for c in candidates})
+               for retailer, candidates in by_retailer.items()
+           },
        })
        resolved = {**state.get("resolved_choices", {}), item_name: answer}
        return {"resolved_choices": resolved, "pending_clarification_item": None}
@@ -275,6 +303,10 @@ tests/agent/test_resolve_item_rules.py
    def route_after_resolve(state) -> str:
        return "resolve_ambiguity" if state.get("pending_clarification_item") else "build_shufersal_cart"
    ```
+   `availability_by_retailer` is exactly the "Butter — Shufersal: Tnuva, Tara / Rami Levy:
+   Tnuva, President" breakdown — informational only; the user still answers with one of
+   `options`' ids (a label, resolved once and applied per retailer in `build_retailer_cart`,
+   unchanged from before).
 8. Write `app/agent/nodes/build_retailer_cart.py` — builds **one retailer's** complete cart
    from the resolved labels, independently of the other retailer (spec §4 step 8):
    ```python
@@ -455,10 +487,12 @@ tests/agent/test_resolve_item_rules.py
       candidates/prices per retailer for 2 items; assert both `retailer_carts` are built
       independently with correct totals; resume the `retailer_choice` interrupt with
       `"shufersal"`; assert `final_result["chosen_retailer"] == "shufersal"`.
-    - `test_graph_ambiguous_item_interrupt.py`: an item with 3 non-exact merged candidates
-      across retailers; assert the `ambiguous_product` interrupt shows the merged, deduped
-      shortlist; resume with a chosen label; assert both retailer carts subsequently search
-      using that label.
+    - `test_graph_ambiguous_item_interrupt.py`: fake client returns "Tnuva"/"Tara" for
+      Shufersal and "Tnuva"/"President" for Rami Levy on the same query, none matching the
+      item name exactly; assert the `ambiguous_product` interrupt's `options` is the deduped
+      set (`Tnuva`, `Tara`, `President`) and `availability_by_retailer ==
+      {"shufersal": ["Tara", "Tnuva"], "rami_levy": ["President", "Tnuva"]}`; resume with a
+      chosen label; assert both retailer carts subsequently search using that label.
     - `test_graph_missing_item_one_retailer.py`: an item found at Shufersal but not Rami
       Levy; assert Shufersal's cart includes it and Rami Levy's cart reports it missing,
       with neither cart affected by the other.
@@ -475,7 +509,9 @@ tests/agent/test_resolve_item_rules.py
 ## Testing Tasks
 
 - [ ] Two independent carts built correctly from fakes; happy path resumes with a choice.
-- [ ] Ambiguous item → merged shortlist interrupt → resume → both carts use the resolution.
+- [ ] Ambiguous item → interrupt shows both the deduped selectable options and the
+      per-retailer `availability_by_retailer` breakdown → resume → both carts use the
+      resolution.
 - [ ] Item missing at one retailer doesn't affect the other's cart.
 - [ ] Budget trade-off suggestion generated only for the over-budget retailer.
 - [ ] Decline → no retailer chosen, both carts still returned.
@@ -484,10 +520,11 @@ tests/agent/test_resolve_item_rules.py
 
 ## Acceptance Criteria
 
-Given fakes, the graph resolves items once (auto-selecting when unambiguous), builds two
-independent retailer carts respecting budget/dietary/brand/price, and pauses for the user to
-choose one or decline — matching spec §3, §4, and §8 exactly, with no recipe-path code yet
-(CP7).
+Given fakes, the graph resolves items once (auto-selecting when unambiguous, or — when
+asking — showing the user which retailer carries which option before they choose), builds
+two independent retailer carts respecting budget/dietary/brand/price, and pauses for the
+user to choose one or decline — matching spec §3, §4, and §8 exactly, with no recipe-path
+code yet (CP7).
 
 ## Risks
 
@@ -496,6 +533,10 @@ choose one or decline — matching spec §3, §4, and §8 exactly, with no recip
   required for MVP correctness.
 - The trade-off suggestion only targets the single most expensive item — good enough for an
   MVP demo; a more thorough search (trying combinations) is explicitly out of scope.
+- With HTTP transport, running the real `McpSupermarketDataClient` locally requires the
+  Supermarket-Data MCP server (CP3) to already be running as its own process on the
+  expected port — unlike stdio, there's no auto-spawn. `make run`/docker-compose (CP9) must
+  start it alongside the backend.
 
 ## Notes
 

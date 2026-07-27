@@ -68,6 +68,10 @@ web/src/components/RetailerCartsView.tsx
        question: str
        options: list[ClarificationOption]
        carts: dict | None = None  # populated only when reason == "retailer_choice"
+       availability_by_retailer: dict[str, list[str]] | None = None  # only when
+       # reason == "ambiguous_product" (CP4/CP7) — e.g. {"shufersal": ["Tara", "Tnuva"],
+       # "rami_levy": ["President", "Tnuva"]}, so the UI can show which retailer carries
+       # which option before the user picks.
 
 
    class CartLine(BaseModel):
@@ -102,6 +106,8 @@ web/src/components/RetailerCartsView.tsx
    ```python
    from functools import lru_cache
 
+   import os
+
    from app.agent.checkpointer import get_checkpointer
    from app.agent.graph import build_graph
    from app.agent.llm import get_llm
@@ -110,9 +116,14 @@ web/src/components/RetailerCartsView.tsx
 
    @lru_cache
    def get_agent_app():
-       client = McpSupermarketDataClient(command="python", args=["-m", "mcp_servers.supermarket_mcp.server"])
+       client = McpSupermarketDataClient(
+           base_url=os.environ.get("SUPERMARKET_MCP_URL", "http://localhost:8001/mcp")
+       )
        return build_graph(client, get_llm(), get_checkpointer())
    ```
+   `SUPERMARKET_MCP_URL` must point at CP3's server, which needs to already be running
+   (`python -m mcp_servers.supermarket_mcp.server`) before the backend starts — see CP9 for
+   how docker-compose brings both up together.
 3. Write `app/api/routes/chat.py`, distinguishing the two interrupt reasons by status:
    ```python
    from uuid import uuid4
@@ -171,7 +182,10 @@ web/src/components/RetailerCartsView.tsx
 8. Write `web/src/api.ts` — a typed `ChatResponse` mirroring the backend schema and a
    `postChat(threadId, message)` fetch wrapper posting to `/api/chat`.
 9. Write `web/src/components/ClarificationPrompt.tsx` — renders `question` + one button per
-   `option`, calling `onSelect(option.id)`.
+   `option`, calling `onSelect(option.id)`. When `availability_by_retailer` is present (item
+   ambiguity, not recipe ambiguity), also render the per-retailer breakdown above the
+   buttons, e.g. "Shufersal: Tara, Tnuva" / "Rami Levy: President, Tnuva", so the user can
+   see what's actually available where before choosing.
 10. Write `web/src/components/RetailerCartsView.tsx` — renders both carts side by side:
     per retailer, its items table, total, budget status (within/exceeds budget), savings vs.
     the other retailer, and any `trade_off_suggestions`; a choose/decline control per cart
@@ -181,9 +195,11 @@ web/src/components/RetailerCartsView.tsx
     from `clarification.carts` (its choose/decline calls `postChat(threadId, choice)`);
     otherwise render the final carts/warnings.
 12. Wire Vite's dev-server proxy (`/api` → the FastAPI backend) so CORS isn't needed locally.
-13. Run `npm install && npm run dev` plus `make run`, and manually exercise: a plain grocery
-    list (both carts shown, choose one), an ambiguous query (clarification then both carts),
-    an over-budget query (trade-off suggestion shown), and decline.
+13. Start the Supermarket-Data MCP server first (`python -m mcp_servers.supermarket_mcp.server`,
+    port `8001`), then `make run` (backend) and `npm run dev` (web) — the backend's real MCP
+    client needs the server already listening. Manually exercise: a plain grocery list (both
+    carts shown, choose one), an ambiguous query (clarification then both carts), an
+    over-budget query (trade-off suggestion shown), and decline.
 
 ## Testing Tasks
 
@@ -203,8 +219,9 @@ retailer or decline — running entirely locally.
 - LangGraph's interrupt result shape (`"__interrupt__"` key, `Interrupt` attributes) is
   version-sensitive — verify against the pinned `langgraph` version and adjust step 3 if it
   differs.
-- The Supermarket-Data MCP server runs as a subprocess-per-call; acceptable for MVP,
-  flagged as a future perf improvement (a long-lived session), not fixed now.
+- The backend depends on the Supermarket-Data MCP server already running and reachable at
+  `SUPERMARKET_MCP_URL` — if it's down, `/chat` requests fail; no local fallback/retry
+  beyond the transient-error retry already in the agent's error handling.
 
 ## Notes
 

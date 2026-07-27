@@ -17,8 +17,8 @@ ArgoCD `Application` definitions (those are already correct from CP11/CP12).
 
 ## Deliverables
 
-- `k8s/prod/` fully deployed: backend, web, Postgres, ingestion CronJob, all running in
-  `supermarket-prod`, isolated from `supermarket-dev`.
+- `k8s/prod/` fully deployed: backend, all three MCP servers, web, Postgres, ingestion
+  CronJob, all running in `supermarket-prod`, isolated from `supermarket-dev`.
 - A documented, scripted promotion flow: run a script, review the resulting diff, open a
   PR, merge, then manually sync — never an automatic prod deployment.
 
@@ -29,6 +29,12 @@ k8s/prod/secret.env.example
 k8s/prod/postgres-pv.yaml
 k8s/prod/postgres-statefulset.yaml
 k8s/prod/postgres-service.yaml
+k8s/prod/supermarket-mcp-deployment.yaml
+k8s/prod/supermarket-mcp-service.yaml
+k8s/prod/recipe-mcp-deployment.yaml
+k8s/prod/recipe-mcp-service.yaml
+k8s/prod/retailer-cart-mcp-deployment.yaml
+k8s/prod/retailer-cart-mcp-service.yaml
 k8s/prod/backend-deployment.yaml
 k8s/prod/backend-service.yaml
 k8s/prod/web-deployment.yaml
@@ -51,19 +57,25 @@ scripts/promote_to_prod.sh
    `SPOONACULAR_API_KEY` may be shared with dev; `POSTGRES_PASSWORD` should not be).
 3. Write `scripts/promote_to_prod.sh`, which reads the currently-deployed image tags out of
    `k8s/dev/` and writes those exact tags into `k8s/prod/` — this is what makes promotion
-   "copy the exact validated tags," not a fresh build:
+   "copy the exact validated tags," not a fresh build. Three tags matter (per CP9/CP12): the
+   shared app image (backend, supermarket-mcp, recipe-mcp, ingestion all use the same tag),
+   the retailer-cart-mcp image, and the web image:
    ```bash
    #!/usr/bin/env bash
    set -euo pipefail
 
-   BACKEND_TAG=$(grep -oP '(?<=supermarket-backend:)[a-zA-Z0-9._-]+' k8s/dev/backend-deployment.yaml | head -1)
+   APP_TAG=$(grep -oP '(?<=supermarket-app:)[a-zA-Z0-9._-]+' k8s/dev/backend-deployment.yaml | head -1)
+   RETAILER_CART_TAG=$(grep -oP '(?<=supermarket-retailer-cart-mcp:)[a-zA-Z0-9._-]+' k8s/dev/retailer-cart-mcp-deployment.yaml | head -1)
    WEB_TAG=$(grep -oP '(?<=supermarket-web:)[a-zA-Z0-9._-]+' k8s/dev/web-deployment.yaml | head -1)
 
-   sed -i "s|supermarket-backend:.*|supermarket-backend:${BACKEND_TAG}|" \
-     k8s/prod/backend-deployment.yaml k8s/prod/ingestion-cronjob.yaml
+   sed -i "s|supermarket-app:.*|supermarket-app:${APP_TAG}|" \
+     k8s/prod/backend-deployment.yaml k8s/prod/supermarket-mcp-deployment.yaml \
+     k8s/prod/recipe-mcp-deployment.yaml k8s/prod/ingestion-cronjob.yaml
+   sed -i "s|supermarket-retailer-cart-mcp:.*|supermarket-retailer-cart-mcp:${RETAILER_CART_TAG}|" \
+     k8s/prod/retailer-cart-mcp-deployment.yaml
    sed -i "s|supermarket-web:.*|supermarket-web:${WEB_TAG}|" k8s/prod/web-deployment.yaml
 
-   echo "Promoted backend=${BACKEND_TAG} web=${WEB_TAG} into k8s/prod/."
+   echo "Promoted app=${APP_TAG} retailer-cart-mcp=${RETAILER_CART_TAG} web=${WEB_TAG} into k8s/prod/."
    echo "Review with 'git diff k8s/prod', then open a PR — do not push directly to main."
    ```
    `chmod +x scripts/promote_to_prod.sh`.
@@ -74,8 +86,8 @@ scripts/promote_to_prod.sh
 6. Trigger the manual ArgoCD sync for the prod `Application` (CLI: `argocd app sync
    supermarket-assistant-prod`, or the equivalent button in the ArgoCD UI) — confirm nothing
    deploys to prod on its own before this step.
-7. `kubectl -n supermarket-prod get pods` — confirm backend, web, postgres, and the
-   ingestion CronJob are all running.
+7. `kubectl -n supermarket-prod get pods` — confirm backend, all three MCP servers, web,
+   postgres, and the ingestion CronJob are all running.
 8. Manually trigger one ingestion run in prod (same pattern as CP11 step 23) to populate
    prod's Postgres independently of dev's.
 9. `curl` the prod NodePorts and manually walk through the full acceptance-criteria list

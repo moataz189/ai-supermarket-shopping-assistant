@@ -170,30 +170,33 @@ pricing are both future enhancements, not required for the MVP (§10).
 Applies identically to every item, whatever its source (typed or recipe-derived).
 
 **Resolving what the user means** (once per item, not once per retailer): the agent gathers
-candidates for the item from both retailers' catalogs, merges them by name similarity into
-one small shortlist (~3–5) representing the different *kinds* of product meant (brand, fat
-%, flavor, dietary version) — not a cross-retailer identity claim.
+candidates for the item from both retailers' catalogs, **keeping each retailer's list
+separate** — never silently merged away — so that if a question is needed, the user can see
+which retailer actually carries which option before choosing. A deduped, cross-retailer set
+of the distinct *kinds* of product meant (brand, fat %, flavor, dietary version) is what's
+actually selectable; the per-retailer breakdown is shown alongside it for transparency, not
+as a second, separate decision.
 
 **Example**:
 ```
 Recipe ingredient: Butter, 100 grams
-Matching products:
-1. Tnuva butter, 200 grams
-2. Tara butter, 200 grams
-3. President unsalted butter, 200 grams
+Shufersal: Tnuva, Tara
+Rami Levy: Tnuva, President
 Agent: "Which butter would you like to use?"
 ```
 
 **Rules**:
 - One reasonable match → auto-select, no question.
 - User already specified the exact product → don't ask again.
-- Multiple equivalent products → show a small shortlist (~3–5), never exhaustive.
+- Multiple equivalent products → show a small shortlist (~3–5) grouped by retailer, never an
+  exhaustive or flattened list that hides which retailer has what.
 - Ask only when the choice materially affects product/price/package/dietary
   suitability/recipe outcome — never auto-pick a brand/package/fat%/flavor/dietary version
   when that's ambiguous and material.
 - A standing preference (**cheapest**, **preferred brand**, **vegan only**, **gluten-free
-  only**, or **no preference**, the default) can be set once and applied to all later
-  ambiguous choices in the conversation, without re-asking.
+  only**, or **no preference**, the default) resolves the ambiguity **automatically**,
+  without asking — applied once and reused for all later ambiguous choices in the
+  conversation.
 
 **Applying the resolved choice per retailer**: once resolved, that choice (name/brand/
 attributes) is used **separately in each retailer's own catalog** to find that retailer's
@@ -211,8 +214,8 @@ User requests a recipe or shopping list
     ↓
 Extract ingredients or shopping items
     ↓
-Resolve ambiguous items (merged shortlist across both retailers; ask only
-when it materially matters)
+Resolve ambiguous items (options grouped by retailer; ask only when it
+materially matters, or resolve automatically if a standing preference applies)
     ↓
 For Shufersal Online (413) and, independently, Rami Levy Online (39):
     build the best possible cart — products, quantities, dietary,
@@ -412,9 +415,10 @@ standing selection preference) are inline per conversation.
   (Shufersal Online, Rami Levy Online) with matched items and totals, never placing an
   order or payment.
 - **Given** a pasta request with ambiguous ingredients (butter, cream), **when** the agent
-  resolves them, **then** it shows a small shortlist merged across both retailers, the user
-  picks (or a standing preference applies), and the system independently builds and totals
-  a cart per retailer using that choice.
+  resolves them, **then** it shows the options grouped by retailer (e.g. "Shufersal: Tnuva,
+  Tara" / "Rami Levy: Tnuva, President"), the user picks one (or a standing preference
+  applies automatically, without asking), and the system independently builds and totals a
+  cart per retailer using that choice.
 - Item resolution behaves identically for typed vs. recipe-derived items, and happens once
   per item, not once per retailer.
 - A standing preference (cheapest/brand/vegan only/gluten-free only) is applied instead of

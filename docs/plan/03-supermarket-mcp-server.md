@@ -111,10 +111,18 @@ tests/mcp/test_supermarket_mcp_contract.py
 
 
    if __name__ == "__main__":
-       mcp.run()
+       import os
+
+       mcp.settings.host = "0.0.0.0"
+       mcp.settings.port = int(os.environ.get("PORT", 8001))
+       mcp.run(transport="streamable-http")
    ```
-   The `if __name__ == "__main__":` block is required — CP4's client spawns this server via
-   `python -m mcp_servers.supermarket_mcp.server`.
+   This server runs as its **own long-lived HTTP process** (not spawned per call) —
+   `python -m mcp_servers.supermarket_mcp.server` starts it listening on `PORT` (default
+   `8001`), and CP4's client (`McpSupermarketDataClient`) connects to it over HTTP, not
+   stdio. Verify `mcp.settings.host`/`.port` and the `transport="streamable-http"` argument
+   against the installed `mcp` SDK version — the exact config surface can shift between
+   releases.
 4. Add a test asserting Shufersal and Rami Levy can have independent `stale` values (one
    `True`, one `False`) for the same conversation.
 5. Run `pytest tests/mcp -v`, `ruff check`, commit.
@@ -133,7 +141,14 @@ retailer passed in, against the CP2 fixture-seeded database.
 ## Risks
 
 - MCP SDK version drift — pin `mcp` in `pyproject.toml`; CP6/CP8's servers use the same
-  pinned version.
+  pinned version, since the HTTP transport setup (step 3) must match across all three.
+
+## Notes (transport)
+
+Contract tests (step 2) call `search_product`/`get_product_price` as plain Python
+functions, not over HTTP — `@mcp.tool()` doesn't change how the underlying function is
+called directly, so tests stay fast and transport-agnostic. Only CP4's actual agent-to-server
+integration goes over HTTP.
 
 ## Notes
 

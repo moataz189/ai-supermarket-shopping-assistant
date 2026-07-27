@@ -4,10 +4,10 @@ Spec milestone: M4 (starts). Depends on: CP5, CP7, CP8.
 
 ## Goal
 
-Containerize the whole local stack (backend + agent + all three MCP servers, ingestion job,
-React SPA) and wire it together with `docker-compose`, replacing the multi-terminal
-`make run` / `npm run dev` workflow used through CP8 — the last step before this moves onto
-Kubernetes.
+Containerize the local stack — backend, all three MCP servers (each its own service), and
+the React SPA — and wire it together with `docker-compose`, replacing the multi-terminal
+`make run`/MCP-servers/`npm run dev` workflow used through CP8 — the last step before this
+moves onto Kubernetes.
 
 ## Scope
 
@@ -15,29 +15,28 @@ Dockerfiles and `docker-compose.yml` only. No Kubernetes/Terraform yet (CP10–C
 
 ## Key Design Decision
 
-The Recipe, Supermarket-Data, and Retailer-Cart MCP servers (CP3, CP6, CP8) are invoked over
-**stdio** by their respective client classes (CP4/CP7/CP8), which spawn them as
-**subprocesses**. That only works if all three MCP server modules are present in the *same
-container* as the backend process. This checkpoint therefore builds **one backend image**
-containing `app/` and `mcp_servers/` together — it does not split the MCP servers into their
-own containers. This satisfies the spec's requirement to have real, custom MCP servers; it
-does not require them to be separately deployed network services.
-
-The Retailer-Cart MCP server (CP8) depends on Playwright's browser binaries, which must be
-installed into this same backend image (see step 1) — otherwise browser automation would
-fail at runtime inside the container even though it works on a developer's machine.
+All three MCP servers (CP3, CP6, CP8) are long-lived **HTTP** services (spec/CP3 decision) —
+unlike a stdio subprocess model, this means each one can run as its **own container**,
+reachable by the backend over the docker-compose network at `http://<service-name>:<port>`.
+This checkpoint uses one shared base image (`Dockerfile`) for the backend, the
+Supermarket-Data MCP server, and the Recipe MCP server — each just runs a different
+`command:` — and a **separate** image (`Dockerfile.retailer-cart-mcp`) for the Retailer-Cart
+MCP server, since it alone needs Playwright's browser binaries and there's no reason to bloat
+the other three images with them.
 
 ## Deliverables
 
-- `docker compose up` serves the backend on `localhost:8000` and the web UI on
-  `localhost:5173`, fully replicating the CP8 manual-run setup — including a working
-  cart-approval → Playwright cart-preparation flow against the CP8 mock retailer site.
+- `docker compose up` starts all four backend-side services (backend, supermarket-mcp,
+  recipe-mcp, retailer-cart-mcp) plus the web UI, fully replicating the CP8 manually-run
+  setup — including choosing a retailer and seeing Playwright prepare its cart against the
+  mock retailer site.
 - `docker compose --profile tools run ingestion` runs the ingestion CLI inside a container.
 
 ## Files to Create
 
 ```
-Dockerfile.backend
+Dockerfile
+Dockerfile.retailer-cart-mcp
 web/Dockerfile
 web/nginx.conf
 docker-compose.yml
@@ -46,8 +45,25 @@ scripts/smoke_test.sh
 
 ## Detailed Implementation Steps
 
-1. Write `Dockerfile.backend`, including the Playwright browser install step required by
-   the Retailer-Cart MCP server (CP8):
+1. Write `Dockerfile` (shared base for backend/supermarket-mcp/recipe-mcp — no Playwright):
+   ```dockerfile
+   FROM python:3.11-slim
+   WORKDIR /app
+
+   COPY pyproject.toml ./
+   COPY app ./app
+   COPY mcp_servers ./mcp_servers
+
+   RUN pip install --no-cache-dir .
+
+   ENV PYTHONUNBUFFERED=1
+   EXPOSE 8000
+
+   CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+   ```
+   (The default `CMD` is the backend's; `supermarket-mcp`/`recipe-mcp` override it via
+   `command:` in `docker-compose.yml`, step 4.)
+2. Write `Dockerfile.retailer-cart-mcp`:
    ```dockerfile
    FROM python:3.11-slim
    WORKDIR /app
@@ -60,11 +76,11 @@ scripts/smoke_test.sh
    RUN playwright install --with-deps chromium
 
    ENV PYTHONUNBUFFERED=1
-   EXPOSE 8000
+   EXPOSE 8003
 
-   CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+   CMD ["python", "-m", "mcp_servers.retailer_cart_mcp.server"]
    ```
-2. Write `web/Dockerfile` (multi-stage: build the static SPA, serve with nginx):
+3. Write `web/Dockerfile` (multi-stage: build the static SPA, serve with nginx):
    ```dockerfile
    FROM node:20-slim AS build
    WORKDIR /web
@@ -78,56 +94,70 @@ scripts/smoke_test.sh
    COPY web/nginx.conf /etc/nginx/conf.d/default.conf
    EXPOSE 80
    ```
-3. Write `web/nginx.conf`, proxying `/api/` to the backend service so the SPA's
-   `fetch("/api/chat")` calls work without CORS configuration:
+4. Write `web/nginx.conf` (proxy `/api/` to the backend so the SPA needs no CORS config):
    ```nginx
    server {
      listen 80;
-
      location /api/ {
        proxy_pass http://backend:8000/;
      }
-
      location / {
        root /usr/share/nginx/html;
        try_files $uri /index.html;
      }
    }
    ```
-4. Write `docker-compose.yml`, including the Retailer-Cart MCP server's environment (the
-   mock-site URL is only used in tests, not here; production/dev site URLs are looked up
-   internally by the retailer adapters from CP8, not passed as compose env vars):
+5. Write `docker-compose.yml` — four backend-side services, each its own container, the
+   backend wired to the other three by URL:
    ```yaml
    services:
+     supermarket-mcp:
+       build: { context: ., dockerfile: Dockerfile }
+       command: ["python", "-m", "mcp_servers.supermarket_mcp.server"]
+       environment:
+         DATABASE_URL: sqlite:///./app.db
+         PORT: "8001"
+       volumes:
+         - backend_data:/app
+       ports: ["8001:8001"]
+
+     recipe-mcp:
+       build: { context: ., dockerfile: Dockerfile }
+       command: ["python", "-m", "mcp_servers.recipe_mcp.server"]
+       environment:
+         SPOONACULAR_API_KEY: ${SPOONACULAR_API_KEY}
+         PORT: "8002"
+       ports: ["8002:8002"]
+
+     retailer-cart-mcp:
+       build: { context: ., dockerfile: Dockerfile.retailer-cart-mcp }
+       environment:
+         PORT: "8003"
+       ports: ["8003:8003"]
+
      backend:
-       build:
-         context: .
-         dockerfile: Dockerfile.backend
+       build: { context: ., dockerfile: Dockerfile }
        environment:
          DATABASE_URL: sqlite:///./app.db
          CHECKPOINTER_BACKEND: memory
          BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID}
          AWS_REGION: ${AWS_REGION:-us-east-1}
-         SPOONACULAR_API_KEY: ${SPOONACULAR_API_KEY}
-       ports:
-         - "8000:8000"
+         SUPERMARKET_MCP_URL: http://supermarket-mcp:8001/mcp
+         RECIPE_MCP_URL: http://recipe-mcp:8002/mcp
+         RETAILER_CART_MCP_URL: http://retailer-cart-mcp:8003/mcp
+       ports: ["8000:8000"]
        volumes:
          - backend_data:/app
          - ${HOME}/.aws:/root/.aws:ro
+       depends_on: [supermarket-mcp, recipe-mcp, retailer-cart-mcp]
 
      web:
-       build:
-         context: .
-         dockerfile: web/Dockerfile
-       ports:
-         - "5173:80"
-       depends_on:
-         - backend
+       build: { context: ., dockerfile: web/Dockerfile }
+       ports: ["5173:80"]
+       depends_on: [backend]
 
      ingestion:
-       build:
-         context: .
-         dockerfile: Dockerfile.backend
+       build: { context: ., dockerfile: Dockerfile }
        command: ["python", "-m", "app.ingestion.run", "--source", "fixtures"]
        environment:
          DATABASE_URL: sqlite:///./app.db
@@ -138,9 +168,11 @@ scripts/smoke_test.sh
    volumes:
      backend_data:
    ```
-   (The `${HOME}/.aws:/root/.aws:ro` mount lets the backend container use the developer's
-   local AWS credentials for real Bedrock calls during manual testing.)
-5. Write `scripts/smoke_test.sh`:
+   (`${HOME}/.aws:/root/.aws:ro` lets the backend container use the developer's local AWS
+   credentials for real Bedrock calls during manual testing. MCP server ports are published
+   to the host mainly for local debugging — the backend reaches them via the compose network
+   regardless.)
+6. Write `scripts/smoke_test.sh`:
    ```bash
    #!/usr/bin/env bash
    set -euo pipefail
@@ -160,52 +192,52 @@ scripts/smoke_test.sh
    echo "smoke test passed"
    ```
    `chmod +x scripts/smoke_test.sh`.
-6. Run `docker compose build`, fix any image build errors (missing files in build context,
-   dependency resolution issues, Playwright browser install failures — `playwright install
-   --with-deps` needs the container's apt package manager available, which the
-   `python:3.11-slim` base image has).
-7. Run `./scripts/smoke_test.sh` and confirm it exits 0.
-8. Manually open `localhost:5173`, run through the flows verified in CP5/CP7/CP8 (grocery
-   list happy path, ambiguous clarification, recipe request, and — using CP8's mock retailer
-   site running locally — the cart-approval-then-Playwright-preparation flow) against the
-   containerized stack.
-9. Run `docker compose --profile tools run --rm ingestion` and confirm it completes and
-   populates the shared `backend_data` volume's SQLite file.
-10. Commit.
+7. Run `docker compose build`, fix any image build errors (missing files, dependency
+   resolution, Playwright install failures in `Dockerfile.retailer-cart-mcp`).
+8. Run `./scripts/smoke_test.sh` and confirm it exits 0.
+9. Manually open `localhost:5173`, run through the flows verified in CP5/CP7/CP8: grocery
+   list happy path (both carts), ambiguous clarification, recipe request, and — using CP8's
+   mock retailer site running locally — choosing a retailer and seeing Playwright prepare
+   its cart.
+10. Run `docker compose --profile tools run --rm ingestion` and confirm it completes and
+    populates the shared `backend_data` volume's SQLite file.
+11. Commit.
 
 ## Testing Tasks
 
 - [ ] `scripts/smoke_test.sh` passes (backend `/health` and web root both reachable).
-- [ ] Manual walkthrough of grocery-list, clarification, recipe, and cart-approval/Playwright
-      flows against the containerized stack.
+- [ ] Manual walkthrough of grocery-list, clarification, recipe, and retailer-choice/
+      Playwright flows against the containerized stack.
 - [ ] `docker compose --profile tools run ingestion` completes successfully.
+- [ ] Stopping `retailer-cart-mcp` (or `supermarket-mcp`) and retrying a request surfaces a
+      clear error rather than hanging — confirms the backend actually depends on these
+      services being up, not silently falling back to something else.
 
 ## Acceptance Criteria
 
 A developer with only Docker installed (no local Python/Node toolchain) can run
-`docker compose up` and use the full chat UI locally — including approving a cart and seeing
-Playwright prepare it against the mock retailer site — identical in behavior to the CP8
-manually-run setup.
+`docker compose up` and use the full chat UI locally — including choosing a retailer and
+seeing Playwright prepare its cart against the mock retailer site — identical in behavior to
+the CP8 manually-run setup.
 
 ## Risks
 
-- Bundling all three MCP servers into the backend image (rather than separate services)
-  means a bug in one MCP server's startup can affect the whole backend process — acceptable
-  trade-off for MVP scope per the Key Design Decision above; revisit only if a real
-  operational problem appears.
-- `playwright install --with-deps chromium` meaningfully increases the backend image size —
-  acceptable for MVP; a future optimization could split the Retailer-Cart MCP server into
-  its own image if this becomes a real deployment concern.
+- Four backend-side containers (vs. one bundled image) is more moving parts locally —
+  acceptable trade-off for matching how this will actually run in Kubernetes (CP11), where
+  each MCP server is its own Deployment/Service anyway.
+- `Dockerfile.retailer-cart-mcp`'s `playwright install --with-deps` meaningfully increases
+  that one image's size — acceptable since it's isolated from the other three images now.
 
 ## Notes
 
-CP10/CP11 will build a `k8s/dev` Deployment from this same `Dockerfile.backend` image, so
-keep the image self-contained (no host-path dependencies beyond environment variables and
-the optional AWS credentials mount used only for local dev).
+CP10/CP11 build `k8s/dev` Deployments from these same two Dockerfiles (one per MCP server
+plus the backend, all from `Dockerfile`; `retailer-cart-mcp` from its own) — keep both
+images self-contained (no host-path dependencies beyond environment variables and the
+optional local AWS credentials mount).
 
 ## Definition of Done
 
-- [ ] All three Dockerfiles/compose file/smoke test script created, including the Playwright
-      browser install step.
+- [ ] Both Dockerfiles, the web Dockerfile/nginx config, compose file, and smoke test script
+      created.
 - [ ] Smoke test passes; manual walkthrough confirms parity with CP8.
 - [ ] Committed with message referencing CP9.

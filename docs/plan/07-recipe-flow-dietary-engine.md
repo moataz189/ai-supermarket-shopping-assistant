@@ -117,9 +117,10 @@ tests/agent/test_dietary_substitution_flow.py
    Update `PARSE_PROMPT`: classify `request_type`; if `"recipe"`, fill `recipe_query`/
    `servings`, leave `items` empty; if `"grocery_list"`, the reverse. Carry
    `selection_preference` through unchanged (it already existed on CP4's schema).
-4. Add `McpRecipeClient` to `mcp_clients.py` — same stdio pattern as
-   `McpSupermarketDataClient`, targeting CP6's server (`search_recipes`, `get_recipe`,
-   `get_recipe_ingredients`).
+4. Add `McpRecipeClient` to `mcp_clients.py` — same HTTP pattern as
+   `McpSupermarketDataClient` (`streamablehttp_client(base_url)`, CP4), targeting CP6's
+   server (`search_recipes`, `get_recipe`, `get_recipe_ingredients`) at its own URL, e.g.
+   `RECIPE_MCP_URL=http://localhost:8002/mcp` locally.
 5. Write `app/agent/nodes/search_recipes.py`:
    ```python
    def make_search_recipes(recipe_client):
@@ -162,27 +163,31 @@ tests/agent/test_dietary_substitution_flow.py
            return {"parsed_request": {**state["parsed_request"], "items": items}}
        return get_recipe_ingredients
    ```
-8. Modify `resolve_items.py`'s `_merged_candidates` to filter by dietary constraints before
-   dedup, and `resolve_items` to substitute or flag when nothing compliant remains:
+8. Modify `resolve_items.py`'s `_candidates_by_retailer` to filter each retailer's own
+   candidates by dietary constraints *before* they're grouped for display/dedup, and
+   `resolve_items` to substitute or flag when nothing compliant remains anywhere:
    ```python
    from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 
-   async def _merged_candidates(client, name: str, forbidden: set[str]) -> list[dict]:
-       merged: dict[str, dict] = {}
+   async def _candidates_by_retailer(client, name: str, forbidden: set[str]) -> dict[str, list[dict]]:
+       result = {}
        for retailer in RETAILERS:
-           for c in await client.search_product(name, retailer):
-               if forbidden and (tags_for_name(c["name"]) & forbidden):
-                   continue
-               merged.setdefault(c["name"].strip().lower(), c)
-       return list(merged.values())[:5]
+           candidates = await client.search_product(name, retailer)
+           if forbidden:
+               candidates = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+           result[retailer] = candidates
+       return result
    ```
    In `make_resolve_items`, compute `forbidden = forbidden_tags(parsed.get("dietary_constraints", []))`
-   once per call, pass it into `_merged_candidates(client, name, forbidden)`. If the result
-   is empty *because of filtering* (i.e. `forbidden` is non-empty), try
-   `find_substitute_query(name, forbidden)`: if found, redo the merged search on the
-   substitute query; if not, record `name` in a new `dietary_conflicts` state list instead of
-   marking it ambiguous, and skip asking about it.
+   once per call, pass it into `_candidates_by_retailer(client, name, forbidden)`. If
+   `_unique_labels(by_retailer)` comes back empty *because of filtering* (i.e. `forbidden` is
+   non-empty), try `find_substitute_query(name, forbidden)`: if found, redo the per-retailer
+   search on the substitute query (same filtering applied) and use that as `by_retailer`
+   instead; if not, record `name` in a new `dietary_conflicts` state list instead of marking
+   it ambiguous, and skip asking about it. This keeps the per-retailer breakdown
+   (`availability_by_retailer` in `resolve_ambiguity.py`, CP4) dietary-compliant too — a
+   filtered-out option never appears in what the user is shown.
 9. Modify `build_retailer_cart.py` similarly — filter that retailer's own `search_product`
    results by `forbidden`, try the same substitute-query fallback for candidates missing at
    *this* retailer specifically, and set `"reason": "dietary_conflict"` (instead of
@@ -237,8 +242,10 @@ tests/agent/test_dietary_substitution_flow.py
         graph.add_edge("finalize", END)
         return graph.compile(checkpointer=checkpointer)
     ```
-11. Modify `app/api/dependencies.py`'s `get_agent_app` to construct an `McpRecipeClient`
-    (targeting `mcp_servers.recipe_mcp.server`) and pass it into `build_graph`.
+11. Modify `app/api/dependencies.py`'s `get_agent_app` to construct an `McpRecipeClient(
+    base_url=os.environ.get("RECIPE_MCP_URL", "http://localhost:8002/mcp"))` and pass it
+    into `build_graph`. Like CP5's Supermarket-Data MCP server, CP6's Recipe MCP server must
+    already be running for this to work locally.
 12. Write `tests/agent/test_graph_recipe_happy_path.py` (recipe → scaled ingredients →
     both retailer carts built) and `test_graph_recipe_ambiguous_interrupt.py` (two recipe
     matches → interrupt → resume → proceeds).

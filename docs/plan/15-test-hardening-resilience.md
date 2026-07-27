@@ -35,9 +35,10 @@ data/snapshots/rami_levy_latest.xml
 
 ## Files to Modify (additional)
 
-- `Dockerfile.backend` (CP9) — add `COPY data ./data` alongside the existing `COPY app
-  ./app` / `COPY mcp_servers ./mcp_servers` lines, so the fallback snapshot files are
-  actually present in the deployed image. Without this, CP11/CP13's containers would have no
+- `Dockerfile` (CP9, the shared app image used by the backend and the ingestion job) — add
+  `COPY data ./data` alongside the existing `COPY app ./app` / `COPY mcp_servers
+  ./mcp_servers` lines, so the fallback snapshot files are actually present in the deployed
+  image. Without this, CP11/CP13's containers would have no
   fallback file to read and the fallback would only work in local, non-containerized runs.
 
 ## Files to Modify

@@ -155,8 +155,14 @@ tests/mcp/test_recipe_mcp_contract.py
    mcp = create_server(SpoonacularClient())
 
    if __name__ == "__main__":
-       mcp.run()
+       import os
+
+       mcp.settings.host = "0.0.0.0"
+       mcp.settings.port = int(os.environ.get("PORT", 8002))
+       mcp.run(transport="streamable-http")
    ```
+   Like CP3's server, this runs as its own long-lived HTTP process (`PORT`, default
+   `8002`) — CP7's `McpRecipeClient` connects over HTTP, not stdio.
 6. Write `tests/mcp/test_recipe_mcp_contract.py` building the server via
    `create_server(FakeSpoonacularClient())`:
    - `test_search_recipes_returns_candidates` — asserts `recipes` is non-empty and each item

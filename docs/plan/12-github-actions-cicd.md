@@ -180,11 +180,16 @@ tests/db/test_postgres_compatibility.py
            with:
              username: ${{ secrets.DOCKERHUB_USERNAME }}
              password: ${{ secrets.DOCKERHUB_TOKEN }}
-         - name: Build and push backend image
+         - name: Build and push shared app image (backend, supermarket-mcp, recipe-mcp, ingestion)
            run: |
-             docker build -f Dockerfile.backend \
-               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-backend:${{ steps.sha.outputs.sha }} .
-             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-backend:${{ steps.sha.outputs.sha }}
+             docker build -f Dockerfile \
+               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-app:${{ steps.sha.outputs.sha }} .
+             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-app:${{ steps.sha.outputs.sha }}
+         - name: Build and push retailer-cart-mcp image
+           run: |
+             docker build -f Dockerfile.retailer-cart-mcp \
+               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-retailer-cart-mcp:${{ steps.sha.outputs.sha }} .
+             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-retailer-cart-mcp:${{ steps.sha.outputs.sha }}
          - name: Build and push web image
            run: |
              docker build -f web/Dockerfile \
@@ -202,8 +207,13 @@ tests/db/test_postgres_compatibility.py
            run: |
              SHA=${{ needs.build-and-push.outputs.sha }}
              USER=${{ secrets.DOCKERHUB_USERNAME }}
-             sed -i "s|image: .*/supermarket-backend:.*|image: ${USER}/supermarket-backend:${SHA}|" \
-               k8s/dev/backend-deployment.yaml k8s/dev/ingestion-cronjob.yaml
+             # backend, supermarket-mcp, recipe-mcp, and ingestion all run the *same*
+             # shared app image (CP9) — one tag bump covers all four manifests.
+             sed -i "s|image: .*/supermarket-app:.*|image: ${USER}/supermarket-app:${SHA}|" \
+               k8s/dev/backend-deployment.yaml k8s/dev/supermarket-mcp-deployment.yaml \
+               k8s/dev/recipe-mcp-deployment.yaml k8s/dev/ingestion-cronjob.yaml
+             sed -i "s|image: .*/supermarket-retailer-cart-mcp:.*|image: ${USER}/supermarket-retailer-cart-mcp:${SHA}|" \
+               k8s/dev/retailer-cart-mcp-deployment.yaml
              sed -i "s|image: .*/supermarket-web:.*|image: ${USER}/supermarket-web:${SHA}|" \
                k8s/dev/web-deployment.yaml
          - name: Commit manifest bump
