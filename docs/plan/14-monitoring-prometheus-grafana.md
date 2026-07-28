@@ -48,7 +48,8 @@ k8s/monitoring/grafana-service.yaml
   produced.
 - `mcp_servers/retailer_cart_mcp/automation.py` — record `retailer_cart_items_total{status}`
   and `retailer_cart_runs_blocked_total{reason}`.
-- `pyproject.toml` — add `prometheus-client` and `prometheus-fastapi-instrumentator`.
+- `requirements.txt` — add `prometheus-client` and `prometheus-fastapi-instrumentator`
+  (both runtime: the backend imports and serves them directly).
 
 ## Detailed Implementation Steps
 

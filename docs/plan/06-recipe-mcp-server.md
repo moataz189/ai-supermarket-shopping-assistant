@@ -34,7 +34,16 @@ tests/mcp/fakes.py
 tests/mcp/test_recipe_mcp_contract.py
 ```
 
+## Files to Modify
+
+- `requirements.txt` — add `httpx` (runtime dependency: `SpoonacularClient` uses it to call
+  the Spoonacular API — this is separate from `httpx` potentially also being used by
+  FastAPI's `TestClient` in tests, which the requirement here already covers).
+
 ## Detailed Implementation Steps
+
+Before step 1, add `httpx` to `requirements.txt` if it isn't already there from an earlier
+checkpoint.
 
 1. Write `mcp_servers/recipe_mcp/schemas.py`:
    ```python

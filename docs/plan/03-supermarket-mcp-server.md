@@ -28,9 +28,16 @@ mcp_servers/supermarket_mcp/schemas.py
 tests/mcp/test_supermarket_mcp_contract.py
 ```
 
+## Files to Modify
+
+- `requirements.txt` — add the `mcp` SDK (runtime dependency of both the server and CP4's
+  client).
+
 ## Detailed Implementation Steps
 
-1. Write `mcp_servers/supermarket_mcp/schemas.py`:
+1. Add `mcp>=1.0` (pin the exact version once decided) to `requirements.txt` — this is a
+   runtime dependency, needed by the server process itself, not just tests.
+2. Write `mcp_servers/supermarket_mcp/schemas.py`:
    ```python
    from pydantic import BaseModel
 
@@ -56,11 +63,11 @@ tests/mcp/test_supermarket_mcp_contract.py
        last_updated_at: str
        stale: bool
    ```
-2. Write a failing contract test first, `tests/mcp/test_supermarket_mcp_contract.py`:
+3. Write a failing contract test first, `tests/mcp/test_supermarket_mcp_contract.py`:
    seed a couple of known rows for **both** retailers via `RetailerProduct`/CP2; assert
    `search_product("milk", "shufersal")` returns only Shufersal candidates;
    `get_product_price("shufersal", <item_code>)` returns the expected `unit_price`.
-3. Implement `mcp_servers/supermarket_mcp/server.py`:
+4. Implement `mcp_servers/supermarket_mcp/server.py`:
    ```python
    from mcp.server.fastmcp import FastMCP
 
@@ -123,9 +130,9 @@ tests/mcp/test_supermarket_mcp_contract.py
    stdio. Verify `mcp.settings.host`/`.port` and the `transport="streamable-http"` argument
    against the installed `mcp` SDK version — the exact config surface can shift between
    releases.
-4. Add a test asserting Shufersal and Rami Levy can have independent `stale` values (one
+5. Add a test asserting Shufersal and Rami Levy can have independent `stale` values (one
    `True`, one `False`) for the same conversation.
-5. Run `pytest tests/mcp -v`, `ruff check`, commit.
+6. Run `pytest tests/mcp -v`, `ruff check`, commit.
 
 ## Testing Tasks
 
@@ -140,12 +147,12 @@ retailer passed in, against the CP2 fixture-seeded database.
 
 ## Risks
 
-- MCP SDK version drift — pin `mcp` in `pyproject.toml`; CP6/CP8's servers use the same
-  pinned version, since the HTTP transport setup (step 3) must match across all three.
+- MCP SDK version drift — pin `mcp` in `requirements.txt`; CP6/CP8's servers use the same
+  pinned version, since the HTTP transport setup (step 4) must match across all three.
 
 ## Notes (transport)
 
-Contract tests (step 2) call `search_product`/`get_product_price` as plain Python
+Contract tests (step 3) call `search_product`/`get_product_price` as plain Python
 functions, not over HTTP — `@mcp.tool()` doesn't change how the underlying function is
 called directly, so tests stay fast and transport-agnostic. Only CP4's actual agent-to-server
 integration goes over HTTP.

@@ -37,13 +37,17 @@ tests/db/test_postgres_compatibility.py
 
 - `app/db/session.py` — no functional change, but confirm it still reads `DATABASE_URL` the
   same way now that schema creation goes through Alembic instead of `Base.metadata.create_all`.
-- `pyproject.toml` — add `alembic` and `psycopg[binary]` dependencies.
+- `requirements.txt` — add `psycopg[binary]` (runtime: the deployed app connects to
+  Postgres with it, per `DATABASE_URL=postgresql+psycopg://...`).
+- `requirements-dev.txt` — add `alembic` (migrations are run manually/via CI, never
+  imported by the running app itself).
 
 ## Detailed Implementation Steps
 
 ### Alembic retrofit (needed for a meaningful Postgres compatibility check)
 
-1. `pip install alembic psycopg[binary]`; add both to `pyproject.toml`.
+1. `pip install alembic psycopg[binary]`; add `psycopg[binary]` to `requirements.txt` and
+   `alembic` to `requirements-dev.txt`.
 2. `alembic init migrations` from the repo root; edit `alembic.ini`'s
    `sqlalchemy.url` to read from the `DATABASE_URL` environment variable at runtime instead
    of a hardcoded value (set it to a placeholder and override in `migrations/env.py`).
@@ -99,7 +103,7 @@ tests/db/test_postgres_compatibility.py
          - uses: actions/setup-python@v5
            with:
              python-version: "3.11"
-         - run: pip install -e ".[dev]"
+         - run: pip install -r requirements.txt -r requirements-dev.txt
          - run: playwright install --with-deps chromium
          - run: ruff check app tests mcp_servers
          - name: Unit, integration, MCP contract, agent, and mock-site browser-automation tests

@@ -72,7 +72,9 @@ web/src/components/RetailerCartResultView.tsx
 - `app/api/routes/chat.py` — pass `retailer_cart_result` through on the final response.
 - `app/api/dependencies.py` — construct `McpRetailerCartClient` and pass it to `build_graph`.
 - `web/src/App.tsx` — render the real-cart result once present.
-- `pyproject.toml` — add `playwright`, and as dev/test deps `pytest-playwright`, `flask`.
+- `requirements.txt` — add `playwright` (runtime: the server itself drives a real browser).
+- `requirements-dev.txt` — add `pytest-playwright` and `flask` (test-only: `flask` powers
+  the mock retailer site, `tests/mcp/mock_site_server.py`, used only by tests).
 
 ## Detailed Implementation Steps
 
@@ -261,8 +263,8 @@ web/src/components/RetailerCartResultView.tsx
    ```
    Like CP3/CP6's servers, this runs as its own long-lived HTTP process (`PORT`, default
    `8003`) — the agent's `McpRetailerCartClient` connects over HTTP, not stdio.
-6. Add `playwright`, `pytest-playwright`, `flask` to `pyproject.toml`; run `playwright
-   install chromium` locally.
+6. Add `playwright` to `requirements.txt`, and `pytest-playwright` + `flask` to
+   `requirements-dev.txt`; run `playwright install chromium` locally.
 
 ### Mock retailer site & automation tests
 

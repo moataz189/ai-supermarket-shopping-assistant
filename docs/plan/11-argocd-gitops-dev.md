@@ -53,6 +53,8 @@ k8s/argocd/prod-application.yaml
 
 - `infra/terraform/main.tf` — extend the node IAM role with DynamoDB and Bedrock
   permissions, and create the DynamoDB checkpoint table.
+- `requirements.txt` — add the LangGraph DynamoDB checkpointer package (and `boto3` if not
+  already transitively present).
 
 ## Detailed Implementation Steps
 
@@ -110,7 +112,9 @@ k8s/argocd/prod-application.yaml
        return DynamoDBSaver(table_name="supermarket-assistant-checkpoints")
    ```
    (Confirm the exact package/class name against whatever LangGraph DynamoDB checkpointer
-   is current at implementation time — pin it in `pyproject.toml`.)
+   is current at implementation time — add it to `requirements.txt`, pinned, as a runtime
+   dependency; also add `boto3` there explicitly if it isn't already pulled in transitively
+   by `langchain-aws`.)
 
 ### ArgoCD bootstrap (one-time, manual)
 

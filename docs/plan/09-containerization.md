@@ -45,35 +45,41 @@ scripts/smoke_test.sh
 
 ## Detailed Implementation Steps
 
-1. Write `Dockerfile` (shared base for backend/supermarket-mcp/recipe-mcp — no Playwright):
+1. Write `Dockerfile` (shared base for backend/supermarket-mcp/recipe-mcp — no Playwright).
+   Only `requirements.txt` is installed — never `requirements-dev.txt` — so production
+   images stay free of pytest/ruff/flask/pytest-playwright:
    ```dockerfile
    FROM python:3.11-slim
    WORKDIR /app
 
-   COPY pyproject.toml ./
+   COPY requirements.txt ./
+   RUN pip install --no-cache-dir -r requirements.txt
+
    COPY app ./app
    COPY mcp_servers ./mcp_servers
-
-   RUN pip install --no-cache-dir .
 
    ENV PYTHONUNBUFFERED=1
    EXPOSE 8000
 
-   CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+   CMD ["python", "-m", "uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
    ```
-   (The default `CMD` is the backend's; `supermarket-mcp`/`recipe-mcp` override it via
-   `command:` in `docker-compose.yml`, step 4.)
+   (`python -m uvicorn`, not a bare `uvicorn`, for the same reason as CP1's `make run` —
+   guarantees `/app` is on `sys.path` without installing the local code as a package.
+   Installing `requirements.txt` before copying `app`/`mcp_servers` lets Docker cache the
+   dependency layer across builds where only application code changed. The default `CMD` is
+   the backend's; `supermarket-mcp`/`recipe-mcp` override it via `command:` in
+   `docker-compose.yml`, step 4.)
 2. Write `Dockerfile.retailer-cart-mcp`:
    ```dockerfile
    FROM python:3.11-slim
    WORKDIR /app
 
-   COPY pyproject.toml ./
+   COPY requirements.txt ./
+   RUN pip install --no-cache-dir -r requirements.txt
+   RUN playwright install --with-deps chromium
+
    COPY app ./app
    COPY mcp_servers ./mcp_servers
-
-   RUN pip install --no-cache-dir .
-   RUN playwright install --with-deps chromium
 
    ENV PYTHONUNBUFFERED=1
    EXPOSE 8003

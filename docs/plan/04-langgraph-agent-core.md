@@ -48,7 +48,17 @@ tests/agent/test_choose_retailer_decline.py
 tests/agent/test_resolve_item_rules.py
 ```
 
+## Files to Modify
+
+- `requirements.txt` — add `langgraph`, `langchain-aws` (Bedrock Converse wrapper), and `mcp`
+  if not already present from CP3 — all three are runtime dependencies of the agent process
+  itself, not just of a server.
+
 ## Detailed Implementation Steps
+
+Before writing any code, add the three packages above to `requirements.txt` (pin exact
+versions once decided — LangGraph's interrupt API in particular is version-sensitive, see
+Risks below).
 
 1. Write `app/agent/state.py`:
    ```python
