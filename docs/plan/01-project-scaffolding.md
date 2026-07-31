@@ -151,9 +151,9 @@ k8s/.gitkeep
 
 ## Testing Tasks
 
-- [ ] `pytest tests/api/test_health.py -v` passes.
-- [ ] `ruff check app tests` reports zero issues.
-- [ ] Manual: `make run` + `curl localhost:8000/health` returns 200.
+- [x] `pytest tests/api/test_health.py -v` passes.
+- [x] `ruff check app tests` reports zero issues.
+- [x] Manual: `make run` + `curl localhost:8000/health` returns 200.
 
 ## Acceptance Criteria
 
@@ -176,8 +176,8 @@ respectively. Do not add business logic in this checkpoint.
 
 ## Definition of Done
 
-- [ ] Directory skeleton, `pyproject.toml` (tool config only), `requirements.txt`,
+- [x] Directory skeleton, `pyproject.toml` (tool config only), `requirements.txt`,
       `requirements-dev.txt`, `Makefile`, `.env.example`, `.gitignore`, `README.md` exist.
-- [ ] `test_health_returns_ok` passes.
-- [ ] `ruff check` is clean.
-- [ ] Changes committed with message referencing CP1.
+- [x] `test_health_returns_ok` passes.
+- [x] `ruff check` is clean.
+- [x] Changes committed with message referencing CP1.
