@@ -196,9 +196,22 @@ k8s/argocd/prod-application.yaml
       ["python", "-m", "mcp_servers.recipe_mcp.server"]`, env `SPOONACULAR_API_KEY` (from
       the Secret) and `PORT=8002`; Service named `recipe-mcp` exposing `8002`.
     - `k8s/dev/retailer-cart-mcp-deployment.yaml` / `-service.yaml` — image from CP9's
-      `Dockerfile.retailer-cart-mcp`, env `PORT=8003`; resource requests/limits generous
-      enough for headless Chromium, e.g. `requests: {cpu: "250m", memory: "512Mi"}, limits:
-      {cpu: "1", memory: "1Gi"}`; Service named `retailer-cart-mcp` exposing `8003`.
+      `Dockerfile.retailer-cart-mcp`, env `PORT=8003` and
+      `RETAILER_SESSIONS_DIR=/app/sessions`; resource requests/limits generous enough for
+      headless Chromium, e.g. `requests: {cpu: "250m", memory: "512Mi"}, limits: {cpu: "1",
+      memory: "1Gi"}`; Service named `retailer-cart-mcp` exposing `8003`. Mount the
+      `retailer-sessions` Secret (created in step 14a, below) as a read-only volume at
+      `/app/sessions` — CP8's server refuses to run without a session file there for the
+      requested retailer.
+    - 14a. **Create the `retailer-sessions` Secret** (manual, like `app-secrets`, never
+      committed): run CP8's `login.py` **locally, on a machine with a display** for each
+      retailer you want working in this environment, producing `sessions/shufersal.json`
+      and/or `sessions/rami_levy.json`, then:
+      `kubectl -n supermarket-dev create secret generic retailer-sessions
+      --from-file=shufersal.json=sessions/shufersal.json
+      --from-file=rami_levy.json=sessions/rami_levy.json`.
+      It's fine to have only one retailer's session file if that's all you've captured —
+      the other retailer will simply report `login_required` until its session is added too.
 15. Write `k8s/dev/backend-deployment.yaml` (image from CP9's `Dockerfile`, env
     `DATABASE_URL=postgresql+psycopg://app:$(POSTGRES_PASSWORD)@postgres:5432/supermarket`,
     `CHECKPOINTER_BACKEND=dynamodb`, `AWS_REGION`, `BEDROCK_MODEL_ID`,
@@ -284,7 +297,9 @@ k8s/argocd/prod-application.yaml
     retailer-choice flows end-to-end against this dev deployment — note that in this
     deployed environment, choosing a retailer drives Playwright against the **real**
     Shufersal/Rami Levy adapters (not the CP8 mock site), consistent with spec §6/§11
-    treating live-site automation as best-effort and manually verified.
+    treating live-site automation as best-effort and manually verified — and only for
+    whichever retailer(s) have a session in the `retailer-sessions` Secret (step 14a); the
+    other retailer reports `login_required` until you capture and add its session too.
 26. Commit all new/modified files (excluding the real `k8s/dev/secret.env`, `.tfstate`, and
     kubeconfig).
 
@@ -295,8 +310,10 @@ k8s/argocd/prod-application.yaml
 - [ ] All dev-namespace pods running (backend, all three MCP servers, web, postgres);
       manual ingestion job run succeeds.
 - [ ] Backend `/health` and web root reachable via NodePort from outside the cluster.
-- [ ] Manual end-to-end walkthrough (grocery list, recipe, cart approval) against the dev
+- [ ] Manual end-to-end walkthrough (grocery list, recipe, retailer choice) against the dev
       deployment.
+- [ ] `retailer-sessions` Secret created and mounted; a retailer with a captured session
+      completes real cart prep, one without reports `login_required` gracefully.
 - [ ] A manifest change applied to `k8s/dev/` and pushed to `main` is picked up by ArgoCD
       without further manual `kubectl` commands.
 

@@ -139,6 +139,9 @@ scripts/smoke_test.sh
        build: { context: ., dockerfile: Dockerfile.retailer-cart-mcp }
        environment:
          PORT: "8003"
+         RETAILER_SESSIONS_DIR: /app/sessions
+       volumes:
+         - ./sessions:/app/sessions:ro
        ports: ["8003:8003"]
 
      backend:
@@ -201,10 +204,16 @@ scripts/smoke_test.sh
 7. Run `docker compose build`, fix any image build errors (missing files, dependency
    resolution, Playwright install failures in `Dockerfile.retailer-cart-mcp`).
 8. Run `./scripts/smoke_test.sh` and confirm it exits 0.
-9. Manually open `localhost:5173`, run through the flows verified in CP5/CP7/CP8: grocery
-   list happy path (both carts), ambiguous clarification, recipe request, and — using CP8's
-   mock retailer site running locally — choosing a retailer and seeing Playwright prepare
-   its cart.
+9. Manually open `localhost:5173`, run through the flows verified in CP5/CP7: grocery list
+   happy path (both carts), ambiguous clarification, recipe request. Then exercise the
+   `retailer-cart-mcp` container itself: with `./sessions/` empty, choose a retailer and
+   confirm the UI shows a graceful `login_required` result (no crash); then, if you want to
+   verify a real end-to-end add, run CP8's `login.py` **locally on the host** (not in a
+   container — it needs a real display) for one retailer, confirm it wrote
+   `sessions/<retailer>.json`, and re-run the flow to see Playwright actually add items to
+   that retailer's real cart. (CP8's mock-site automation tests already cover the detailed
+   add/fail/block behavior — this step is about confirming the container wiring, not
+   re-testing that logic.)
 10. Run `docker compose --profile tools run --rm ingestion` and confirm it completes and
     populates the shared `backend_data` volume's SQLite file.
 11. Commit.
@@ -233,6 +242,9 @@ the CP8 manually-run setup.
   each MCP server is its own Deployment/Service anyway.
 - `Dockerfile.retailer-cart-mcp`'s `playwright install --with-deps` meaningfully increases
   that one image's size — acceptable since it's isolated from the other three images now.
+- `./sessions/` is a local host directory mounted read-only into `retailer-cart-mcp` — it
+  must exist (even empty) before `docker compose up`, and must never be committed (CP8's
+  `.gitignore` entry covers this).
 
 ## Notes
 

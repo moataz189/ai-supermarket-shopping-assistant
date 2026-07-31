@@ -22,8 +22,10 @@ Once the user chooses a retailer's cart, the system attempts to prepare that **r
 on the retailer's website via browser automation, but never proceeds to checkout, payment,
 or order submission. Recipe ingredients come from a recipe API via a dedicated MCP tool.
 
-If a retailer's site requires login, the user logs in manually beforehand — the automation
-itself never logs in (see §3, Retailer-Cart MCP server).
+The user logs into the retailer's site manually beforehand, once per retailer — not because
+the site necessarily requires it, but because only a cart tied to a logged-in account is
+one the user can actually see afterward in their own browser; the automation itself never
+logs in (see §3, Retailer-Cart MCP server).
 
 **Hard constraint**: the system never places an order, makes a payment, or completes
 checkout. Browser automation only begins after the user chooses a retailer's cart, and
@@ -116,13 +118,21 @@ not live stock.
   preferences, never judges "best" — pure per-retailer data access.
 
 - **Retailer-Cart MCP server (Playwright)** (custom) — after the user picks a retailer,
-  opens that Online store, searches/matches/adds each cart item, and stops. No method for
-  checkout/login/payment exists in this component — not just avoided at runtime. If the site
-  needs auth, the user is expected to have logged in manually (an optional persisted browser
-  session can be reused); absent that, a login wall is reported as `login_required` and
-  automation stops gracefully. A single item that can't be matched/added is reported and
-  automation continues with the rest. CAPTCHA/bot-block/unrecognized layout → stop
-  gracefully, report a partial result.
+  opens that Online store **using a previously-captured, logged-in session for that
+  retailer**, searches/matches/adds each cart item, and stops. This is a **requirement, not
+  an option**: a cart built anonymously lives only in the headless browser's throwaway
+  cookies and disappears once that browser closes — the user's own browser could never see
+  it. A cart tied to a logged-in account, by contrast, is saved server-side, so the same
+  user, logged into that account in their own browser, sees exactly what was added. So if no
+  session has been captured for the chosen retailer, automation refuses immediately
+  (`login_required`) without opening a browser at all, rather than running anonymously and
+  producing a cart no one can ever see. Capturing a session is always a **separate, manual,
+  out-of-band step** — the user logs into the retailer's site by hand (in a real, visible
+  browser, not as part of any automated flow) once per retailer, and that session is reused
+  for every subsequent cart-preparation run until it expires. No method for checkout/login/
+  payment exists in this component — not just avoided at runtime. A single item that can't
+  be matched/added is reported and automation continues with the rest. CAPTCHA/bot-block/
+  unrecognized layout → stop gracefully, report a partial result.
 
 - **Dietary rule engine** — deterministic (not LLM), tags products and enforces stated
   restrictions **independently within each retailer's catalog**. The LLM may propose
@@ -303,8 +313,10 @@ Notes on the less obvious parts of this flow:
 - **Ingestion tests**: bad/partial feed never corrupts existing data; staleness detection.
 - **Browser-automation tests** run against a controlled mock retailer site (never the real
   sites): successful add, an unmatched item (continues with the rest), simulated
-  CAPTCHA/bot-block/login-wall (stops gracefully), and a dedicated assertion that checkout/
-  payment/login is never reached.
+  CAPTCHA/bot-block/login-wall (stops gracefully), a dedicated assertion that checkout/
+  payment/login is never reached, and a test proving automation refuses immediately
+  (`login_required`, no browser launched) when no session has been captured for the
+  requested retailer.
 - Real-site automation is manual/best-effort only, never part of CI.
 - CI runs lint + the full suite (including mock-site tests) on every change.
 - Out of scope for automated tests: live recipe/retailer calls, live browser automation,
@@ -312,14 +324,39 @@ Notes on the less obvious parts of this flow:
 
 ## 7. CI/CD & Deployment
 
-App code and Kubernetes config (dev/prod) live in one repo. Every change is linted and
-tested before merge; a merge to `main` builds/publishes images and updates the dev
-deployment config automatically. GitOps: an in-cluster deployment tool continuously syncs
-`dev` from the repo; `prod` is only ever updated by a deliberate, reviewed, manually-synced
-promotion. Terraform provisions AWS EC2; Kubernetes is self-managed (kubeadm), one cluster,
-`dev`/`prod` namespaces. Prometheus/Grafana cover request latency, MCP call success/failure,
-per-retailer ingestion freshness, error rates, and retailer-cart-prep success/failure/
-blocked rates.
+App code and Kubernetes config (dev/prod) live in one repo.
+
+**Git branch workflow**: every implementation plan is completed in its own branch created
+from the latest `main` (never from `dev`, and never from a stale local `main`). Linting and
+the full test suite run before that branch is merged anywhere. The plan branch is merged
+**directly into `dev`** — there is no Pull Request into `dev` — and pushing `dev` triggers
+the automatic pipeline: build/publish images, update the dev deployment config, and
+deploy/sync the `dev` namespace for validation. After the feature is validated in `dev`, the
+developer returns to the **same** plan branch, pushes it to the remote, and opens a Pull
+Request from that plan branch **directly into `main`** (`dev` is never merged into `main`).
+The Pull Request runs final tests/validation; only a reviewed, approved merge into `main`
+updates the production-ready version. Production deployment/sync remains a separate,
+deliberate, manually-triggered promotion step after that merge — never automatic. The plan
+branch is not deleted until its Pull Request into `main` is merged. Concrete commands, the
+full branch lifecycle, and CI trigger details are in `docs/plan.md`.
+
+GitOps: an in-cluster deployment tool (ArgoCD) continuously syncs `dev` from the repo; `prod`
+is only ever updated by a deliberate, reviewed, manually-synced promotion. Terraform
+provisions AWS EC2; Kubernetes is self-managed (kubeadm), one cluster, `dev`/`prod`
+namespaces.
+
+**Helm**: third-party infrastructure add-ons that ship an official, maintained Helm chart
+(e.g. Prometheus/Grafana via `kube-prometheus-stack`) are installed/upgraded via Helm from
+trusted, maintained chart repositories, with values stored in version-controlled files
+(environment-specific values may live in separate files, e.g. `dev-values.yaml`/
+`prod-values.yaml`). Helm is optional elsewhere: components without a suitable chart, or
+where a raw manifest is simpler, keep using plain Kubernetes manifests under the same GitOps
+flow as before — including the existing NGINX Ingress setup, which Helm does not change.
+Application metrics are exposed to `kube-prometheus-stack` via `ServiceMonitor` resources (or
+another mechanism it supports), not by hand-rolled Prometheus config.
+
+Prometheus/Grafana cover request latency, MCP call success/failure, per-retailer ingestion
+freshness, error rates, and retailer-cart-prep success/failure/blocked rates.
 
 ## 8. MVP & Milestones
 
@@ -377,6 +414,10 @@ standing selection preference) are inline per conversation.
 - Branch/location-specific optimization beyond each retailer's fixed Online store.
 - Real-time inventory guarantees (feed-based availability only).
 - Checkout, login to a retailer account, or payment of any kind, at any point.
+- Any in-app or automated way of logging in / capturing a session — this is always a
+  manual, out-of-band, one-time step per retailer, run locally by whoever operates the
+  system, never part of the web app's request flow.
+- Automatic detection or renewal of an expired login session (re-capturing it is manual).
 - Automatically solving/bypassing CAPTCHA or bot-detection.
 - Automated tests against the real, live retailer websites.
 - Load/performance testing.
@@ -400,6 +441,11 @@ standing selection preference) are inline per conversation.
 - Live retailer sites may block automated browsers or change structure — mitigated by
   treating live-site automation as best-effort, stopping gracefully on any block, and never
   depending on live sites in CI.
+- A captured login session can expire (retailer-side timeout, forced logout) — surfaces as
+  an ordinary graceful `login_required` block, never a crash, but renewing it is a manual
+  step (re-capture the session); there's no automatic detection or renewal in the MVP.
+- Captured sessions are sensitive (live login cookies) and must be handled like any other
+  secret — never committed, and stored/mounted securely wherever they're deployed.
 - The full technology checklist is broad for a solo, multi-week timeline — mitigated by
   small, independently demonstrable milestones.
 - Self-managed Kubernetes carries more operational risk than a managed service — mitigated
@@ -431,11 +477,15 @@ standing selection preference) are inline per conversation.
   possible, else clearly flagged, never silently included.
 - Both carts are shown side by side (products, total, budget status, savings); automation
   never starts until the user chooses one; declining shows both carts with no automation.
-- After a choice, the system adds matched items/quantities to that retailer's real cart,
+- After a choice, if a logged-in session was previously captured for that retailer, the
+  system adds matched items/quantities to that retailer's real (account-linked) cart,
   stopping before checkout/login/payment, and reports added/failed items (with reasons) and
-  any site block, without failing the whole request.
+  any site block, without failing the whole request; if no session was captured, it refuses
+  immediately and clearly with `login_required`, without opening a browser.
 - Runs on a self-managed Kubernetes cluster on AWS EC2 (Terraform), with dev/prod
-  namespaces; `main` auto-deploys to dev, prod only via reviewed manual promotion.
+  namespaces; pushing `dev` (via a plan branch merged directly into it) auto-deploys `dev`,
+  and `prod` is updated only via reviewed manual promotion after a Pull Request from the
+  plan branch is merged into `main`.
 - Prometheus/Grafana show latency, error rates, data freshness, and retailer-cart-prep
   outcomes.
 - Unit/integration tests — including mock-site browser-automation tests — cover the core

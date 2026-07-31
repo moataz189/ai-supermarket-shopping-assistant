@@ -55,6 +55,15 @@ scripts/promote_to_prod.sh
    create secret generic app-secrets --from-env-file=k8s/prod/secret.env` (a local,
    gitignored copy of `k8s/prod/secret.env.example` with prod-appropriate values — the
    `SPOONACULAR_API_KEY` may be shared with dev; `POSTGRES_PASSWORD` should not be).
+2a. Create the prod `retailer-sessions` Secret the same way as CP11 step 14a: run CP8's
+   `login.py` locally (a real display is required — this is never done from inside the
+   cluster) and `kubectl -n supermarket-prod create secret generic retailer-sessions
+   --from-file=shufersal.json=sessions/shufersal.json
+   --from-file=rami_levy.json=sessions/rami_levy.json`. Using the **same** captured session
+   in both dev and prod is fine for a solo MVP (it's the same real retailer account either
+   way); using separate sessions per environment is also fine if you'd rather keep them
+   distinct — either way, mount it into `k8s/prod/retailer-cart-mcp-deployment.yaml` at
+   `/app/sessions`, exactly as CP11 did for dev.
 3. Write `scripts/promote_to_prod.sh`, which reads the currently-deployed image tags out of
    `k8s/dev/` and writes those exact tags into `k8s/prod/` — this is what makes promotion
    "copy the exact validated tags," not a fresh build. Three tags matter (per CP9/CP12): the
@@ -104,6 +113,8 @@ scripts/promote_to_prod.sh
 - [ ] Full manual walkthrough of spec §12's acceptance criteria against prod.
 - [ ] Confirm dev and prod Postgres data are independent (seeding one doesn't affect the
       other).
+- [ ] `retailer-sessions` Secret exists in `supermarket-prod`; choosing a retailer with a
+      captured session there completes real cart prep.
 
 ## Acceptance Criteria
 

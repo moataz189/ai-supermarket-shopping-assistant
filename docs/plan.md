@@ -32,7 +32,8 @@ Full detail: `docs/spec.md`.
 **Tech Stack:** Python, LangGraph, Amazon Bedrock (Claude, Converse API), MCP (Model Context
 Protocol) servers, Playwright (Python, async API), FastAPI, SQLAlchemy, SQLite/PostgreSQL,
 DynamoDB (LangGraph checkpointer, deployed envs), React (chat SPA), Docker, Terraform,
-kubeadm on AWS EC2, ArgoCD, GitHub Actions, Prometheus, Grafana, pytest, `pytest-playwright`.
+kubeadm on AWS EC2, ArgoCD, Helm (third-party add-ons only, e.g. `kube-prometheus-stack`),
+GitHub Actions, Prometheus, Grafana, pytest, `pytest-playwright`.
 
 ## Global Constraints
 
@@ -76,6 +77,125 @@ them.
   the real retailer websites; use recorded fixtures and a controlled mock retailer site.
 - Every task ends with a passing test suite and a commit — do not move to the next
   checkpoint with a red build.
+- **Helm is allowed, but only for third-party Kubernetes add-ons** that ship an official,
+  maintained chart (e.g. Prometheus/Grafana via `kube-prometheus-stack`, CP14) — charts must
+  come from trusted/maintained repositories, and Helm values are version-controlled files
+  under `infra/helm/<chart>/` (env-specific values may be split, e.g. `dev-values.yaml` /
+  `prod-values.yaml`). Helm is optional everywhere else: app-specific Kubernetes resources
+  (backend, MCP servers, web, Postgres, Ingress) stay as plain manifests under `k8s/dev` /
+  `k8s/prod`, unchanged. Introducing Helm does not change the existing NGINX Ingress design.
+  Application metrics are exposed via `ServiceMonitor` resources (or another mechanism
+  `kube-prometheus-stack` supports), not hand-rolled Prometheus scrape config.
+- **Every checkpoint/plan is implemented in its own branch created from the latest `main`.**
+  See "Git Branch Workflow" below for the concrete commands, branch lifecycle, and CI/CD
+  triggers — every checkpoint's work begins by updating `main` and branching from it.
+
+## Git Branch Workflow
+
+Every implementation plan (each checkpoint, and any later fix/feature work) is completed in
+its own branch, following the same lifecycle every time:
+
+1. Switch to `main` and pull the latest remote `main` — **never** branch from `dev` or from
+   a stale local `main`.
+2. Create a new, descriptively-named branch from that up-to-date `main`, e.g.
+   `feature/cp3-supermarket-mcp`, `feature/m2-recipe-flow`, `fix/ingestion-validation`.
+3. Implement only that plan's scope in the new branch; commit as work progresses.
+4. Run linting and the full relevant test suite locally before merging anywhere.
+5. Switch to `dev`, pull the latest remote `dev`.
+6. Merge the plan branch **directly into `dev`** (no Pull Request into `dev`) and push —
+   this triggers the automatic dev pipeline (build/publish images, update dev manifests,
+   deploy/sync the `dev` namespace).
+7. Validate the feature in the deployed `dev` namespace.
+8. Switch back to the **original plan branch** (do not delete it) and push it to the remote.
+9. Open a Pull Request from that plan branch **directly into `main`** — `dev` is never merged
+   into `main`.
+10. Merge the Pull Request into `main` only after CI checks, review, and approval.
+11. Production deployment/sync stays a separate, manual step performed after that merge.
+
+```text
+latest main
+    ↓ create branch
+plan branch
+    ├── direct merge → dev
+    │                     ↓
+    │             automatic dev deployment
+    │                     ↓
+    │                  validation
+    │
+    └── push + Pull Request → main
+                                 ↓
+                         reviewed merge
+                                 ↓
+                    manual production deployment
+                                 ↓
+                                prod
+```
+
+**Concrete commands:**
+
+```bash
+git switch main
+git pull origin main
+
+git switch -c feature/<plan-name>
+
+# Implement, test and commit the plan
+git add .
+git commit -m "feat: implement <plan-name>"
+
+# Merge into dev for deployment and validation
+git switch dev
+git pull origin dev
+git merge feature/<plan-name>
+git push origin dev
+
+# Return to the original plan branch
+git switch feature/<plan-name>
+git push -u origin feature/<plan-name>
+
+# Open a Pull Request:
+# feature/<plan-name> → main
+```
+
+**Rules/clarifications:**
+
+- Every plan branch is created from the latest `main`, never from `dev`.
+- There is no Pull Request into `dev` — the plan branch is merged directly into `dev` purely
+  for deployment/validation.
+- After validating in `dev`, work continues on the *same* original plan branch — a new branch
+  is not created for the Pull Request into `main`.
+- The Pull Request into `main` is opened from the plan branch, not from `dev`; `dev` itself is
+  never merged into `main`.
+- The plan branch must not be deleted until its Pull Request into `main` has been merged.
+- A plan branch must never be created from an outdated local `main` — always `git pull origin
+  main` immediately before branching.
+
+**CI/CD behavior (see CP12, `docs/plan/12-github-actions-cicd.md`):**
+
+- Work happens in a plan branch created from the latest `main`; lint + the full test suite
+  run before that branch is merged into `dev`.
+- A push to `dev` (from the direct merge) automatically builds/publishes images, updates the
+  dev Kubernetes manifests, and deploys/syncs the `dev` namespace via ArgoCD.
+- A Pull Request from a plan branch into `main` runs final lint/tests/validation as a required
+  check.
+- Merging that Pull Request into `main` creates/updates the production-ready version (images
+  tagged off `main`, prod manifests updated) — it does **not** by itself deploy anything.
+- Production ArgoCD sync/deployment remains a separate, manually-approved step performed after
+  the merge into `main`.
+
+**Acceptance checks per plan:**
+
+- [ ] Branch was created from an up-to-date `main` (confirmed via `git pull origin main`
+      immediately before `git switch -c`).
+- [ ] Plan branch was merged directly into `dev` (no PR into `dev`) and `dev` was pushed.
+- [ ] Dev CI/CD pipeline ran automatically off the `dev` push and the feature was validated in
+      the deployed `dev` namespace.
+- [ ] Work continued on the same original plan branch after validation (not a new branch).
+- [ ] Plan branch was pushed to the remote and a Pull Request into `main` was opened from it.
+- [ ] Pull Request checks (lint, full test suite) passed before merge.
+- [ ] Merge into `main` was a reviewed/approved merge, not a direct push.
+- [ ] Production deployment was a separate manual step, not triggered by the merge itself.
+- [ ] The plan branch was not deleted before its Pull Request into `main` was merged.
 
 ## Checkpoints
 
@@ -123,11 +243,13 @@ By the end of CP11 (M4): the full stack (including the Retailer-Cart MCP server)
 ArgoCD, ingesting real Shufersal/Rami Levy feeds on a schedule, backed by PostgreSQL and a
 DynamoDB checkpointer.
 
-By the end of CP14 (M5): every merge to `main` is linted, tested (including mock-site
-browser-automation tests), built, and automatically deployed to `dev`; `prod` exists as a
-separate namespace reachable only through a reviewed, manually-synced promotion;
-Prometheus/Grafana dashboards show live operational metrics, including retailer-cart
-preparation success/failure/blocked rates.
+By the end of CP14 (M5): every plan branch is linted and tested (including mock-site
+browser-automation tests) before merging directly into `dev`, whose push automatically builds
+images and deploys `dev`; a Pull Request from the plan branch into `main` runs final
+tests/validation, and `prod` exists as a separate namespace reachable only through a reviewed
+merge into `main` followed by a manually-synced promotion; Prometheus/Grafana (installed via
+the `kube-prometheus-stack` Helm chart) show live operational metrics, including
+retailer-cart preparation success/failure/blocked rates.
 
 By the end of CP16 (M6): the full test suite (unit, integration, contract, agent/graph,
 ingestion, concurrency, Postgres-compatibility, mock-site browser automation) passes in CI,
@@ -154,12 +276,20 @@ mcp_servers/         # each an independent HTTP service (own port, own container
 web/               # React chat SPA                                        (CP5, CP8, CP16)
 infra/
   terraform/       # EC2 + kubeadm cluster provisioning                     (CP10)
+  helm/            # version-controlled Helm values for third-party charts
+    kube-prometheus-stack/
+      dev-values.yaml  # dev-namespace values (Prometheus/Grafana)          (CP14)
+      prod-values.yaml # prod-namespace values (Prometheus/Grafana)         (CP14)
 k8s/
   dev/             # ArgoCD-watched dev namespace manifests, one Deployment/
                    # Service per MCP server + backend + web + postgres      (CP11)
   prod/            # ArgoCD-watched prod namespace manifests (same shape)   (CP13)
-  argocd/          # ArgoCD install + Application manifests                 (CP11)
-  monitoring/      # Prometheus + Grafana manifests/dashboards              (CP14)
+  argocd/          # ArgoCD install + Application manifests (incl. an
+                   # Application pointing at the kube-prometheus-stack
+                   # Helm chart + infra/helm values, per env)               (CP11, CP14)
+  monitoring/      # any ServiceMonitor/PrometheusRule/dashboard resources
+                   # layered on top of the Helm-installed stack — raw
+                   # Prometheus/Grafana manifests are not maintained here   (CP14)
 .github/workflows/ # CI/CD pipeline definitions                            (CP12)
 tests/             # unit, integration, contract, agent, ingestion,
                    # mock-site browser-automation tests                    (all checkpoints)
@@ -219,10 +349,11 @@ Mirrors `docs/spec.md` §9, mapped to the checkpoints that implement each requir
 
 ## Final Milestone
 
-**Definition of "project complete":** all 16 checkpoints are checked off; the full automated
-test suite (unit, integration, MCP contract, agent/graph, ingestion, concurrent-thread-id,
-PostgreSQL-compatibility, mock-site browser-automation) passes in CI on `main`; the `dev`
-namespace auto-deploys from `main` and is currently healthy; the `prod` namespace has at
+**Definition of "project complete":** all 16 checkpoints are checked off, each implemented per
+the Git Branch Workflow above; the full automated test suite (unit, integration, MCP
+contract, agent/graph, ingestion, concurrent-thread-id, PostgreSQL-compatibility, mock-site
+browser-automation) passes in CI on `main`; the `dev` namespace auto-deploys on every push to
+`dev` and is currently healthy; the `prod` namespace has at
 least one manually-promoted, working deployment; Prometheus/Grafana dashboards are live and
 show real traffic from a demo run, including retailer-cart-preparation metrics; and a full
 walkthrough of `docs/spec.md` §12 (Acceptance Criteria) passes manually against the deployed
