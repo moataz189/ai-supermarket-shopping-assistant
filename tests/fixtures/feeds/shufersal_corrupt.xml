@@ -1,0 +1,103 @@
+<Root>
+  <ChainID>7290027600007</ChainID>
+  <SubChainID>002</SubChainID>
+  <StoreID>999</StoreID>
+  <BikoretNo>0</BikoretNo>
+  <Items>
+    <Item>
+      <PriceUpdateTime>2026-07-31T06:23:00</PriceUpdateTime>
+      <ItemCode>10181040009</ItemCode>
+      <LastSaleDateTime>2026-07-02T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>חמאת קקאו יחידה</ItemName>
+      <ManufactureName>EI.EM.PHARM</ManufactureName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufactureItemDescription>חמאת קקאו יחידה</ManufactureItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>100.00</Quantity>
+      <UnitOfMeasure>100 גרם</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>46.50</ItemPrice>
+      <UnitOfMeasurePrice>46.50</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-07-31T06:22:00</PriceUpdateTime>
+      <ItemCode>4823097809785</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>גלידה בטעם וניל1קג RUD</ItemName>
+      <ManufactureName>---</ManufactureName>
+      <ManufactureCountry>UA</ManufactureCountry>
+      <ManufactureItemDescription>גלידה בטעם וניל1קג RUD</ManufactureItemDescription>
+      <UnitQty>קילוגרם</UnitQty>
+      <Quantity>1.00</Quantity>
+      <UnitOfMeasure>1קילוגרם</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>41.90</ItemPrice>
+      <UnitOfMeasurePrice>41.90</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-07-31T06:23:00</PriceUpdateTime>
+      <ItemCode>10181040313</ItemCode>
+      <LastSaleDateTime>2026-07-14T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>תחליב עיסוי לסימני מתיחה</ItemName>
+      <ManufactureName>EI.EM.PHARM</ManufactureName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufactureItemDescription>תחליב עיסוי לסימני מתיחה</ManufactureItemDescription>
+      <UnitQty>מיליליטר</UnitQty>
+      <Quantity>250.00</Quantity>
+      <UnitOfMeasure>100 מיליליטר</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>56.50</ItemPrice>
+      <UnitOfMeasurePrice>22.60</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-07-31T06:23:00</PriceUpdateTime>
+      <ItemCode>16229914578</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>מי קוקוס טבעי פוקו 1 ל</ItemName>
+      <ManufactureName>ויט וורלד קומפני</ManufactureName>
+      <ManufactureCountry>VN</ManufactureCountry>
+      <ManufactureItemDescription>מי קוקוס טבעי פוקו 1 ל</ManufactureItemDescription>
+      <UnitQty>ליטר</UnitQty>
+      <Quantity>1.00</Quantity>
+      <UnitOfMeasure>1ליטר</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>23.90</ItemPrice>
+      <UnitOfMeasurePrice>23.90</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-05-07T22:19:00</PriceUpdateTime>
+      <ItemCode>10900035187</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>שקיות זיפר M 25 יחידות</ItemName>
+      <ManufactureName>ריינולדס</ManufactureName>
+      <ManufactureCountry>TH</ManufactureCountry>
+      <ManufactureItemDescription>שקיות זיפר M 25 יחידות</ManufactureItemDescription>
+      <UnitQty>יחידות</UnitQty>
+      <Quantity>1.00</Quantity>
+      <UnitOfMeasure>יחידות</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>16.90</ItemPrice>
+      <UnitOfMeasurePrice>16.90</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+  </Items>
+</Root>
