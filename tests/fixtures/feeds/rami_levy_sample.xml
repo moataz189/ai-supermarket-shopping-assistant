@@ -1,0 +1,98 @@
+<Root>
+  <ChainId>7290058140886</ChainId>
+  <SubChainId>1</SubChainId>
+  <StoreId>39</StoreId>
+  <BikoretNo>3</BikoretNo>
+  <Items>
+    <Item>
+      <PriceUpdateDate>2026-07-27 09:05:21</PriceUpdateDate>
+      <ItemCode>215</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>דובדבן אדום כ-250 גרם</ItemNm>
+      <ManufacturerName>ביכורי השקמה</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>דובדבן אדום כ-250 גרם</ManufacturerItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>250</Quantity>
+      <UnitOfMeasure>100 גרם  </UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1.0000</QtyInPackage>
+      <ItemPrice>13.9</ItemPrice>
+      <UnitOfMeasurePrice>0.139</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+    <Item>
+      <PriceUpdateDate>2026-07-20 09:04:29</PriceUpdateDate>
+      <ItemCode>100</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>עגבניה</ItemNm>
+      <ManufacturerName>לא ידוע</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>עגבניה</ManufacturerItemDescription>
+      <UnitQty>ק"ג</UnitQty>
+      <Quantity>1</Quantity>
+      <UnitOfMeasure>1 ק"ג  </UnitOfMeasure>
+      <bIsWeighted>1</bIsWeighted>
+      <QtyInPackage>1.0000</QtyInPackage>
+      <ItemPrice>2.9</ItemPrice>
+      <UnitOfMeasurePrice>2.9</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+    <Item>
+      <PriceUpdateDate>2026-06-08 15:11:59</PriceUpdateDate>
+      <ItemCode>117122</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>קינלי סודה 500 מל</ItemNm>
+      <ManufacturerName>לא ידוע</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>קינלי סודה 500 מל</ManufacturerItemDescription>
+      <UnitQty>מ"ל</UnitQty>
+      <Quantity>500</Quantity>
+      <UnitOfMeasure>1 מ"ל  </UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1.0000</QtyInPackage>
+      <ItemPrice>2.8</ItemPrice>
+      <UnitOfMeasurePrice>2.8</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+    <Item>
+      <PriceUpdateDate>2026-07-16 08:58:04</PriceUpdateDate>
+      <ItemCode>5896620</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>סאן בודד 1.5 לי</ItemNm>
+      <ManufacturerName>טמפו</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>סאן בודד 1.5 לי</ManufacturerItemDescription>
+      <UnitQty>ליטר</UnitQty>
+      <Quantity>1.5</Quantity>
+      <UnitOfMeasure>1 ליטר </UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>6.0000</QtyInPackage>
+      <ItemPrice>3.6</ItemPrice>
+      <UnitOfMeasurePrice>3.6</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+    <Item>
+      <PriceUpdateDate>2025-01-19 16:03:55</PriceUpdateDate>
+      <ItemCode>6</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>פריט חדש  בדיקה יוני</ItemNm>
+      <ManufacturerName>לא ידוע</ManufacturerName>
+      <ManufactureCountry>לא ידוע</ManufactureCountry>
+      <ManufacturerItemDescription>פריט חדש  בדיקה יוני</ManufacturerItemDescription>
+      <UnitQty>יח'</UnitQty>
+      <Quantity>1</Quantity>
+      <UnitOfMeasure>1 יח'  </UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>6.0000</QtyInPackage>
+      <ItemPrice>30.6</ItemPrice>
+      <UnitOfMeasurePrice>30.6</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+  </Items>
+</Root>

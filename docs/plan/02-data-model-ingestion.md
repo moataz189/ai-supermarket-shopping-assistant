@@ -204,10 +204,10 @@ tests/ingestion/test_freshness.py
 
 ## Testing Tasks
 
-- [ ] `test_repositories.py` — per-retailer search + lookup.
-- [ ] `test_feed_parsers.py` — both retailers parse; corrupt/wrong-`StoreId` raises.
-- [ ] `test_pipeline_atomic_swap.py` — failed/zero-row load never corrupts existing data.
-- [ ] `test_freshness.py` — staleness threshold logic.
+- [x] `test_repositories.py` — per-retailer search + lookup.
+- [x] `test_feed_parsers.py` — both retailers parse; corrupt/wrong-`StoreId` raises.
+- [x] `test_pipeline_atomic_swap.py` — failed/zero-row load never corrupts existing data.
+- [x] `test_freshness.py` — staleness threshold logic.
 
 ## Acceptance Criteria
 
@@ -227,6 +227,6 @@ against fixtures.
 
 ## Definition of Done
 
-- [ ] All files created and wired; tests green; `ruff check` clean.
-- [ ] CLI run against fixtures verified manually.
-- [ ] Committed with message referencing CP2.
+- [x] All files created and wired; tests green; `ruff check` clean.
+- [x] CLI run against fixtures verified manually.
+- [x] Committed with message referencing CP2.
