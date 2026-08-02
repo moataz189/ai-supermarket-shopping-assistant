@@ -359,3 +359,25 @@ show real traffic from a demo run, including retailer-cart-preparation metrics; 
 walkthrough of `docs/spec.md` §12 (Acceptance Criteria) passes manually against the deployed
 `prod` namespace as the final demo script — including one live (best-effort, manually
 observed) real-site cart preparation against an actual Shufersal or Rami Levy product.
+
+## Future Enhancements (Post-MVP)
+
+Not part of any of the 16 checkpoints above; explicitly out of scope until the entire MVP
+(all 16 checkpoints) is complete.
+
+- **Incremental `Price` feed ingestion.** CP2's ingestion pipeline (see
+  `docs/plan/02-data-model-ingestion.md`, "Feed Types: PriceFull vs. Price") only ever
+  consumes each retailer's latest `PriceFull` file (full catalog snapshot) in the MVP. The
+  `Price` delta feed (only changed-price products since the last publication) is a real feed
+  type retailers publish alongside `PriceFull`, but processing it is deliberately
+  unimplemented — `app.ingestion.pipeline.FeedType.PRICE` raises `NotImplementedError`. The
+  pipeline's `feed_type` parameter exists specifically so this is a straightforward addition
+  later, not a redesign.
+- **Bonus — promotion support (`PromoFull`/`Promo`).** Retailers also publish a parallel pair
+  of promotion feeds — `PromoFull` (complete snapshot of all active promotions) and `Promo`
+  (incremental promotion updates) — entirely separate from the price feeds above and not
+  referenced anywhere in the current data model or ingestion pipeline. This is intentionally
+  **not** part of the MVP. Only after every checkpoint (CP1–CP16) is checked off should a
+  dedicated implementation plan for promotion support be written (its own `docs/plan/`
+  file, following the same Git Branch Workflow), covering how `PromoFull`/`Promo` feeds are
+  parsed, stored, and eventually surfaced — none of which is decided yet.
