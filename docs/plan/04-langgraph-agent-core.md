@@ -518,15 +518,22 @@ Risks below).
 
 ## Testing Tasks
 
-- [ ] Two independent carts built correctly from fakes; happy path resumes with a choice.
-- [ ] Ambiguous item → interrupt shows both the deduped selectable options and the
+- [x] Two independent carts built correctly from fakes; happy path resumes with a choice.
+      (`tests/agent/test_graph_two_retailer_carts_happy_path.py`)
+- [x] Ambiguous item → interrupt shows both the deduped selectable options and the
       per-retailer `availability_by_retailer` breakdown → resume → both carts use the
-      resolution.
-- [ ] Item missing at one retailer doesn't affect the other's cart.
-- [ ] Budget trade-off suggestion generated only for the over-budget retailer.
-- [ ] Decline → no retailer chosen, both carts still returned.
-- [ ] `_resolve_item` unit tests for all auto-select rules and the still-ambiguous case.
-- [ ] All tests run with fakes only — zero live network/Bedrock/MCP-process calls.
+      resolution. (`tests/agent/test_graph_ambiguous_item_interrupt.py`)
+- [x] Item missing at one retailer doesn't affect the other's cart.
+      (`tests/agent/test_graph_missing_item_one_retailer.py`)
+- [x] Budget trade-off suggestion generated only for the over-budget retailer.
+      (`tests/agent/test_budget_trade_off_suggestion.py`)
+- [x] Decline → no retailer chosen, both carts still returned.
+      (`tests/agent/test_choose_retailer_decline.py`)
+- [x] `_resolve_item` unit tests for all auto-select rules and the still-ambiguous case.
+      (`tests/agent/test_resolve_item_rules.py`)
+- [x] All tests run with fakes only — zero live network/Bedrock/MCP-process calls.
+      Verified: `FakeSupermarketDataClient`/`FakeLLM` (`tests/agent/fakes.py`) are the only
+      client/LLM implementations exercised anywhere in `tests/agent/`.
 
 ## Acceptance Criteria
 
@@ -558,6 +565,26 @@ layers dietary filtering into `resolve_items`/`build_retailer_cart`; it must not
 
 ## Definition of Done
 
-- [ ] All nodes and the compiled graph exist and are wired as above.
-- [ ] All six test files pass using fakes only; `ruff check` clean.
-- [ ] Committed with message referencing CP4.
+- [x] All nodes and the compiled graph exist and are wired as above.
+- [x] All six test files pass using fakes only; `ruff check` clean.
+- [x] Committed with message referencing CP4.
+
+All CP4 scope items above are complete; nothing was left unchecked. Two small
+implementation-detail deviations from the plan's literal listings (not scope changes) are
+called out below.
+
+### Deviations from the plan
+
+- `pyproject.toml` gained `asyncio_mode = "auto"` under `[tool.pytest.ini_options]`. The plan's
+  file list didn't call this out, but the agent's nodes and tests are all `async def`, and
+  `pytest-asyncio`'s default strict mode requires per-test markers without it. Adding the
+  mode is the minimal change that lets `pytest tests/agent -v` run the async tests at all.
+- `app/agent/mcp_clients.py`'s `_call` combines the two nested `async with` statements from
+  the plan's example into one (`async with (a, b):`) — behavior-identical, but required to
+  satisfy `ruff check`'s `SIM117` rule, which the plan's Definition of Done requires to be
+  clean.
+- `requirements.txt` also pins `langgraph-checkpoint-sqlite==3.1.1`, not just `langgraph` and
+  `langchain-aws` as the plan's "Files to Modify" section states. `SqliteSaver` (used in
+  `app/agent/checkpointer.py`, taken verbatim from the plan) lives in that separate package,
+  not in `langgraph` core — confirmed by import-testing the pinned versions before writing
+  any code.
