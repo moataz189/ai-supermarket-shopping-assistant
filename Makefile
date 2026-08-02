@@ -1,4 +1,4 @@
-.PHONY: install lint test run
+.PHONY: install lint test coverage run
 
 install:
 	pip install -r requirements.txt -r requirements-dev.txt
@@ -8,6 +8,9 @@ lint:
 
 test:
 	pytest
+
+coverage:
+	pytest --cov=app --cov=mcp_servers --cov-report=term-missing --cov-report=xml
 
 run:
 	python -m uvicorn app.api.main:app --reload

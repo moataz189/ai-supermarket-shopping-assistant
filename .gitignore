@@ -5,6 +5,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
 # Virtual environments
 .venv/
 venv/
