@@ -31,36 +31,30 @@ Israeli price-transparency feeds are published as two distinct file types per re
   changed since the previous publication. It's meant to *update* an existing catalog, not
   rebuild it.
 
-**MVP scope**: ingestion only ever consumes the latest available `PriceFull` file — this is
-what `app/ingestion/run.py` loads and what the fixtures in `tests/fixtures/feeds/` represent.
-Incremental `Price` processing is **not implemented** and is explicitly future work, tracked
-by `app.ingestion.pipeline.FeedType`:
+Both feed types are implemented via a single reusable entry point,
+`app.ingestion.pipeline.ingest_retailer_feed(session, retailer, parsed_products, feed_type)`:
 
-```python
-class FeedType(str, Enum):
-    PRICE_FULL = "PriceFull"
-    PRICE = "Price"
+- `feed_type=FeedType.PRICE_FULL` (the default): validates the feed is non-empty, then
+  atomically replaces the retailer's entire active catalog (delete-then-reinsert in one
+  transaction). This is what `app/ingestion/run.py --source fixtures` calls today.
+- `feed_type=FeedType.PRICE`: upserts only the products present in the delta — updates the
+  existing `(retailer, item_code)` row if one exists (price, name, package size/unit, store
+  ID, `last_updated_at`), otherwise inserts a new row. Every other product already in the
+  catalog is left completely untouched. The whole delta is processed in one transaction; any
+  failure (a DB constraint violation, a bad item) rolls back the entire delta, leaving the
+  catalog exactly as it was before that file.
 
+Because each retailer's per-item feed schema (`ParsedProduct`) is identical between
+`PriceFull` and `Price` files — only *which* items are present differs — the parser modules
+(`feeds/shufersal.py`, `feeds/rami_levy.py`) needed no changes to support `Price` feeds; only
+`ingest_retailer_feed` needed a second code path.
 
-def ingest_retailer_feed(
-    session: Session,
-    retailer: str,
-    parsed_products: list,
-    feed_type: FeedType = FeedType.PRICE_FULL,
-) -> None:
-    if feed_type is not FeedType.PRICE_FULL:
-        raise NotImplementedError(...)  # Price (delta) support: future work
-    ...
-```
-
-This keeps the extension seam explicit rather than silent: `ingest_retailer_feed` takes a
-`feed_type` argument (defaulting to `PRICE_FULL`, today's only supported value) instead of
-assuming full-replace is the only possible semantics forever. Because each retailer's
-per-item feed schema (`ParsedProduct`) is identical between `PriceFull` and `Price` files —
-only *which* items are present differs — the parser modules (`feeds/shufersal.py`,
-`feeds/rami_levy.py`) need no changes to support `Price` feeds later; only
-`ingest_retailer_feed`'s `PRICE_FULL` branch (currently: delete-then-reinsert per retailer)
-needs a `PRICE` branch that upserts/merges instead of replacing.
+**What's still out of scope (deferred to CP11, spec §5)**: there is no scheduler, no feed-file
+discovery/ordering, and no CLI/service mode that runs ingestion hourly yet. CP11's Kubernetes
+CronJob is expected to download new `Price` files on its own hourly schedule and call
+`ingest_retailer_feed(session, retailer, parsed_products, feed_type=FeedType.PRICE)` once per
+downloaded file — the reusable function implemented here is exactly what that CronJob calls;
+this checkpoint only proves the function itself against fixtures, not the schedule around it.
 
 ## Deliverables
 
@@ -196,12 +190,13 @@ tests/ingestion/test_freshness.py
    `ONLINE_STORE_IDS` entry and raising `FeedValidationError` otherwise. Write
    `tests/ingestion/test_feed_parsers.py` (both retailers parse; corrupt/wrong-`StoreId`
    feeds raise).
-7. Write `app/ingestion/pipeline.py` (updated post-CP2 to add the `FeedType` seam described
+7. Write `app/ingestion/pipeline.py` (updated post-CP2 with the `FeedType` dispatch described
    above — see "Feed Types: PriceFull vs. Price"):
    ```python
    from datetime import datetime, timezone
    from enum import Enum
 
+   from sqlalchemy import select
    from sqlalchemy.orm import Session
 
    from app.db.models import RetailerFeedStatus, RetailerProduct
@@ -222,41 +217,77 @@ tests/ingestion/test_freshness.py
        parsed_products: list,
        feed_type: FeedType = FeedType.PRICE_FULL,
    ) -> None:
-       if feed_type is not FeedType.PRICE_FULL:
-           raise NotImplementedError(
-               f"{retailer}: incremental {FeedType.PRICE.value} feed ingestion is not "
-               f"implemented yet; only {FeedType.PRICE_FULL.value} (full-catalog snapshot) "
-               "ingestion is supported."
-           )
+       if feed_type is FeedType.PRICE_FULL:
+           _ingest_price_full(session, retailer, parsed_products)
+       else:
+           _ingest_price_delta(session, retailer, parsed_products)
 
+
+   def _ingest_price_full(session: Session, retailer: str, parsed_products: list) -> None:
        if not parsed_products:
            raise FeedValidationError(f"{retailer}: feed produced zero products, refusing to activate")
 
        with session.begin():
            session.query(RetailerProduct).filter_by(retailer=retailer).delete()
            for item in parsed_products:
-               session.add(
-                   RetailerProduct(
-                       retailer=retailer,
-                       store_id=item.store_id,
-                       item_code=item.item_code,
-                       name=item.name,
-                       category="uncategorized",
-                       package_size=item.package_size,
-                       package_unit=item.package_unit,
-                       price=item.price,
-                       listed_in_feed=True,
-                       last_updated_at=datetime.now(timezone.utc),
+               session.add(_new_product(retailer, item))
+           _touch_freshness(session, retailer)
+
+
+   def _ingest_price_delta(session: Session, retailer: str, parsed_products: list) -> None:
+       with session.begin():
+           item_codes = [item.item_code for item in parsed_products]
+           existing_by_code = {
+               product.item_code: product
+               for product in session.scalars(
+                   select(RetailerProduct).where(
+                       RetailerProduct.retailer == retailer,
+                       RetailerProduct.item_code.in_(item_codes),
                    )
                )
-           session.merge(
-               RetailerFeedStatus(retailer=retailer, last_updated_at=datetime.now(timezone.utc), stale=False)
-           )
+           }
+           for item in parsed_products:
+               existing = existing_by_code.get(item.item_code)
+               if existing is None:
+                   session.add(_new_product(retailer, item))
+               else:
+                   existing.name = item.name
+                   existing.price = item.price
+                   existing.package_size = item.package_size
+                   existing.package_unit = item.package_unit
+                   existing.store_id = item.store_id
+                   existing.listed_in_feed = True
+                   existing.last_updated_at = datetime.now(timezone.utc)
+           _touch_freshness(session, retailer)
+
+
+   def _new_product(retailer: str, item) -> RetailerProduct:
+       return RetailerProduct(
+           retailer=retailer,
+           store_id=item.store_id,
+           item_code=item.item_code,
+           name=item.name,
+           category="uncategorized",
+           package_size=item.package_size,
+           package_unit=item.package_unit,
+           price=item.price,
+           listed_in_feed=True,
+           last_updated_at=datetime.now(timezone.utc),
+       )
+
+
+   def _touch_freshness(session: Session, retailer: str) -> None:
+       session.merge(
+           RetailerFeedStatus(retailer=retailer, last_updated_at=datetime.now(timezone.utc), stale=False)
+       )
    ```
-   The `session.begin()` block is the atomic-activation boundary — any exception before it
-   completes rolls back, leaving the previously-active rows untouched.
-8. Write `tests/ingestion/test_pipeline_atomic_swap.py`: a load that fails partway leaves
-   existing rows unchanged; a zero-row feed refuses to activate.
+   Each `with session.begin():` block is the atomic-activation boundary for that one feed
+   file — any exception before it completes rolls back everything from that file (`PriceFull`
+   replace or `Price` upserts alike), leaving the previously-active rows untouched.
+8. Write `tests/ingestion/test_pipeline_atomic_swap.py`: a `PriceFull` load that fails partway
+   leaves existing rows unchanged; a zero-row `PriceFull` feed refuses to activate; a `Price`
+   delta updates an existing product, inserts a newly-introduced product, leaves products
+   absent from the delta unchanged, and rolls back entirely if any item in it fails.
 9. Write `tests/ingestion/test_freshness.py`: add an `is_stale(status, threshold_hours=48)`
    helper to `pipeline.py`, test with frozen/injected timestamps.
 10. Write `app/ingestion/run.py` as a CLI (`--source fixtures`) that loads both fixture
@@ -268,16 +299,21 @@ tests/ingestion/test_freshness.py
 
 - [x] `test_repositories.py` — per-retailer search + lookup.
 - [x] `test_feed_parsers.py` — both retailers parse; corrupt/wrong-`StoreId` raises.
-- [x] `test_pipeline_atomic_swap.py` — failed/zero-row load never corrupts existing data.
+- [x] `test_pipeline_atomic_swap.py` — failed/zero-row `PriceFull` load never corrupts
+      existing data.
 - [x] `test_freshness.py` — staleness threshold logic.
-- [x] `test_pipeline_atomic_swap.py` (added post-CP2) — `ingest_retailer_feed` defaults to
-      and accepts `FeedType.PRICE_FULL`; `FeedType.PRICE` raises `NotImplementedError` without
-      mutating existing data.
+- [x] `test_pipeline_atomic_swap.py` (added post-CP2) — `FeedType.PRICE` delta ingestion:
+      updates an existing product, inserts a newly-introduced product, leaves products absent
+      from the delta unchanged, and rolls back entirely (no partial writes) when any item in
+      the delta fails.
 
 ## Acceptance Criteria
 
-Ingestion populates two independent per-retailer catalogs from fixtures; a bad feed is
-rejected without side effects; the repository only ever returns one retailer's own products.
+Ingestion populates two independent per-retailer catalogs from fixtures; a bad `PriceFull`
+feed is rejected without side effects; a bad `Price` delta rolls back without side effects;
+the repository only ever returns one retailer's own products. `ingest_retailer_feed` is the
+one reusable entry point for both feed types — CP11 wires a schedule around it but does not
+need to change it.
 
 ## Risks
 
@@ -287,12 +323,15 @@ rejected without side effects; the repository only ever returns one retailer's o
 ## Notes
 
 CP3's MCP server calls `ProductRepository` directly — no cross-retailer query lives here or
-there. Real live ingestion (CronJob) is CP11; this checkpoint only proves the pipeline
-against fixtures.
+there. Real live ingestion (CronJob) is CP11; this checkpoint proves `ingest_retailer_feed`
+itself (both `PriceFull` and `Price`) against fixtures — not the schedule around it.
 
-Incremental `Price` (delta) feed ingestion is intentionally **not implemented** — see "Feed
-Types: PriceFull vs. Price" above. `FeedType.PRICE` raising `NotImplementedError` is
-deliberate future work, not a gap in this checkpoint.
+Both feed types are fully implemented — see "Feed Types: PriceFull vs. Price" above. What's
+still deliberately **not** built here: any feed-file discovery/ordering, an
+already-processed/idempotency ledger, or an hourly CLI/service mode. CP11's CronJob owns
+downloading `Price` files and deciding when/how often to call `ingest_retailer_feed`; this
+checkpoint only needs the function to be correct and safe to call repeatedly with whatever
+delta CP11 hands it.
 
 **Bonus, post-MVP only**: promotion feeds (`PromoFull`/`Promo`) are a separate concern from
 pricing and are entirely out of scope here and for the whole MVP. See "Future Enhancements"
@@ -304,3 +343,6 @@ written after all 16 checkpoints are complete.
 - [x] All files created and wired; tests green; `ruff check` clean.
 - [x] CLI run against fixtures verified manually.
 - [x] Committed with message referencing CP2.
+- [x] `PriceFull` and `Price` both implemented behind `ingest_retailer_feed`; contract-tested
+      (update/insert/unchanged/rollback for `Price`; atomic replace/refuse-empty for
+      `PriceFull`).

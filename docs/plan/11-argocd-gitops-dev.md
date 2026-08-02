@@ -224,10 +224,17 @@ k8s/argocd/prod-application.yaml
 16. Write `k8s/dev/web-deployment.yaml` (image from CP9's `web/Dockerfile`) and
     `web-service.yaml` (`type: NodePort`, exposing `80`).
 17. Write `k8s/dev/ingestion-cronjob.yaml` (image from CP9's `Dockerfile`, `command:
-    ["python", "-m", "app.ingestion.run", "--source", "live"]` — note this requires the
-    `--source live` mode of CP2's ingestion CLI to be added when this checkpoint is
-    implemented, since CP2 only built `--source fixtures`; schedule `"0 3 * * *"` for a daily
-    run).
+    ["python", "-m", "app.ingestion.run", "--source", "live"]` — note this requires a
+    `--source live` mode of CP2's ingestion CLI to be added here, since CP2 only built
+    `--source fixtures`; schedule `"0 * * * *"` — **hourly**, not daily). CP2 already
+    implements both feed types behind `app.ingestion.pipeline.ingest_retailer_feed(session,
+    retailer, parsed_products, feed_type=...)` — `FeedType.PRICE_FULL` for the (infrequent)
+    full-catalog baseline, `FeedType.PRICE` for the hourly delta. This checkpoint's job is
+    only to download each retailer's newly published feed file(s) every hour and call that
+    existing function per file (`PRICE_FULL` if a new baseline was published, `PRICE`
+    otherwise) — no new ingestion logic, no file-discovery/ordering/idempotency ledger; CP2
+    deliberately left that scheduling layer for CP11 to build to whatever shape the real feed
+    hosting turns out to need.
 18. Write `k8s/prod/namespace.yaml` (just the namespace — a placeholder so the prod
     `Application` created in step 19 has a valid, syncable path; CP13 adds the rest):
     ```yaml
