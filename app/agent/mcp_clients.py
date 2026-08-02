@@ -27,4 +27,9 @@ class McpSupermarketDataClient:
         return (result or {}).get("candidates", [])
 
     async def get_product_price(self, retailer: str, item_code: str) -> dict | None:
-        return await self._call("get_product_price", {"retailer": retailer, "item_code": item_code})
+        # `get_product_price`'s tool signature returns `ProductPriceResponse | None`; FastMCP
+        # can't emit a top-level object schema for a union, so it wraps the result under a
+        # "result" key in `structuredContent` — unlike `search_product`'s plain
+        # `SearchProductResponse`, which comes back unwrapped (see `search_product` above).
+        result = await self._call("get_product_price", {"retailer": retailer, "item_code": item_code})
+        return (result or {}).get("result")

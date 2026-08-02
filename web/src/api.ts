@@ -1,0 +1,54 @@
+export interface ClarificationOption {
+  id: string
+  label: string
+}
+
+export interface Clarification {
+  reason: string
+  question: string
+  options: ClarificationOption[]
+  carts?: Record<string, RetailerCart> | null
+  availability_by_retailer?: Record<string, string[]> | null
+}
+
+export interface CartLine {
+  name: string
+  item_code: string
+  product_name: string
+  unit_price: number
+  qty: number
+  subtotal: number
+  link?: string | null
+}
+
+export interface RetailerCart {
+  retailer: string
+  items: CartLine[]
+  missing_items: Record<string, unknown>[]
+  total: number
+  budget: number | null
+  over_budget_by: number | null
+  trade_off_suggestions: Record<string, unknown>[]
+  savings_vs_other?: number
+}
+
+export interface ChatResponse {
+  thread_id: string
+  status: string
+  clarification?: Clarification | null
+  carts?: Record<string, RetailerCart> | null
+  chosen_retailer?: string | null
+  warnings: Record<string, unknown>[]
+}
+
+export async function postChat(threadId: string | null, message: string): Promise<ChatResponse> {
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ thread_id: threadId, message }),
+  })
+  if (!response.ok) {
+    throw new Error(`Chat request failed: ${response.status}`)
+  }
+  return (await response.json()) as ChatResponse
+}
