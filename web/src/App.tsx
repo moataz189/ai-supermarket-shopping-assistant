@@ -1,96 +1,100 @@
 import { useState } from 'react'
-import type { ChatResponse } from './api'
-import { postChat } from './api'
-import { ClarificationPrompt } from './components/ClarificationPrompt'
-import { RetailerCartsView } from './components/RetailerCartsView'
-import './App.css'
+import { AnimatePresence } from 'framer-motion'
+import { NavBar } from '@/components/layout/NavBar'
+import { Hero } from '@/components/layout/Hero'
+import { MessageThread } from '@/components/chat/MessageThread'
+import { ChatInput } from '@/components/chat/ChatInput'
+import { postChat } from '@/api'
+import type { Phase, Turn } from '@/types'
+
+function newId() {
+  return crypto.randomUUID()
+}
 
 function App() {
-  const [message, setMessage] = useState('')
+  const [phase, setPhase] = useState<Phase>('hero')
   const [threadId, setThreadId] = useState<string | null>(null)
-  const [result, setResult] = useState<ChatResponse | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [turns, setTurns] = useState<Turn[]>([])
 
-  async function send(text: string) {
-    setLoading(true)
-    setError(null)
+  const isBusy = turns.some((t) => t.role === 'assistant' && t.status === 'loading')
+
+  async function attempt(loadingId: string, apiText: string, expectsComparison: boolean, retryDisplayText: string) {
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === loadingId ? { id: loadingId, role: 'assistant', status: 'loading', expectsComparison } : t,
+      ),
+    )
     try {
-      const response = await postChat(threadId, text)
+      const response = await postChat(threadId, apiText)
       setThreadId(response.thread_id)
-      setResult(response)
+      setTurns((prev) =>
+        prev.map((t) => (t.id === loadingId ? { id: loadingId, role: 'assistant', status: 'done', response } : t)),
+      )
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong')
-    } finally {
-      setLoading(false)
+      const errorMessage = e instanceof Error ? e.message : 'Something went wrong'
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === loadingId
+            ? {
+                id: loadingId,
+                role: 'assistant',
+                status: 'error',
+                errorMessage,
+                retryText: apiText,
+                retryDisplayText,
+              }
+            : t,
+        ),
+      )
     }
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!message.trim()) return
-    void send(message)
-    setMessage('')
+  function sendMessage(displayText: string, apiText: string, expectsComparison: boolean) {
+    const userTurn: Turn = { id: newId(), role: 'user', text: displayText }
+    const loadingId = newId()
+    const loadingTurn: Turn = { id: loadingId, role: 'assistant', status: 'loading', expectsComparison }
+    setTurns((prev) => [...prev, userTurn, loadingTurn])
+    setPhase('chat')
+    void attempt(loadingId, apiText, expectsComparison, displayText)
   }
 
-  function handleRestart() {
-    setThreadId(null)
-    setResult(null)
-    setMessage('')
-    setError(null)
+  function handleSend(text: string) {
+    sendMessage(text, text, false)
+  }
+
+  function handleSelectOption(turnId: string, optionId: string, label: string) {
+    const turn = turns.find((t) => t.id === turnId)
+    const expectsComparison =
+      turn?.role === 'assistant' && turn.status === 'done'
+        ? turn.response.clarification?.reason === 'retailer_choice'
+        : false
+
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === turnId && t.role === 'assistant' && t.status === 'done' ? { ...t, answeredOptionId: optionId } : t,
+      ),
+    )
+    sendMessage(label, optionId, expectsComparison)
+  }
+
+  function handleRetry(turnId: string) {
+    const turn = turns.find((t) => t.id === turnId)
+    if (!turn || turn.role !== 'assistant' || turn.status !== 'error') return
+    void attempt(turnId, turn.retryText, false, turn.retryDisplayText)
   }
 
   return (
-    <div className="app">
-      <h1>AI Supermarket Shopping Assistant</h1>
-
-      {!result && (
-        <form onSubmit={handleSubmit} className="chat-form">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. milk, bread, and eggs, budget 100"
-            disabled={loading}
-          />
-          <button type="submit" disabled={loading || !message.trim()}>
-            Send
-          </button>
-        </form>
-      )}
-
-      {loading && <p>Working on it…</p>}
-      {error && <p className="error">{error}</p>}
-
-      {result?.status === 'needs_clarification' && result.clarification && (
-        <ClarificationPrompt
-          clarification={result.clarification}
-          onSelect={(optionId) => void send(optionId)}
-        />
-      )}
-
-      {result?.status === 'awaiting_retailer_choice' && result.clarification?.carts && (
-        <RetailerCartsView
-          carts={result.clarification.carts}
-          onChoose={(choice) => void send(choice)}
-        />
-      )}
-
-      {result && !['needs_clarification', 'awaiting_retailer_choice'].includes(result.status) && (
-        <div className="final-result">
-          {result.carts && (
-            <RetailerCartsView carts={result.carts} chosenRetailer={result.chosen_retailer} />
-          )}
-          {result.warnings.length > 0 && (
-            <ul className="warnings">
-              {result.warnings.map((w, i) => (
-                <li key={i}>{JSON.stringify(w)}</li>
-              ))}
-            </ul>
-          )}
-          <button type="button" onClick={handleRestart}>
-            Start a new request
-          </button>
+    <div className="flex min-h-screen flex-col bg-zinc-50">
+      <NavBar />
+      <AnimatePresence>{phase === 'hero' && <Hero onSend={handleSend} disabled={isBusy} />}</AnimatePresence>
+      {phase === 'chat' && (
+        <div className="flex flex-1 flex-col">
+          <div className="flex-1 overflow-y-auto">
+            <MessageThread turns={turns} onSelectOption={handleSelectOption} onRetry={handleRetry} />
+          </div>
+          <div className="sticky bottom-0 border-t border-zinc-200 bg-zinc-50/95 px-4 py-4 backdrop-blur">
+            <ChatInput variant="bar" onSend={handleSend} disabled={isBusy} />
+          </div>
         </div>
       )}
     </div>
