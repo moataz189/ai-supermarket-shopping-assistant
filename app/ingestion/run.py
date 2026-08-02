@@ -11,7 +11,10 @@ FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "fee
 def load_fixtures() -> None:
     """Load each retailer's latest PriceFull fixture (full catalog snapshot).
 
-    Incremental Price feeds are future work — see `FeedType`.
+    `ingest_retailer_feed` also supports `FeedType.PRICE` (incremental delta
+    upserts) — CP11's hourly CronJob calls it directly per downloaded `Price`
+    file. There is no separate scheduler/CLI mode for that yet; this CLI's
+    only job today is the one-shot `PriceFull` fixture bootstrap.
     """
     init_db()
     with SessionLocal() as session:

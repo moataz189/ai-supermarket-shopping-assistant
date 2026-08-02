@@ -365,14 +365,13 @@ observed) real-site cart preparation against an actual Shufersal or Rami Levy pr
 Not part of any of the 16 checkpoints above; explicitly out of scope until the entire MVP
 (all 16 checkpoints) is complete.
 
-- **Incremental `Price` feed ingestion.** CP2's ingestion pipeline (see
-  `docs/plan/02-data-model-ingestion.md`, "Feed Types: PriceFull vs. Price") only ever
-  consumes each retailer's latest `PriceFull` file (full catalog snapshot) in the MVP. The
-  `Price` delta feed (only changed-price products since the last publication) is a real feed
-  type retailers publish alongside `PriceFull`, but processing it is deliberately
-  unimplemented — `app.ingestion.pipeline.FeedType.PRICE` raises `NotImplementedError`. The
-  pipeline's `feed_type` parameter exists specifically so this is a straightforward addition
-  later, not a redesign.
+> Note: incremental `Price` feed ingestion is **not** a future enhancement — it's implemented
+> as of CP2 (see `docs/plan/02-data-model-ingestion.md`, "Feed Types: PriceFull vs. Price").
+> `ingest_retailer_feed(session, retailer, parsed_products, feed_type=FeedType.PRICE)` upserts
+> a delta today. What's still pending is CP11's own scope (already an existing checkpoint,
+> not a bonus): the hourly CronJob that downloads new `Price` files and decides when to call
+> that function — no new ingestion logic, just scheduling around what already exists.
+
 - **Bonus — promotion support (`PromoFull`/`Promo`).** Retailers also publish a parallel pair
   of promotion feeds — `PromoFull` (complete snapshot of all active promotions) and `Promo`
   (incremental promotion updates) — entirely separate from the price feeds above and not
