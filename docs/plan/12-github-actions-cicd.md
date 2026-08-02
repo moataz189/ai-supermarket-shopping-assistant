@@ -2,6 +2,21 @@
 
 Spec milestone: M5 (starts). Depends on: CP9, CP11.
 
+## Note: early basic CI already exists
+
+A minimal `.github/workflows/ci.yml` was added ahead of this checkpoint (branch
+`feature/basic-ci-workflow`) so lint and test coverage run on every PR from the earliest
+checkpoints, instead of waiting until M5. It runs on an `ubuntu-latest` runner with Python
+3.11 and pip caching, installs deps via `make install`, lints via `make lint`, runs the full
+suite with coverage via `make coverage` (`pytest-cov`, terminal + `coverage.xml` output), and
+uploads `coverage.xml` to Codecov (`secrets.CODECOV_TOKEN`, upload failure fails the job). It
+has no Postgres service container, no Alembic migration check, no coverage threshold gate, and
+no CD job — this checkpoint is what extends that basic workflow with the real-PostgreSQL
+compatibility check (via the Alembic retrofit below) and adds the separate CD pipeline
+(`build-and-deploy-dev.yml`: container image builds, image publishing, `k8s/dev/` manifest
+tag bumps, and the ArgoCD-driven deployment those bumps trigger). Steps 8–10 below describe
+the fuller `ci.yml` this checkpoint should evolve the basic one into.
+
 ## Goal
 
 Wire up the CI pipeline (lint, full test suite including a real-PostgreSQL compatibility
