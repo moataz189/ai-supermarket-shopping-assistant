@@ -303,7 +303,7 @@ docker-compose.yml   # local dev stack — 4 backend-side services + web      (C
 
 - [x] CP1 — Project scaffolding & local dev environment
 - [x] CP2 — Data model, database layer & ingestion pipeline
-- [ ] CP3 — Supermarket-Data MCP server
+- [x] CP3 — Supermarket-Data MCP server
 - [ ] CP4 — LangGraph agent — grocery-list core flow
 - [ ] CP5 — FastAPI backend & React chat UI
 - [ ] CP6 — Recipe MCP server

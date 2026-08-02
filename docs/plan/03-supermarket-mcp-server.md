@@ -136,9 +136,9 @@ tests/mcp/test_supermarket_mcp_contract.py
 
 ## Testing Tasks
 
-- [ ] `search_product` only ever returns candidates for the requested retailer.
-- [ ] `get_product_price` returns correct `unit_price`, `store_id` (`413`/`39`), and `stale`.
-- [ ] Per-retailer `stale` values verified independent.
+- [x] `search_product` only ever returns candidates for the requested retailer.
+- [x] `get_product_price` returns correct `unit_price`, `store_id` (`413`/`39`), and `stale`.
+- [x] Per-retailer `stale` values verified independent.
 
 ## Acceptance Criteria
 
@@ -164,5 +164,5 @@ Keep this server "dumb": no cross-retailer comparison, no preference filtering, 
 
 ## Definition of Done
 
-- [ ] Both tools implemented and contract-tested.
-- [ ] `ruff check` clean, tests green, committed referencing CP3.
+- [x] Both tools implemented and contract-tested.
+- [x] `ruff check` clean, tests green, committed referencing CP3.
