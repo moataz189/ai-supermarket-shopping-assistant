@@ -63,6 +63,7 @@ function App() {
   }
 
   function handleSelectOption(turnId: string, optionId: string, label: string) {
+    if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
     const expectsComparison =
       turn?.role === 'assistant' && turn.status === 'done'
@@ -78,6 +79,7 @@ function App() {
   }
 
   function handleRetry(turnId: string) {
+    if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
     if (!turn || turn.role !== 'assistant' || turn.status !== 'error') return
     void attempt(turnId, turn.retryText, false, turn.retryDisplayText)
