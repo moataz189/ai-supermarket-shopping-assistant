@@ -3,19 +3,27 @@ from pathlib import Path
 
 from app.db.session import SessionLocal, init_db
 from app.ingestion.feeds import rami_levy, shufersal
-from app.ingestion.pipeline import ingest_retailer_feed
+from app.ingestion.pipeline import FeedType, ingest_retailer_feed
 
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "feeds"
 
 
 def load_fixtures() -> None:
+    """Load each retailer's latest PriceFull fixture (full catalog snapshot).
+
+    Incremental Price feeds are future work — see `FeedType`.
+    """
     init_db()
     with SessionLocal() as session:
         shufersal_xml = (FIXTURES_DIR / "shufersal_sample.xml").read_bytes()
-        ingest_retailer_feed(session, "shufersal", shufersal.parse(shufersal_xml))
+        ingest_retailer_feed(
+            session, "shufersal", shufersal.parse(shufersal_xml), feed_type=FeedType.PRICE_FULL
+        )
 
         rami_levy_xml = (FIXTURES_DIR / "rami_levy_sample.xml").read_bytes()
-        ingest_retailer_feed(session, "rami_levy", rami_levy.parse(rami_levy_xml))
+        ingest_retailer_feed(
+            session, "rami_levy", rami_levy.parse(rami_levy_xml), feed_type=FeedType.PRICE_FULL
+        )
 
 
 def main() -> None:

@@ -1,15 +1,48 @@
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 
 from sqlalchemy.orm import Session
 
 from app.db.models import RetailerFeedStatus, RetailerProduct
 
 
+class FeedType(str, Enum):
+    """Israeli price-transparency feed file types, per retailer/store.
+
+    PRICE_FULL: a complete snapshot of every product and its current regular
+    price; can rebuild the entire catalog from scratch. Treated as the
+    authoritative baseline — this is the only feed type the MVP ingests.
+
+    PRICE: a delta feed containing only products whose regular price changed
+    since the previous publication; intended to update an existing catalog
+    rather than rebuild it. `ParsedProduct`'s shape is already delta-shaped
+    (a bare list of changed items), so a future implementation only needs to
+    replace the branch below with an upsert instead of a full replace —
+    `ingest_retailer_feed` deliberately guards on `feed_type` today so that
+    seam is explicit rather than silently doing the wrong thing.
+    """
+
+    PRICE_FULL = "PriceFull"
+    PRICE = "Price"
+
+
 class FeedValidationError(Exception):
     pass
 
 
-def ingest_retailer_feed(session: Session, retailer: str, parsed_products: list) -> None:
+def ingest_retailer_feed(
+    session: Session,
+    retailer: str,
+    parsed_products: list,
+    feed_type: FeedType = FeedType.PRICE_FULL,
+) -> None:
+    if feed_type is not FeedType.PRICE_FULL:
+        raise NotImplementedError(
+            f"{retailer}: incremental {FeedType.PRICE.value} feed ingestion is not "
+            f"implemented yet; only {FeedType.PRICE_FULL.value} (full-catalog snapshot) "
+            "ingestion is supported."
+        )
+
     if not parsed_products:
         raise FeedValidationError(f"{retailer}: feed produced zero products, refusing to activate")
 

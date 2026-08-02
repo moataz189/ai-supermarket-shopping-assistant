@@ -22,3 +22,7 @@ node_modules/
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Git worktrees
+.worktrees/
+worktrees/
