@@ -14,6 +14,13 @@ UNIT_MAP = {
 
 
 def parse(xml_bytes: bytes) -> list[ParsedProduct]:
+    """Parse a Rami Levy price-transparency feed.
+
+    The MVP only ever calls this with the latest PriceFull file (full
+    catalog snapshot). The per-item XML schema is identical for the
+    incremental Price feed, so this function needs no changes to support it
+    later — only `app.ingestion.pipeline.ingest_retailer_feed` does.
+    """
     root = ET.fromstring(xml_bytes)
     store_id = root.findtext("StoreId")
     if store_id != ONLINE_STORE_IDS["rami_levy"]:

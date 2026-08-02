@@ -19,6 +19,49 @@ MCP server yet (CP3 consumes this layer).
 canonical-product/offer split. Each retailer's catalog is independent — a row is keyed by
 `(retailer, item_code)`. There is no cross-retailer product identity in the MVP.
 
+## Feed Types: PriceFull vs. Price
+
+Israeli price-transparency feeds are published as two distinct file types per retailer/store
+(see spec §3, Data source):
+
+- **`PriceFull`** — a complete snapshot of every product and its current regular price. It
+  can rebuild the entire retailer catalog from scratch and is treated as the **authoritative
+  baseline**.
+- **`Price`** — a delta/incremental feed containing only products whose regular price
+  changed since the previous publication. It's meant to *update* an existing catalog, not
+  rebuild it.
+
+**MVP scope**: ingestion only ever consumes the latest available `PriceFull` file — this is
+what `app/ingestion/run.py` loads and what the fixtures in `tests/fixtures/feeds/` represent.
+Incremental `Price` processing is **not implemented** and is explicitly future work, tracked
+by `app.ingestion.pipeline.FeedType`:
+
+```python
+class FeedType(str, Enum):
+    PRICE_FULL = "PriceFull"
+    PRICE = "Price"
+
+
+def ingest_retailer_feed(
+    session: Session,
+    retailer: str,
+    parsed_products: list,
+    feed_type: FeedType = FeedType.PRICE_FULL,
+) -> None:
+    if feed_type is not FeedType.PRICE_FULL:
+        raise NotImplementedError(...)  # Price (delta) support: future work
+    ...
+```
+
+This keeps the extension seam explicit rather than silent: `ingest_retailer_feed` takes a
+`feed_type` argument (defaulting to `PRICE_FULL`, today's only supported value) instead of
+assuming full-replace is the only possible semantics forever. Because each retailer's
+per-item feed schema (`ParsedProduct`) is identical between `PriceFull` and `Price` files —
+only *which* items are present differs — the parser modules (`feeds/shufersal.py`,
+`feeds/rami_levy.py`) need no changes to support `Price` feeds later; only
+`ingest_retailer_feed`'s `PRICE_FULL` branch (currently: delete-then-reinsert per retailer)
+needs a `PRICE` branch that upserts/merges instead of replacing.
+
 ## Deliverables
 
 - `python -m app.ingestion.run --source fixtures` loads sample data into local SQLite.
@@ -153,20 +196,39 @@ tests/ingestion/test_freshness.py
    `ONLINE_STORE_IDS` entry and raising `FeedValidationError` otherwise. Write
    `tests/ingestion/test_feed_parsers.py` (both retailers parse; corrupt/wrong-`StoreId`
    feeds raise).
-7. Write `app/ingestion/pipeline.py`:
+7. Write `app/ingestion/pipeline.py` (updated post-CP2 to add the `FeedType` seam described
+   above — see "Feed Types: PriceFull vs. Price"):
    ```python
    from datetime import datetime, timezone
+   from enum import Enum
 
    from sqlalchemy.orm import Session
 
    from app.db.models import RetailerFeedStatus, RetailerProduct
 
 
+   class FeedType(str, Enum):
+       PRICE_FULL = "PriceFull"
+       PRICE = "Price"
+
+
    class FeedValidationError(Exception):
        pass
 
 
-   def ingest_retailer_feed(session: Session, retailer: str, parsed_products: list) -> None:
+   def ingest_retailer_feed(
+       session: Session,
+       retailer: str,
+       parsed_products: list,
+       feed_type: FeedType = FeedType.PRICE_FULL,
+   ) -> None:
+       if feed_type is not FeedType.PRICE_FULL:
+           raise NotImplementedError(
+               f"{retailer}: incremental {FeedType.PRICE.value} feed ingestion is not "
+               f"implemented yet; only {FeedType.PRICE_FULL.value} (full-catalog snapshot) "
+               "ingestion is supported."
+           )
+
        if not parsed_products:
            raise FeedValidationError(f"{retailer}: feed produced zero products, refusing to activate")
 
@@ -208,6 +270,9 @@ tests/ingestion/test_freshness.py
 - [x] `test_feed_parsers.py` — both retailers parse; corrupt/wrong-`StoreId` raises.
 - [x] `test_pipeline_atomic_swap.py` — failed/zero-row load never corrupts existing data.
 - [x] `test_freshness.py` — staleness threshold logic.
+- [x] `test_pipeline_atomic_swap.py` (added post-CP2) — `ingest_retailer_feed` defaults to
+      and accepts `FeedType.PRICE_FULL`; `FeedType.PRICE` raises `NotImplementedError` without
+      mutating existing data.
 
 ## Acceptance Criteria
 
@@ -224,6 +289,15 @@ rejected without side effects; the repository only ever returns one retailer's o
 CP3's MCP server calls `ProductRepository` directly — no cross-retailer query lives here or
 there. Real live ingestion (CronJob) is CP11; this checkpoint only proves the pipeline
 against fixtures.
+
+Incremental `Price` (delta) feed ingestion is intentionally **not implemented** — see "Feed
+Types: PriceFull vs. Price" above. `FeedType.PRICE` raising `NotImplementedError` is
+deliberate future work, not a gap in this checkpoint.
+
+**Bonus, post-MVP only**: promotion feeds (`PromoFull`/`Promo`) are a separate concern from
+pricing and are entirely out of scope here and for the whole MVP. See "Future Enhancements"
+in `docs/plan.md` — a dedicated implementation plan for promotion support should only be
+written after all 16 checkpoints are complete.
 
 ## Definition of Done
 
