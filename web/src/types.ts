@@ -17,6 +17,7 @@ export type Turn =
       errorMessage: string
       retryText: string
       retryDisplayText: string
+      requestThreadId: string | null
     }
 
 export type Phase = 'hero' | 'chat'

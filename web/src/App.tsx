@@ -18,14 +18,20 @@ function App() {
 
   const isBusy = turns.some((t) => t.role === 'assistant' && t.status === 'loading')
 
-  async function attempt(loadingId: string, apiText: string, expectsComparison: boolean, retryDisplayText: string) {
+  async function attempt(
+    loadingId: string,
+    apiText: string,
+    expectsComparison: boolean,
+    retryDisplayText: string,
+    requestThreadId: string | null,
+  ) {
     setTurns((prev) =>
       prev.map((t) =>
         t.id === loadingId ? { id: loadingId, role: 'assistant', status: 'loading', expectsComparison } : t,
       ),
     )
     try {
-      const response = await postChat(threadId, apiText)
+      const response = await postChat(requestThreadId, apiText)
       setThreadId(response.thread_id)
       setTurns((prev) =>
         prev.map((t) => (t.id === loadingId ? { id: loadingId, role: 'assistant', status: 'done', response } : t)),
@@ -42,6 +48,7 @@ function App() {
                 errorMessage,
                 retryText: apiText,
                 retryDisplayText,
+                requestThreadId,
               }
             : t,
         ),
@@ -49,17 +56,28 @@ function App() {
     }
   }
 
-  function sendMessage(displayText: string, apiText: string, expectsComparison: boolean) {
+  function isAwaitingAnswer(): boolean {
+    const lastDone = [...turns].reverse().find((t) => t.role === 'assistant' && t.status === 'done')
+    return Boolean(lastDone && lastDone.role === 'assistant' && lastDone.status === 'done' && lastDone.response.clarification)
+  }
+
+  function sendMessage(
+    displayText: string,
+    apiText: string,
+    expectsComparison: boolean,
+    requestThreadId: string | null,
+  ) {
     const userTurn: Turn = { id: newId(), role: 'user', text: displayText }
     const loadingId = newId()
     const loadingTurn: Turn = { id: loadingId, role: 'assistant', status: 'loading', expectsComparison }
     setTurns((prev) => [...prev, userTurn, loadingTurn])
     setPhase('chat')
-    void attempt(loadingId, apiText, expectsComparison, displayText)
+    void attempt(loadingId, apiText, expectsComparison, displayText, requestThreadId)
   }
 
   function handleSend(text: string) {
-    sendMessage(text, text, false)
+    const requestThreadId = isAwaitingAnswer() ? threadId : null
+    sendMessage(text, text, false, requestThreadId)
   }
 
   function handleSelectOption(turnId: string, optionId: string, label: string) {
@@ -75,23 +93,23 @@ function App() {
         t.id === turnId && t.role === 'assistant' && t.status === 'done' ? { ...t, answeredOptionId: optionId } : t,
       ),
     )
-    sendMessage(label, optionId, expectsComparison)
+    sendMessage(label, optionId, expectsComparison, threadId)
   }
 
   function handleRetry(turnId: string) {
     if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
     if (!turn || turn.role !== 'assistant' || turn.status !== 'error') return
-    void attempt(turnId, turn.retryText, false, turn.retryDisplayText)
+    void attempt(turnId, turn.retryText, false, turn.retryDisplayText, turn.requestThreadId)
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50">
+    <div className="flex h-screen flex-col overflow-hidden bg-zinc-50">
       <NavBar />
       <AnimatePresence>{phase === 'hero' && <Hero onSend={handleSend} disabled={isBusy} />}</AnimatePresence>
       {phase === 'chat' && (
-        <div className="flex flex-1 flex-col">
-          <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             <MessageThread turns={turns} onSelectOption={handleSelectOption} onRetry={handleRetry} />
           </div>
           <div className="sticky bottom-0 border-t border-zinc-200 bg-zinc-50/95 px-4 py-4 backdrop-blur">
