@@ -203,10 +203,19 @@ web/src/components/RetailerCartsView.tsx
 
 ## Testing Tasks
 
-- [ ] `test_grocery_list_returns_both_carts_and_awaits_choice` passes.
-- [ ] `test_ambiguous_item_then_resumes` passes.
+- [x] `test_grocery_list_returns_both_carts_and_awaits_choice` passes.
+- [x] `test_ambiguous_item_then_resumes` passes.
 - [ ] Manual UI walkthrough: happy path, clarification, over-budget, decline all render
-      correctly.
+      correctly. **Partially verified, left unchecked.** All four flows (happy path,
+      ambiguous-item clarification, over-budget trade-off, decline) were verified against
+      the real `/chat` HTTP endpoint — wired to the real `McpSupermarketDataClient` talking
+      to a live `supermarket_mcp` server over actual streamable-HTTP, through the real Vite
+      dev-server proxy at `/api/chat`, with `thread_id` resume confirmed at each step (only
+      the LLM was a fake, since no AWS Bedrock credentials are available in this
+      environment). `npm run build` and `tsc -b` also passed, so the UI compiles cleanly
+      against this exact verified contract. What's *not* verified: actually opening the
+      rendered page in a browser and clicking through it — no browser-automation tool was
+      available in this environment to do that visually.
 
 ## Acceptance Criteria
 
@@ -232,7 +241,34 @@ behind `get_agent_app` grows a branch. CP8 extends the graph past `choose_retail
 
 ## Definition of Done
 
-- [ ] Backend: schemas, dependencies, route implemented; both endpoint tests pass; `ruff
+- [x] Backend: schemas, dependencies, route implemented; both endpoint tests pass; `ruff
       check` clean.
-- [ ] Frontend: chat UI built and manually verified for all four flows above.
-- [ ] Committed with message referencing CP5. **M1 milestone complete at this point.**
+- [ ] Frontend: chat UI built; **manual verification partial, left unchecked** — see the
+      Testing Tasks note above (all four flows verified end-to-end at the HTTP/API layer the
+      UI consumes, plus a clean `npm run build`; no browser was available to visually click
+      through the rendered page in this environment).
+- [x] Committed with message referencing CP5. **M1 milestone complete at this point.**
+
+### Deviations from the plan
+
+- **Bug fix in `app/agent/mcp_clients.py` (CP4 code, outside this checkpoint's declared
+  "Files to Modify").** Running the real local stack (per this checkpoint's own local-run
+  instructions) surfaced a real bug: `get_product_price`'s tool signature is
+  `ProductPriceResponse | None`, and FastMCP wraps `Optional[BaseModel]`-typed tool results
+  in a `{"result": ...}` envelope inside `structuredContent` — unlike `search_product`'s
+  plain, non-optional `SearchProductResponse`, which comes back unwrapped. CP4's
+  `McpSupermarketDataClient.get_product_price` returned that raw envelope directly, so every
+  cart line's `unit_price`/`subtotal` lookup crashed with `KeyError: 'unit_price'` against
+  a real server — invisible to CP4's fakes-only tests, since `FakeSupermarketDataClient`
+  never goes through `structuredContent` unwrapping at all. Fixed by unwrapping the
+  `"result"` key; re-verified against the real `supermarket_mcp` server afterward. This was
+  necessary for this checkpoint's own "running entirely locally" acceptance criterion to be
+  true, not optional cleanup.
+- `pyproject.toml` gained a `[tool.ruff.lint.flake8-bugbear]` section with
+  `extend-immutable-calls = ["fastapi.Depends"]`. Ruff's bugbear rule `B008` flags
+  `Depends(...)` in a function's default arguments — which is exactly FastAPI's documented
+  dependency-injection pattern, used verbatim from this plan's own `chat.py` example. This is
+  the standard, documented fix (an exemption list), not a workaround.
+- The Vite scaffold (`npm create vite@latest . -- --template react-ts`) now ships `oxlint`
+  instead of ESLint by default; kept it as-is (`npm run lint` passes with zero findings)
+  rather than swapping in a linter the plan didn't specify.
