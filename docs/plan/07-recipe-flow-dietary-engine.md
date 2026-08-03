@@ -259,10 +259,16 @@ tests/agent/test_dietary_substitution_flow.py
 
 ## Testing Tasks
 
-- [ ] Dietary rule engine unit tests.
-- [ ] Recipe happy path and ambiguity interrupt/resume (fakes only).
-- [ ] Dietary substitution success case and no-substitute `dietary_conflict` case.
-- [ ] CP4's grocery-list tests still pass unmodified (regression check).
+- [x] Dietary rule engine unit tests.
+- [x] Recipe happy path and ambiguity interrupt/resume (fakes only).
+- [x] Dietary substitution success case and no-substitute `dietary_conflict` case.
+- [x] CP4's grocery-list tests still pass unmodified (regression check) — confirmed via
+      `git diff --stat` showing zero diff on every CP4/CP5 test file.
+- [x] Additional (beyond the plan's minimum): recipe-query translation tests (Hebrew/Arabic
+      → English), display-localization tests (canonical English preserved internally,
+      localized display fields for the user, safe fallback to English when unmapped), and an
+      explicit "exactly one exact title match" vs. "multiple exact/no exact match" ambiguity
+      test, per the implementation brief's refinements.
 
 ## Acceptance Criteria
 
@@ -286,6 +292,47 @@ and in each retailer's own cart-building, never once globally.
 
 ## Definition of Done
 
-- [ ] All new nodes and dietary integration implemented; CP4 tests still pass unmodified.
-- [ ] All new tests pass; `ruff check` clean.
-- [ ] Committed with message referencing CP7. **M2 milestone complete at this point.**
+- [x] All new nodes and dietary integration implemented; CP4 tests still pass unmodified.
+- [x] All new tests pass; `ruff check` clean.
+- [x] Committed with message referencing CP7. **M2 milestone complete at this point.**
+
+### Deviations from the plan (intentional, required to satisfy the implementation brief)
+
+- **`request_type` defaults to `"grocery_list"`** on `ParsedRequestSchema` (plan showed it as a
+  required `Literal` with no default). Required so CP4's existing
+  `ParsedRequestSchema(items=[...])` call sites keep working — otherwise the "CP4 tests pass
+  unmodified" requirement and the plan's own literal schema would directly contradict each
+  other.
+- **`build_graph` signature is `build_graph(client, llm, checkpointer, recipe_client=None)`**,
+  not the plan's `build_graph(supermarket_client, recipe_client, llm, checkpointer)`. Keeping
+  the original CP4 parameter order and adding `recipe_client` as a trailing optional keyword
+  (used only on the recipe branch, reached solely when `request_type == "recipe"`) means every
+  existing CP4/CP5 test's `build_graph(client, llm, MemorySaver())` call works completely
+  unmodified — verified via `git diff --stat` showing zero changes to any CP4/CP5 test file.
+  Production wiring (`app/api/dependencies.py`) always passes a real `McpRecipeClient`
+  explicitly.
+- **New module `app/agent/i18n.py`** (not in the plan's "Files to Create" list) houses
+  `detect_language`, `translate_recipe_query`, `localize_title`, and `localize_ingredient_name`
+  — a small deterministic phrase-table translator (mirrors `app/dietary/rules.py`'s
+  keyword-matching approach), added to satisfy the brief's pre-Spoonacular query-translation
+  and post-Spoonacular display-localization requirements. MVP scope: covers the brief's given
+  Hebrew/Arabic examples plus the CP6 fixture's ingredient vocabulary; falls back to the
+  original English text for anything unmapped rather than failing the flow. Revisit only if
+  CP15 hardening surfaces concrete gaps (same acceptance bar as the dietary rules engine).
+- **`app/agent/state.py` modified** (not listed in the plan's "Files to Modify") to add
+  `request_type`/`recipe_query`/`servings`/`language` to `ParsedRequest`,
+  `display_name`/`unit` to `ParsedItem`, and new `recipe_candidates`/`recipe_ambiguous`/
+  `chosen_recipe_id`/`chosen_recipe`/`dietary_conflicts` fields to `AgentState` — necessary
+  scaffolding for the recipe branch and dietary substitution tracking that the plan's file
+  list omitted.
+- **Recipe ambiguity is stricter than the plan's sample code**: auto-select requires
+  exactly one exact normalized title match (`len(exact_matches) == 1`), not "at least one"
+  (the plan's `not any(...)` formula), per the brief's explicit refinement #3.
+- **`chosen_recipe["servings"]`** is populated from `get_recipe_ingredients`'s response
+  `servings` field, which equals the recipe's true original serving count whenever the user
+  didn't request a serving override — matching the brief's "original servings when available"
+  wording without adding an extra `get_recipe` call/node beyond the plan's three new nodes.
+- **No language translation inside CP6/Recipe MCP** — `search_recipes(query)` still forwards
+  the query to Spoonacular exactly as received (unchanged from CP6); all translation and
+  localization is deterministic Python logic in `app/agent/i18n.py`, called from
+  `parse_request.py`, `search_recipes.py`, and `get_recipe_ingredients.py` only.

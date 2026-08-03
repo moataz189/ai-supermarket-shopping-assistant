@@ -1,12 +1,23 @@
 from app.agent.state import AgentState
+from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 RETAILERS = ["shufersal", "rami_levy"]
 
 
-async def _candidates_by_retailer(client, name: str) -> dict[str, list[dict]]:
+async def _candidates_by_retailer(
+    client, name: str, forbidden: set[str]
+) -> dict[str, list[dict]]:
     """Keeps each retailer's candidates separate — never merged away — so the user can
-    see which retailer actually carries which option before choosing (spec §3)."""
-    return {retailer: await client.search_product(name, retailer) for retailer in RETAILERS}
+    see which retailer actually carries which option before choosing (spec §3). Candidates
+    that violate `forbidden` dietary tags are filtered out here too, so a filtered-out option
+    never appears in the per-retailer breakdown shown to the user (CP7)."""
+    result = {}
+    for retailer in RETAILERS:
+        candidates = await client.search_product(name, retailer)
+        if forbidden:
+            candidates = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+        result[retailer] = candidates
+    return result
 
 
 def _unique_labels(candidates_by_retailer: dict[str, list[dict]]) -> list[dict]:
@@ -50,18 +61,30 @@ def make_resolve_items(client):
         parsed = state["parsed_request"]
         item_candidates = dict(state.get("item_candidates", {}))
         resolved_choices = dict(state.get("resolved_choices", {}))
+        dietary_conflicts = list(state.get("dietary_conflicts", []))
         ambiguous_item = None
+        forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
 
         for item in parsed["items"]:
             name = item["name"]
-            if name in resolved_choices:
+            if name in resolved_choices or name in dietary_conflicts:
                 continue
             if name not in item_candidates:
-                item_candidates[name] = await _candidates_by_retailer(client, name)
+                item_candidates[name] = await _candidates_by_retailer(client, name, forbidden)
             by_retailer = item_candidates[name]
+            unique = _unique_labels(by_retailer)
+
+            if not unique and forbidden:
+                sub_query = find_substitute_query(name, forbidden)
+                if sub_query is None:
+                    dietary_conflicts.append(name)
+                    continue
+                by_retailer = await _candidates_by_retailer(client, sub_query, forbidden)
+                item_candidates[name] = by_retailer
+                unique = _unique_labels(by_retailer)
 
             label, still_ambiguous = await _resolve_item(
-                name, _unique_labels(by_retailer),
+                name, unique,
                 parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
             )
             if label is not None:
@@ -73,6 +96,7 @@ def make_resolve_items(client):
             "item_candidates": item_candidates,
             "resolved_choices": resolved_choices,
             "pending_clarification_item": ambiguous_item,
+            "dietary_conflicts": dietary_conflicts,
         }
 
     return resolve_items

@@ -3,15 +3,30 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.nodes.build_retailer_cart import make_build_retailer_cart
 from app.agent.nodes.choose_retailer import choose_retailer
 from app.agent.nodes.finalize import finalize
+from app.agent.nodes.get_recipe_ingredients import make_get_recipe_ingredients
 from app.agent.nodes.parse_request import make_parse_request
 from app.agent.nodes.resolve_ambiguity import resolve_ambiguity, route_after_resolve
 from app.agent.nodes.resolve_items import make_resolve_items
+from app.agent.nodes.resolve_recipe_ambiguity import resolve_recipe_ambiguity
+from app.agent.nodes.search_recipes import make_search_recipes, route_after_search_recipes
 from app.agent.state import AgentState
 
 
-def build_graph(client, llm, checkpointer):
+def route_after_parse(state: AgentState) -> str:
+    if state["parsed_request"]["request_type"] == "recipe":
+        return "search_recipes"
+    return "resolve_items"
+
+
+def build_graph(client, llm, checkpointer, recipe_client=None):
+    """`recipe_client` is optional so grocery-list-only callers (including CP4's existing
+    tests) don't need to supply one — it's only ever used on the recipe branch, reached
+    solely when `request_type == "recipe"`."""
     graph = StateGraph(AgentState)
     graph.add_node("parse_request", make_parse_request(llm))
+    graph.add_node("search_recipes", make_search_recipes(recipe_client))
+    graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
+    graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
     graph.add_node("resolve_items", make_resolve_items(client))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)
     graph.add_node("build_shufersal_cart", make_build_retailer_cart("shufersal", client))
@@ -20,7 +35,16 @@ def build_graph(client, llm, checkpointer):
     graph.add_node("finalize", finalize)
 
     graph.add_edge(START, "parse_request")
-    graph.add_edge("parse_request", "resolve_items")
+    graph.add_conditional_edges(
+        "parse_request", route_after_parse, ["search_recipes", "resolve_items"]
+    )
+    graph.add_conditional_edges(
+        "search_recipes",
+        route_after_search_recipes,
+        ["resolve_recipe_ambiguity", "get_recipe_ingredients"],
+    )
+    graph.add_edge("resolve_recipe_ambiguity", "get_recipe_ingredients")
+    graph.add_edge("get_recipe_ingredients", "resolve_items")
     graph.add_conditional_edges(
         "resolve_items", route_after_resolve, ["resolve_ambiguity", "build_shufersal_cart"]
     )
