@@ -1,4 +1,5 @@
 from app.agent.state import AgentState
+from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 
 async def _suggest_trade_off(client, retailer: str, most_expensive: dict) -> dict | None:
@@ -21,6 +22,8 @@ async def _suggest_trade_off(client, retailer: str, most_expensive: dict) -> dic
 def make_build_retailer_cart(retailer: str, client):
     async def build_cart(state: AgentState) -> AgentState:
         parsed = state["parsed_request"]
+        forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
+        dietary_conflicts = state.get("dietary_conflicts", [])
         lines: list[dict] = []
         missing: list[dict] = []
 
@@ -28,8 +31,15 @@ def make_build_retailer_cart(retailer: str, client):
             name = item["name"]
             label = state["resolved_choices"].get(name, name)
             candidates = await client.search_product(label, retailer)
+            if forbidden:
+                compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+                if not compliant:
+                    sub_query = find_substitute_query(name, forbidden)
+                    compliant = await client.search_product(sub_query, retailer) if sub_query else []
+                candidates = compliant
             if not candidates:
-                missing.append({"name": name, "reason": "not_found"})
+                reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
+                missing.append({"name": name, "reason": reason})
                 continue
 
             best = min(candidates, key=lambda c: c["price"])

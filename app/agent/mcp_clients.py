@@ -33,3 +33,37 @@ class McpSupermarketDataClient:
         # `SearchProductResponse`, which comes back unwrapped (see `search_product` above).
         result = await self._call("get_product_price", {"retailer": retailer, "item_code": item_code})
         return (result or {}).get("result")
+
+
+class RecipeClient(Protocol):
+    async def search_recipes(self, query: str) -> list[dict]: ...
+    async def get_recipe(self, recipe_id: int) -> dict | None: ...
+    async def get_recipe_ingredients(self, recipe_id: int, servings: int | None = None) -> dict | None: ...
+
+
+class McpRecipeClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url  # e.g. "http://recipe-mcp:8002/mcp"
+
+    async def _call(self, tool_name: str, arguments: dict) -> dict | None:
+        async with (
+            streamablehttp_client(self.base_url) as (read, write, _),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+            return result.structuredContent
+
+    async def search_recipes(self, query: str) -> list[dict]:
+        result = await self._call("search_recipes", {"query": query})
+        return (result or {}).get("recipes", [])
+
+    async def get_recipe(self, recipe_id: int) -> dict | None:
+        # `get_recipe` returns a plain `RecipeDetail` (no union), so — like
+        # `search_product` above — it comes back unwrapped in `structuredContent`.
+        return await self._call("get_recipe", {"recipe_id": recipe_id})
+
+    async def get_recipe_ingredients(self, recipe_id: int, servings: int | None = None) -> dict | None:
+        return await self._call(
+            "get_recipe_ingredients", {"recipe_id": recipe_id, "servings": servings}
+        )
