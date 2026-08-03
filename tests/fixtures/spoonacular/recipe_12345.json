@@ -1,0 +1,32 @@
+{
+  "id": 654959,
+  "title": "Shakshuka",
+  "servings": 4,
+  "readyInMinutes": 30,
+  "extendedIngredients": [
+    {
+      "id": 1123,
+      "name": "eggs",
+      "amount": 4.0,
+      "unit": "large"
+    },
+    {
+      "id": 11529,
+      "name": "tomatoes",
+      "amount": 400.0,
+      "unit": "g"
+    },
+    {
+      "id": 11282,
+      "name": "onion",
+      "amount": 1.0,
+      "unit": "medium"
+    },
+    {
+      "id": 2001,
+      "name": "olive oil",
+      "amount": 2.0,
+      "unit": "tbsp"
+    }
+  ]
+}
