@@ -187,13 +187,18 @@ checkpoint.
 
 ## Testing Tasks
 
-- [ ] `search_recipes` contract test.
-- [ ] `get_recipe` contract test.
-- [ ] `get_recipe_ingredients` scaling test (doubled servings → doubled amounts) and
+- [x] `search_recipes` contract test.
+- [x] `get_recipe` contract test.
+- [x] `get_recipe_ingredients` scaling test (doubled servings → doubled amounts) and
       default-servings test.
-- [ ] Confirm zero network calls occur when running this test file (e.g. by running with
+- [x] Confirm zero network calls occur when running this test file (e.g. by running with
       network access disabled/mocked at the socket level, or by code review confirming only
-      `FakeSpoonacularClient` is used).
+      `FakeSpoonacularClient` is used). Enforced at runtime via an autouse fixture that
+      monkeypatches `httpx.Client.send` to raise if invoked, in addition to only ever
+      constructing `FakeSpoonacularClient` in tests.
+- [x] Additional (beyond the plan's minimum): contract tests for rejecting non-positive
+      `servings` and non-positive `original_servings`, per the servings-validation
+      improvement requested alongside this checkpoint.
 
 ## Acceptance Criteria
 
@@ -215,6 +220,40 @@ server should be needed for that.
 
 ## Definition of Done
 
-- [ ] All three tools implemented and contract-tested against fixtures.
-- [ ] Scaling math verified exact.
-- [ ] `ruff check` clean, tests green, committed referencing CP6.
+- [x] All three tools implemented and contract-tested against fixtures.
+- [x] Scaling math verified (via `pytest.approx()` rather than exact float equality — see
+      "Deviations from the plan" below).
+- [x] `ruff check` clean, tests green, committed referencing CP6.
+
+### Deviations from the plan (intentional, requested by the implementation brief)
+
+- **Lazy Spoonacular initialization**: `mcp_servers/recipe_mcp/server.py` no longer
+  instantiates `SpoonacularClient` at module import time (no `mcp = create_server(SpoonacularClient())`
+  at module scope). The real client is only constructed inside `if __name__ == "__main__":`,
+  so importing `server.py` never requires `SPOONACULAR_API_KEY` and never opens an HTTP
+  client or touches the network. `create_server(FakeSpoonacularClient())` works with zero
+  environment variables set.
+- **Servings validation**: `get_recipe_ingredients` uses
+  `original_servings if servings is None else servings` (not `servings or original_servings`,
+  which would incorrectly treat `servings=0` as "use the default"). Both `servings <= 0` and
+  `original_servings <= 0` raise an explicit `ValueError` (surfaced to MCP clients as
+  `ToolError`) instead of silently falling back to a `1.0` ratio.
+- **Floating-point assertions**: the scaling contract test uses `pytest.approx()` instead of
+  exact equality, since float multiplication is not guaranteed to be bit-exact.
+- **Fixture-driven IDs**: `tests/mcp/fakes.py`'s `FakeSpoonacularClient` indexes recipes by
+  the `id` field read from the fixture JSON (not a hardcoded literal), and the contract tests
+  read the fixture's `id`/`servings`/`extendedIngredients` directly rather than hardcoding
+  `12345` anywhere. (The fixture *filename* is `recipe_12345.json` per the plan's file list;
+  the `id` inside it is `654959`, matching the search fixture — this is deliberate, so nothing
+  in the implementation or tests can rely on the filename's number.)
+- **HTTP client hygiene**: `SpoonacularClient` reuses a single `httpx.Client` (constructed
+  once, injected or lazily created), calls `raise_for_status()` on every request, and has an
+  explicit `timeout` configured.
+- **No translation/normalization**: `search_recipes(query)` forwards the query to Spoonacular
+  as-is; no language translation or normalization is performed in CP6 (deferred to CP7, which
+  owns query normalization before calling this tool).
+
+No scope was dropped from the original plan; the above are additive/corrective refinements
+requested alongside the checkpoint. The only item explicitly deferred (per the plan's own
+"Risks" section, not by this implementation) is hardening against additional Spoonacular
+response edge cases (missing `amount`, non-numeric units), tracked for CP15.
