@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "id": 654959,
+      "title": "Shakshuka",
+      "image": "https://img.spoonacular.com/recipes/654959-312x231.jpg",
+      "imageType": "jpg"
+    },
+    {
+      "id": 640334,
+      "title": "Easy Shakshuka",
+      "image": "https://img.spoonacular.com/recipes/640334-312x231.jpg",
+      "imageType": "jpg"
+    }
+  ],
+  "offset": 0,
+  "number": 5,
+  "totalResults": 2
+}
