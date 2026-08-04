@@ -59,6 +59,20 @@ class FakeSupermarketDataClient:
         return self._prices.get((retailer, item_code))
 
 
+class FakeRetailerCartClient:
+    """In-memory stand-in for McpRetailerCartClient. Never launches a browser — just
+    records each call and returns a canned result, so graph tests can assert *whether* and
+    *with what* the Retailer-Cart MCP would have been invoked."""
+
+    def __init__(self, result: dict):
+        self._result = result
+        self.calls: list[tuple[str, list[dict]]] = []
+
+    async def prepare_retailer_cart(self, retailer: str, items: list[dict]) -> dict:
+        self.calls.append((retailer, items))
+        return self._result
+
+
 class FakeLLM:
     """Stand-in for ChatBedrockConverse. Returns a canned ParsedRequestSchema regardless
     of input, mimicking the `.with_structured_output(...).ainvoke(...)` call chain."""

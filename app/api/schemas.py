@@ -42,10 +42,29 @@ class RetailerCart(BaseModel):
     trade_off_suggestions: list[dict]
 
 
+class RetailerCartItemResult(BaseModel):
+    name: str
+    item_code: str
+    status: str
+    reason: str | None = None
+    matched_by: str | None = None
+    quantity_confirmed: float | None = None
+
+
+class RetailerCartResult(BaseModel):
+    retailer: str
+    added: list[RetailerCartItemResult]
+    failed: list[RetailerCartItemResult]
+    blocked: bool
+    blocked_reason: str | None = None
+    cart_url: str | None = None
+
+
 class ChatResponse(BaseModel):
     thread_id: str
     status: str
     clarification: Clarification | None = None
     carts: dict[str, RetailerCart] | None = None
     chosen_retailer: str | None = None
+    retailer_cart_result: RetailerCartResult | None = None
     warnings: list[dict] = []

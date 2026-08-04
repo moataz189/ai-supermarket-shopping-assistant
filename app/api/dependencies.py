@@ -4,7 +4,7 @@ from functools import lru_cache
 from app.agent.checkpointer import get_checkpointer
 from app.agent.graph import build_graph
 from app.agent.llm import get_llm
-from app.agent.mcp_clients import McpRecipeClient, McpSupermarketDataClient
+from app.agent.mcp_clients import McpRecipeClient, McpRetailerCartClient, McpSupermarketDataClient
 
 
 @lru_cache
@@ -15,4 +15,13 @@ def get_agent_app():
     recipe_client = McpRecipeClient(
         base_url=os.environ.get("RECIPE_MCP_URL", "http://localhost:8002/mcp")
     )
-    return build_graph(client, get_llm(), get_checkpointer(), recipe_client=recipe_client)
+    retailer_cart_client = McpRetailerCartClient(
+        base_url=os.environ.get("RETAILER_CART_MCP_URL", "http://localhost:8003/mcp")
+    )
+    return build_graph(
+        client,
+        get_llm(),
+        get_checkpointer(),
+        recipe_client=recipe_client,
+        retailer_cart_client=retailer_cart_client,
+    )

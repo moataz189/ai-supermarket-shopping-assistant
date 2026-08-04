@@ -11,5 +11,9 @@ def finalize(state):
         "status": "partial_success" if warnings else "success",
         "warnings": warnings,
         "clarification": None,
-        "final_result": {"carts": carts, "chosen_retailer": state.get("chosen_retailer")},
+        "final_result": {
+            "carts": carts,
+            "chosen_retailer": state.get("chosen_retailer"),
+            "retailer_cart_result": state.get("retailer_cart_result"),
+        },
     }
