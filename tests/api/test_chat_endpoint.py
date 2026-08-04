@@ -5,15 +5,15 @@ from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
 from app.api.dependencies import get_agent_app
 from app.api.main import app
-from tests.agent.fakes import FakeLLM, FakeSupermarketDataClient
+from tests.agent.fakes import FakeLLM, FakeRetailerCartClient, FakeSupermarketDataClient
 
 client = TestClient(app)
 
 
-def _build_fake_app(items, candidates, prices, budget=None):
+def _build_fake_app(items, candidates, prices, budget=None, retailer_cart_client=None):
     llm = FakeLLM(ParsedRequestSchema(items=items, budget=budget))
     fake_client = FakeSupermarketDataClient(candidates, prices)
-    return build_graph(fake_client, llm, MemorySaver())
+    return build_graph(fake_client, llm, MemorySaver(), retailer_cart_client=retailer_cart_client)
 
 
 def test_grocery_list_returns_both_carts_and_awaits_choice():
@@ -94,5 +94,76 @@ def test_ambiguous_item_then_resumes():
         carts = resume_body["clarification"]["carts"]
         assert carts["shufersal"]["items"][0]["item_code"] == "S-TNUVA"
         assert carts["rami_levy"]["items"][0]["item_code"] == "R-TNUVA"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_choosing_retailer_invokes_playwright():
+    candidates = {
+        ("milk", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],
+        ("Milk 3%", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],
+        ("milk", "rami_levy"): [{"item_code": "R-MILK", "name": "Milk 3%", "price": 5.5}],
+        ("Milk 3%", "rami_levy"): [{"item_code": "R-MILK", "name": "Milk 3%", "price": 5.5}],
+    }
+    prices = {
+        ("shufersal", "S-MILK"): {"unit_price": 6.0, "price": 6.0},
+        ("rami_levy", "R-MILK"): {"unit_price": 5.5, "price": 5.5},
+    }
+    canned_result = {
+        "retailer": "shufersal",
+        "added": [
+            {
+                "name": "milk",
+                "item_code": "S-MILK",
+                "status": "added",
+                "reason": None,
+                "matched_by": "item_code",
+                "quantity_confirmed": 1,
+            }
+        ],
+        "failed": [],
+        "blocked": False,
+        "blocked_reason": None,
+        "cart_url": "https://www.shufersal.co.il/online/he/cart",
+    }
+    retailer_cart_client = FakeRetailerCartClient(canned_result)
+    fake_app = _build_fake_app(["milk"], candidates, prices, retailer_cart_client=retailer_cart_client)
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "milk"})
+        thread_id = response.json()["thread_id"]
+
+        resume = client.post("/chat", json={"thread_id": thread_id, "message": "shufersal"})
+        assert resume.status_code == 200
+        resume_body = resume.json()
+        assert resume_body["retailer_cart_result"] == canned_result
+        assert len(retailer_cart_client.calls) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_declining_skips_playwright():
+    candidates = {
+        ("milk", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],
+        ("Milk 3%", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],
+        ("milk", "rami_levy"): [{"item_code": "R-MILK", "name": "Milk 3%", "price": 5.5}],
+        ("Milk 3%", "rami_levy"): [{"item_code": "R-MILK", "name": "Milk 3%", "price": 5.5}],
+    }
+    prices = {
+        ("shufersal", "S-MILK"): {"unit_price": 6.0, "price": 6.0},
+        ("rami_levy", "R-MILK"): {"unit_price": 5.5, "price": 5.5},
+    }
+    retailer_cart_client = FakeRetailerCartClient({"retailer": "shufersal"})
+    fake_app = _build_fake_app(["milk"], candidates, prices, retailer_cart_client=retailer_cart_client)
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "milk"})
+        thread_id = response.json()["thread_id"]
+
+        resume = client.post("/chat", json={"thread_id": thread_id, "message": "decline"})
+        assert resume.status_code == 200
+        resume_body = resume.json()
+        assert resume_body["retailer_cart_result"] is None
+        assert retailer_cart_client.calls == []
     finally:
         app.dependency_overrides.clear()

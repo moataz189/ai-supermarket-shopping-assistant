@@ -7,6 +7,7 @@ import { TypingIndicator } from './TypingIndicator'
 import { ClarificationCard } from '@/components/clarification/ClarificationCard'
 import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
+import { RetailerCartResultView } from '@/components/RetailerCartResultView'
 
 interface MessageThreadProps {
   turns: Turn[]
@@ -100,6 +101,11 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
                 <div className="flex justify-start">
                   <RetailerComparison carts={response.carts} chosenRetailer={response.chosen_retailer} />
                 </div>
+                {response.retailer_cart_result && (
+                  <div className="flex justify-start">
+                    <RetailerCartResultView result={response.retailer_cart_result} />
+                  </div>
+                )}
                 {response.warnings.length > 0 && (
                   <AssistantBubble>
                     <ul className="list-disc space-y-1 pl-4 text-sm">

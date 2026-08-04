@@ -32,12 +32,31 @@ export interface RetailerCart {
   savings_vs_other?: number
 }
 
+export interface RetailerCartItemResult {
+  name: string
+  item_code: string
+  status: string
+  reason?: string | null
+  matched_by?: string | null
+  quantity_confirmed?: number | null
+}
+
+export interface RetailerCartResult {
+  retailer: string
+  added: RetailerCartItemResult[]
+  failed: RetailerCartItemResult[]
+  blocked: boolean
+  blocked_reason?: string | null
+  cart_url?: string | null
+}
+
 export interface ChatResponse {
   thread_id: string
   status: string
   clarification?: Clarification | null
   carts?: Record<string, RetailerCart> | null
   chosen_retailer?: string | null
+  retailer_cart_result?: RetailerCartResult | null
   warnings: Record<string, unknown>[]
 }
 
