@@ -67,3 +67,26 @@ class McpRecipeClient:
         return await self._call(
             "get_recipe_ingredients", {"recipe_id": recipe_id, "servings": servings}
         )
+
+
+class RetailerCartClient(Protocol):
+    async def prepare_retailer_cart(self, retailer: str, items: list[dict]) -> dict: ...
+
+
+class McpRetailerCartClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url  # e.g. "http://retailer-cart-mcp:8003/mcp"
+
+    async def _call(self, tool_name: str, arguments: dict) -> dict | None:
+        async with (
+            streamablehttp_client(self.base_url) as (read, write, _),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+            return result.structuredContent
+
+    async def prepare_retailer_cart(self, retailer: str, items: list[dict]) -> dict:
+        # `prepare_retailer_cart` returns a plain `PrepareRetailerCartResponse` (no union),
+        # so — like `get_recipe` — it comes back unwrapped in `structuredContent`.
+        return await self._call("prepare_retailer_cart", {"retailer": retailer, "items": items})

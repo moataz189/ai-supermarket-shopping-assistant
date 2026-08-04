@@ -47,6 +47,7 @@ class AgentState(TypedDict, total=False):
     pending_clarification_item: str | None
     retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
     chosen_retailer: str | None
+    retailer_cart_result: dict | None         # CP8's prepare_retailer_cart tool result
     warnings: list[dict]
     status: Literal["success", "partial_success", "needs_clarification", "awaiting_retailer_choice"]
     clarification: dict | None

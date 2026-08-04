@@ -4,6 +4,13 @@ line-length = 100
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends"]
 
+[tool.ruff.lint.per-file-ignores]
+# The retailer-cart automation loop is a hard safety boundary: a CAPTCHA/bot-block or a
+# broken adapter must never surface as an unhandled exception (spec CP8 §Hard Requirements).
+# Adapters call into third-party Playwright/site code that can raise almost anything, so the
+# catch here is deliberately unnarrowed.
+"mcp_servers/retailer_cart_mcp/automation.py" = ["BLE001"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
