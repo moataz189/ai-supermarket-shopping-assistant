@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.agent.i18n import detect_language, translate_recipe_query
 from app.agent.state import AgentState
@@ -31,6 +31,16 @@ class ParsedRequestSchema(BaseModel):
     retailer_preference: str | None = None
     brand_preference: str | None = None
     selection_preference: Literal["cheapest", "no_preference"] = "no_preference"
+
+    @field_validator("recipe_query", "retailer_preference", "brand_preference", mode="before")
+    @classmethod
+    def _coerce_empty_list_to_none(cls, value):
+        # Some Bedrock models' tool-calling output fills an unset optional string field
+        # with `[]` instead of omitting it or returning null (observed with
+        # openai.gpt-oss-20b-1:0) — a type-compatibility quirk, not a real value.
+        if value == []:
+            return None
+        return value
 
 
 def make_parse_request(llm):

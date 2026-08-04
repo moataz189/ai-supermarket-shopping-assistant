@@ -1,0 +1,102 @@
+services:
+  supermarket-mcp:
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["python", "-m", "mcp_servers.supermarket_mcp.server"]
+    environment:
+      DATABASE_URL: sqlite:////data/app.db
+      PORT: "8001"
+    volumes:
+      - backend_data:/data
+    ports: ["8001:8001"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  recipe-mcp:
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["python", "-m", "mcp_servers.recipe_mcp.server"]
+    environment:
+      SPOONACULAR_API_KEY: ${SPOONACULAR_API_KEY}
+      PORT: "8002"
+    ports: ["8002:8002"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  retailer-cart-mcp:
+    build: { context: ., dockerfile: Dockerfile.retailer-cart-mcp }
+    environment:
+      PORT: "8003"
+      RETAILER_SESSIONS_DIR: /app/sessions
+    volumes:
+      - ./sessions:/app/sessions:ro
+    ports: ["8003:8003"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8003/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  backend:
+    build: { context: ., dockerfile: Dockerfile }
+    environment:
+      DATABASE_URL: sqlite:////data/app.db
+      CHECKPOINTER_BACKEND: memory
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SUPERMARKET_MCP_URL: http://supermarket-mcp:8001/mcp
+      RECIPE_MCP_URL: http://recipe-mcp:8002/mcp
+      RETAILER_CART_MCP_URL: http://retailer-cart-mcp:8003/mcp
+    ports: ["8000:8000"]
+    volumes:
+      - backend_data:/data
+      # Local development only — lets the backend make real Bedrock calls using the
+      # developer's own AWS credentials. Not the Kubernetes/production credential
+      # strategy: CP10/11 use IAM roles / a Kubernetes Secret instead, never a host
+      # bind-mount of the developer's own ~/.aws.
+      - ${HOME}/.aws:/root/.aws:ro
+    depends_on:
+      supermarket-mcp:
+        condition: service_healthy
+      recipe-mcp:
+        condition: service_healthy
+      retailer-cart-mcp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  web:
+    build: { context: ., dockerfile: web/Dockerfile }
+    ports: ["5173:80"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  ingestion:
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["python", "-m", "app.ingestion.run", "--source", "fixtures"]
+    environment:
+      DATABASE_URL: sqlite:////data/app.db
+    volumes:
+      - backend_data:/data
+    profiles: ["tools"]
+
+volumes:
+  backend_data:
