@@ -638,6 +638,46 @@ silently resolve to an unrelated item); which of the two actually applied to tha
 "גלידה" report was not conclusively isolated this session, and remains open pending the
 user's direction on `name_fallback` policy.
 
+**Shufersal — third CP9 follow-up (2026-08-06, same day): match by `item_code` first, and
+an unresolved session-identity question raised directly by the user.** The user re-tested
+after the `get_cart_url` fix and reported the item still wasn't visible — but this time
+verified independently by logging into the real site with their own credentials in their
+own browser and finding the cart empty, directly contradicting this adapter's own
+"added"/confirmed report and an independent re-check (a fresh search re-query plus the
+site's own cart-flyout total, read directly, both agreeing with each other and with the
+correct real price). Two separate things came out of investigating this, live:
+
+1. **A real, fixable gap: matching relied on name comparison when it should have used
+   `item_code` first.** The exact item the user's report was about (`4823097809785`,
+   "גלידה בטעם וניל1קג RUD" in our locally-ingested catalog) is a genuine retailer
+   barcode that matches the real site's own product code one-for-one — confirmed live. But
+   `search_and_match` only ever compared *names*, and our feed's raw `ItemName` (brand/size
+   concatenated with no spaces) doesn't exactly match the site's own cleaner display name
+   for the same product, so exact-name matching was failing for correctly-resolved items
+   and silently falling through to `name_fallback` even when the item_code was already
+   known and correct. Fixed: `search_and_match` now matches by `item_code` first (see
+   `mcp_servers/retailer_cart_mcp/adapters/shufersal.py`), which is strictly more reliable
+   than name comparison whenever the caller already has a resolved product code — which,
+   per the user, is always true by the time an item reaches Retailer-Cart MCP. Covered by
+   3 new unit tests (16/16 in `test_shufersal_adapter.py`, 156/156 full suite).
+
+2. **A real, unresolved question this adapter's own verification cannot settle:** is the
+   captured `sessions/shufersal.json` even the *same account* the user logs into
+   themselves? Checked as far as code can verify: `acceleratorSecureGUID` and `miglog-cart`
+   (the cookies that appear to carry cart/identity association) stay identical across
+   separate fresh browser contexts loading the same `storage_state` — this isn't spinning
+   up a new anonymous identity per run — and a real account-restricted URL
+   (`/online/he/my-account/personal-area/cart-2-wishlist`) did not redirect to a login page,
+   meaning the session is treated as authenticated for account-scoped pages, not merely
+   anonymous/guest browsing. But none of that proves it's the *same* real-world account the
+   user separately logged into with their own credentials — that depends entirely on which
+   credentials `login.py` was run with when the session file was captured, which isn't
+   recoverable from the file or this adapter's code. **Left explicitly open, not resolved
+   or assumed away** — documented as a caveat directly in `shufersal.py`'s module
+   docstring: this adapter's own success confirmation (however independently re-checked)
+   only proves visibility within the exact session it was given, never that the same
+   result would appear under a separate, later login to the same site.
+
 **Rami Levy — status: real search/navigation confirmed; add-to-cart blocked by an
 apparent account-state prerequisite, not fully confirmed end-to-end.** Session loads, real
 site navigation succeeds, the real front-end search URL is `/he/online/search?q=...`
