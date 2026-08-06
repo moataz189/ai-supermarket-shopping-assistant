@@ -184,6 +184,9 @@ class _FakeContext:
     async def new_page(self):
         return _FakePage()
 
+    async def close(self):
+        pass
+
 
 class _FakeBrowser:
     def __init__(self):
