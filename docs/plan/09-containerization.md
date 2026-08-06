@@ -256,14 +256,16 @@ scripts/smoke_test.sh
      Alpine/musl `wget` resolves `localhost` to `::1` (IPv6) first and nginx only listens
      on IPv4 by default, so `wget --spider http://localhost/` flapped the container
      `unhealthy` even though the service worked fine (confirmed via `docker inspect`'s
-     health-check log and a working `curl localhost:5173` from the host). Using
+     health-check log and a working `curl localhost:3000` from the host). Using
      `127.0.0.1` explicitly in every service's healthcheck avoids relying on
      hosts-resolution order/address-family preference at all.
    - **`RETAILER_SESSIONS_DIR=/app/sessions`** with `./sessions:/app/sessions:ro` — real
      captured session files, read-only, never copied into any image.
    - **`${HOME}/.aws:/root/.aws:ro`** on `backend` only, documented as local-development-only
      (see step 10).
-   - Ports match the original draft: web `5173:80`, backend `8000:8000`, supermarket-mcp
+   - Ports: web `3000:80` (matches `web/vite.config.ts`'s local dev-server port, not
+     Vite's own 5173 default, so the frontend is reachable at the same host port whether
+     run via `docker compose up` or `npm run dev`), backend `8000:8000`, supermarket-mcp
      `8001:8001`, recipe-mcp `8002:8002`, retailer-cart-mcp `8003:8003`.
    ```yaml
    services:
@@ -320,7 +322,7 @@ scripts/smoke_test.sh
 
      web:
        build: { context: ., dockerfile: web/Dockerfile }
-       ports: ["5173:80"]
+       ports: ["3000:80"]
        depends_on:
          backend: { condition: service_healthy }
        healthcheck:
