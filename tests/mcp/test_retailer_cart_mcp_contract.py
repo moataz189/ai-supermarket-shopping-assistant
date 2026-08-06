@@ -81,3 +81,47 @@ async def test_prepare_retailer_cart_succeeds_with_session_present(mock_site, tm
     assert added["matched_by"] == "item_code"
     assert added["quantity_confirmed"] == 1
     assert structured["cart_url"] == f"{mock_site}/cart"
+
+
+async def test_prepare_retailer_cart_logs_resolved_session_path_and_metadata_only(
+    mock_site, tmp_path, caplog
+):
+    session_file = tmp_path / "mock_retailer.json"
+    session_file.write_text(json.dumps({
+        "cookies": [
+            {"name": "secret", "value": "do-not-log-me", "domain": "example.test", "path": "/"},
+        ],
+    }))
+
+    mcp_server = server.create_server(
+        adapters={"mock_retailer": lambda: MockRetailerAdapter(mock_site)}, sessions_dir=str(tmp_path)
+    )
+
+    with caplog.at_level("INFO", logger="mcp_servers.retailer_cart_mcp.server"):
+        await mcp_server.call_tool(
+            "prepare_retailer_cart",
+            {"retailer": "mock_retailer", "items": [{"name": "Bread", "item_code": "SKU-BREAD", "quantity": 1}]},
+        )
+
+    [record] = [r for r in caplog.records if "resolved session file" in r.message]
+    assert str(session_file) in record.message
+    assert "size_bytes=" in record.message
+    assert "mtime_utc=" in record.message
+    assert "do-not-log-me" not in record.message
+    assert "secret" not in record.message
+
+
+async def test_prepare_retailer_cart_logs_missing_session_path_without_exists_flag(tmp_path, caplog):
+    mcp_server = server.create_server(
+        adapters={"mock_retailer": _never_construct()}, sessions_dir=str(tmp_path)
+    )
+
+    with caplog.at_level("INFO", logger="mcp_servers.retailer_cart_mcp.server"):
+        await mcp_server.call_tool(
+            "prepare_retailer_cart",
+            {"retailer": "mock_retailer", "items": [{"name": "Bread", "item_code": "SKU-BREAD", "quantity": 1}]},
+        )
+
+    [record] = [r for r in caplog.records if "session file" in r.message]
+    assert "not found" in record.message
+    assert str(tmp_path / "mock_retailer.json") in record.message

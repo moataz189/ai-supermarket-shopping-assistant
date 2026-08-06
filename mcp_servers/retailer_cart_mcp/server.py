@@ -1,4 +1,6 @@
+import logging
 import os
+from datetime import datetime, timezone
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -12,6 +14,28 @@ from mcp_servers.retailer_cart_mcp.schemas import CartItemRequest, PrepareRetail
 
 ADAPTERS = {"shufersal": ShufersalAdapter, "rami_levy": RamiLevyAdapter}
 SESSIONS_DIR = os.environ.get("RETAILER_SESSIONS_DIR", "sessions")
+logger = logging.getLogger(__name__)
+
+
+def _log_resolved_session_file(retailer: str, session_path: str) -> None:
+    # File path and metadata only — never cookie/localStorage contents. Exists to answer,
+    # from the container's own logs, "which exact file on disk did this request actually
+    # read" without ever needing to expose the session's secrets to check that.
+    try:
+        stat = os.stat(session_path)
+    except FileNotFoundError:
+        logger.info(
+            "retailer_cart_mcp: session file for %s not found: path=%s", retailer, session_path
+        )
+        return
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    logger.info(
+        "retailer_cart_mcp: resolved session file for %s: path=%s size_bytes=%d mtime_utc=%s",
+        retailer,
+        session_path,
+        stat.st_size,
+        mtime,
+    )
 
 
 def _refusal(
@@ -61,6 +85,7 @@ def create_server(adapters: dict = ADAPTERS, sessions_dir: str = SESSIONS_DIR) -
             return _refusal(retailer, items, "unsupported_retailer", "unsupported_retailer")
 
         session_path = os.path.join(sessions_dir, f"{retailer}.json")
+        _log_resolved_session_file(retailer, session_path)
         if not os.path.exists(session_path):
             return _refusal(retailer, items, "no_login_session", "login_required")
 
