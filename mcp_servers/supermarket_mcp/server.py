@@ -1,4 +1,7 @@
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from app.db.models import RetailerFeedStatus
 from app.db.repositories import ProductRepository, unit_price
@@ -9,7 +12,23 @@ from mcp_servers.supermarket_mcp.schemas import (
     SearchProductResponse,
 )
 
-mcp = FastMCP("supermarket-data")
+# FastMCP auto-enables DNS-rebinding protection restricted to localhost (captured at
+# construction time, before __main__ rebinds host to 0.0.0.0 below) — docker-compose peers
+# reach this server as "supermarket-mcp", which the localhost-only default would reject with
+# 421 Misdirected Request, so that hostname must be allowed explicitly.
+mcp = FastMCP(
+    "supermarket-data",
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", "supermarket-mcp:*"],
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    ),
+)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
 
 
 @mcp.tool()

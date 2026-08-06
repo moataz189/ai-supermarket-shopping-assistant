@@ -1,0 +1,43 @@
+# Git
+.git/
+.worktrees/
+worktrees/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Test / coverage artifacts
+.coverage
+coverage.xml
+htmlcov/
+
+# Databases
+*.db
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+sessions/
+
+# Node
+web/node_modules/
+web/dist/
+
+# Dev-only tooling and docs (not needed in runtime images)
+requirements-dev.txt
+docs/
+docs/plan/
+Makefile
+README.md
+
+# Misc
+*.log
+.DS_Store

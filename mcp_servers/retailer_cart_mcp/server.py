@@ -1,6 +1,9 @@
 import os
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from mcp_servers.retailer_cart_mcp.adapters.rami_levy import RamiLevyAdapter
 from mcp_servers.retailer_cart_mcp.adapters.shufersal import ShufersalAdapter
@@ -28,7 +31,23 @@ def _refusal(
 
 
 def create_server(adapters: dict = ADAPTERS, sessions_dir: str = SESSIONS_DIR) -> FastMCP:
-    mcp = FastMCP("retailer-cart")
+    # FastMCP auto-enables DNS-rebinding protection restricted to localhost (captured at
+    # construction time, before __main__ rebinds host to 0.0.0.0 below) — docker-compose
+    # peers reach this server as "retailer-cart-mcp", which the localhost-only default
+    # would reject with 421 Misdirected Request, so that hostname must be allowed
+    # explicitly.
+    mcp = FastMCP(
+        "retailer-cart",
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", "retailer-cart-mcp:*"],
+            allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+        ),
+    )
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
 
     @mcp.tool()
     async def prepare_retailer_cart(
