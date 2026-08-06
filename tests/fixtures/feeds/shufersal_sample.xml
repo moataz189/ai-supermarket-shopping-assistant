@@ -99,5 +99,81 @@
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus />
     </Item>
+    <Item>
+      <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
+      <ItemCode>7290000000001</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>פסטה פנה 500 גרם</ItemName>
+      <ManufactureName>ברילה</ManufactureName>
+      <ManufactureCountry>IT</ManufactureCountry>
+      <ManufactureItemDescription>פסטה פנה 500 גרם</ManufactureItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>500.00</Quantity>
+      <UnitOfMeasure>100 גרם</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>8.90</ItemPrice>
+      <UnitOfMeasurePrice>1.78</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
+      <ItemCode>7290000000002</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>חלב תנובה 3% 1 ליטר</ItemName>
+      <ManufactureName>תנובה</ManufactureName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufactureItemDescription>חלב תנובה 3% 1 ליטר</ManufactureItemDescription>
+      <UnitQty>ליטר</UnitQty>
+      <Quantity>1.00</Quantity>
+      <UnitOfMeasure>1ליטר</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>6.90</ItemPrice>
+      <UnitOfMeasurePrice>6.90</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
+      <ItemCode>7290000000003</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>לחם אחיד פרוס</ItemName>
+      <ManufactureName>אנגל</ManufactureName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufactureItemDescription>לחם אחיד פרוס</ManufactureItemDescription>
+      <UnitQty>יחידות</UnitQty>
+      <Quantity>1.00</Quantity>
+      <UnitOfMeasure>יחידות</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>7.50</ItemPrice>
+      <UnitOfMeasurePrice>7.50</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <Item>
+      <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
+      <ItemCode>7290000000004</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>גבינה צהובה עמק 200 גרם</ItemName>
+      <ManufactureName>תנובה</ManufactureName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufactureItemDescription>גבינה צהובה עמק 200 גרם</ManufactureItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>200.00</Quantity>
+      <UnitOfMeasure>100 גרם</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>12.90</ItemPrice>
+      <UnitOfMeasurePrice>6.45</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
   </Items>
 </Root>

@@ -1,3 +1,5 @@
+import json
+import re
 from typing import Literal
 
 from pydantic import BaseModel, field_validator
@@ -11,7 +13,9 @@ PARSE_PROMPT = (
     "English search phrase naming the dish (translate it to English if the user wrote in "
     "another language) and `servings` if a serving count was stated; leave `items` empty. "
     "If 'grocery_list', extract each grocery/household item as a separate string in `items`, "
-    "singular, without quantities, and leave `recipe_query`/`servings` unset. Extract "
+    "singular, without quantities, written in the exact same language and wording the user "
+    "used for it — never translate or rephrase an item, since it's matched against retailer "
+    "catalog text verbatim, not by meaning. Leave `recipe_query`/`servings` unset. Extract "
     "`budget` (a number, no currency symbol) if stated. Extract `dietary_constraints` as "
     "short tags (e.g. 'no dairy', 'vegan') — a stated 'vegan only'/'gluten-free only' "
     "preference belongs here too. Extract `retailer_preference` ('shufersal' or 'rami_levy') "
@@ -48,14 +52,39 @@ class ParsedRequestSchema(BaseModel):
         return value
 
 
+def _extract_json_from_raw_content(content) -> dict:
+    """Fallback for when the model answers with plain JSON text instead of a real tool
+    call — observed with openai.gpt-oss-20b-1:0 on Bedrock, non-deterministically (the
+    same model uses a real tool call for some messages and skips it for others).
+    `content` is either a plain string or a Bedrock-style list of content blocks (each
+    typically `{"type": "text", "text": "..."}` or `{"type": "reasoning_content", ...}`).
+    """
+    blocks = content if isinstance(content, list) else [content]
+    for block in blocks:
+        text = block.get("text") if isinstance(block, dict) else block
+        if not isinstance(text, str):
+            continue
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            continue
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("parse_request: model returned no tool call and no JSON in its text content")
+
+
 def make_parse_request(llm):
-    structured_llm = llm.with_structured_output(ParsedRequestSchema)
+    structured_llm = llm.with_structured_output(ParsedRequestSchema, include_raw=True)
 
     async def parse_request(state: AgentState) -> AgentState:
         raw_message = state["raw_message"]
-        result: ParsedRequestSchema = await structured_llm.ainvoke(
+        output = await structured_llm.ainvoke(
             [("system", PARSE_PROMPT), ("user", raw_message)]
         )
+        result: ParsedRequestSchema | None = output["parsed"]
+        if result is None:
+            result = ParsedRequestSchema(**_extract_json_from_raw_content(output["raw"].content))
 
         recipe_query = None
         if result.request_type == "recipe":

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from app.agent.nodes.parse_request import ParsedRequestSchema
 
 
@@ -74,14 +76,26 @@ class FakeRetailerCartClient:
 
 
 class FakeLLM:
-    """Stand-in for ChatBedrockConverse. Returns a canned ParsedRequestSchema regardless
-    of input, mimicking the `.with_structured_output(...).ainvoke(...)` call chain."""
+    """Stand-in for ChatBedrockConverse. Mimics `.with_structured_output(schema,
+    include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape.
 
-    def __init__(self, parsed: ParsedRequestSchema):
+    By default returns a canned `parsed` ParsedRequestSchema regardless of input. Pass
+    `parsed=None` with `raw_content` set (a string, or a Bedrock content-block list) to
+    simulate the openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with
+    plain JSON text instead of a real tool call — `with_structured_output` then has
+    nothing to parse and returns `parsed=None`, which parse_request.py must fall back on.
+    """
+
+    def __init__(self, parsed: ParsedRequestSchema | None = None, raw_content=None):
         self._parsed = parsed
+        self._raw_content = raw_content
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, include_raw=False):
         return self
 
-    async def ainvoke(self, messages) -> ParsedRequestSchema:
-        return self._parsed
+    async def ainvoke(self, messages) -> dict:
+        return {
+            "raw": SimpleNamespace(content=self._raw_content),
+            "parsed": self._parsed,
+            "parsing_error": None,
+        }
