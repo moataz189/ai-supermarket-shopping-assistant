@@ -522,6 +522,91 @@ not. Two further real limitations found and handled, not glossed over:
   behavior can add something the user never asked for. Left unchanged pending explicit
   direction (see Risks).
 
+**Shufersal — CP9 follow-up (2026-08-06): refactored from DOM clicks to the site's own
+internal fetch/`window.ajaxCall` flow.** The DOM-click path above (bugs 1 and 2, both fixed)
+still left one real, unresolved flakiness source: an intermittent stuck click on
+`button.js-update-cart`, live-reproduced but never root-caused, that could make a request
+fail non-deterministically even on an item that had just succeeded moments earlier with
+identical code. Rather than keep chasing that blind, the adapter was rewritten to stop
+clicking DOM elements at all and instead drive the site through its own internal, already-
+authenticated JS/fetch flow — the same mechanism the site's own front-end uses, called from
+inside `page.evaluate()`.
+
+Before touching any code, the live site was independently re-verified end-to-end against a
+real account with a real captured session, per an explicit checklist:
+- `window.ajaxCall(url, jsonBody, callback, contentType, cartContext)` exists on the live
+  page and its full source was read (not assumed from an unrelated reference project).
+- The real search endpoint and response schema were captured directly:
+  `GET /online/he/search/results?q=...&limit=...` returns JSON with a `results` array,
+  each item carrying `code`, `name`, `sellingMethod.code`, and — the key discovery —
+  `cartStatus: {inCart, qty, ...}`, giving authoritative server-side cart state per product
+  without any DOM read.
+- The exact `/cart/add` payload shape was captured from the site's own JS
+  (`productCodePost`, `productCode`, `sellingMethod`, `qty`, `frontQuantity`, `comment`,
+  `affiliateCode`, plus a `cartContext`), and confirmed to work against a real product.
+- The call runs inside the page's existing authenticated session/cookies by construction —
+  it's the same page, no separate auth handling was added.
+- **A real add was confirmed to persist server-side two independent ways:** a fresh
+  follow-up `search/results` call showed the new `cartStatus.qty`, and — going further than
+  the checklist strictly required, to be sure — a full `page.reload()` followed by another
+  fresh search call showed the same persisted quantity.
+- **A real, non-obvious finding that shaped the design:** `/cart/add`'s response body
+  is *not* a trustworthy success signal. A request with a completely fake product code
+  (`"P_NOT_A_REAL_CODE_999999"`) returned HTTP 200 with an all-but-identical generic
+  mini-cart HTML fragment to a real, successful add — no `success: false`, no distinct
+  error shape, confirmed both via `ajaxCall`'s own return value and by intercepting the raw
+  `/cart/add` network response directly. This means "failures return structured errors"
+  could **not** be satisfied by trusting `ajaxCall`'s response at all — so the adapter
+  never does. Every `add_to_cart` call is followed by an independent, fresh
+  `search/results` round trip that reads back `cartStatus.qty` for the specific product
+  code just added; only that counts as confirmation, and a mismatch (including the product
+  not showing up at all) raises `QuantityNotConfirmedError` exactly like a site-side stock
+  cap would.
+- No checkout, payment, login automation, CAPTCHA bypass, or anti-bot evasion was added —
+  none of this touches any of that surface by construction.
+
+With verification confirmed, `mcp_servers/retailer_cart_mcp/adapters/shufersal.py` was
+rewritten: `search_and_match` now does one navigation to establish the session, then reads
+results from the `search/results` fetch (matching by exact case-insensitive name, falling
+back to the first result, same policy as before — unchanged); `add_to_cart` calls
+`window.ajaxCall('/cart/add', ...)` and confirms via the fresh-search round trip described
+above, with **no DOM locator, no click, and no `page.reload()`** anywhere in the add path.
+A new `UnsupportedSiteFlowError` (in `automation.py`, adapter-agnostic) is raised if
+`window.ajaxCall` isn't a function on the loaded page or if the search/add calls themselves
+fail unexpectedly — `detect_block()` also checks for `window.ajaxCall`'s existence up front
+so a missing internal interface is reported as `unsupported_site_flow` and stops the whole
+run cleanly, rather than being discovered piecemeal per item. There is deliberately no
+fallback to the old DOM-click path if the internal interface disappears; that interface is
+undocumented and can change without notice, and silently falling back to a known-flaky
+alternative would be worse than a clear, structured failure.
+
+Covered by 12 new unit tests (`tests/mcp/test_shufersal_adapter.py`) against a fake `page`
+that scripts `evaluate()` responses — no real browser, no real site — pinning down
+search-result matching, the fresh-search confirmation path, the quantity-mismatch failure,
+and both `UnsupportedSiteFlowError` paths (missing `ajaxCall`, and an `ajaxCall` call itself
+throwing). Then, going beyond unit tests, the actual refactored adapter (not a throwaway
+script) was driven once more through the real `prepare_cart_for_retailer` orchestration
+against the real site with the real captured session, end-to-end: matched, added via
+`ajaxCall`, and confirmed via the fresh-search round trip — `blocked: false`,
+`quantity_confirmed: 2.0`, no DOM interaction anywhere in the path. Full suite: 152/152
+passing (140 prior + 12 new), lint clean.
+
+**What this does and doesn't resolve, honestly:** this removes the two known DOM-click
+fragility sources (stuck `js-add-to-cart`/`js-update-cart` clicks) and the double-navigation
+bug entirely, since there's no click or second navigation left to get stuck. It does *not*
+guarantee `/cart/add` itself always succeeds server-side for every product/stock
+combination — that's exactly why independent confirmation via `cartStatus` stays mandatory
+rather than trusting the call. And like the DOM path before it, this remains built on an
+undocumented internal interface that Shufersal can change at any time without notice; the
+`unsupported_site_flow` fallback exists specifically so that eventuality is reported
+clearly instead of failing silently or being worked around.
+
+**Real-cart disclosure:** live verification for this refactor (both the pre-refactor
+scripted checks and the post-refactor end-to-end confirmation) added a real item — "לחם
+אחיד פרוס" (sliced bread), quantity 2 — to the real account's live Shufersal cart, plus one
+other real product at quantity 1 during an early payload-shape check. No checkout or
+payment was reached in any of this. Flagged here rather than silently left in the cart.
+
 **Rami Levy — status: real search/navigation confirmed; add-to-cart blocked by an
 apparent account-state prerequisite, not fully confirmed end-to-end.** Session loads, real
 site navigation succeeds, the real front-end search URL is `/he/online/search?q=...`
@@ -578,14 +663,16 @@ method exists in either adapter). No CAPTCHA/bot-block was encountered for eithe
 - `./sessions/` is a local host directory mounted read-only into `retailer-cart-mcp` — it
   must exist (even empty) before `docker compose up`, and must never be committed (CP8's
   `.gitignore` entry covers this, verified still in effect).
-- Real-site selectors drift over time by nature (see **Live retailer verification** —
-  both adapters' CP8-era selectors were already stale by CP9 and have been refreshed
-  against the real sites as of this checkpoint); expect this to need periodic
-  re-verification, not a one-time fix. Shufersal's real add-to-cart is meaningfully more
-  reliable as of this checkpoint (two confirmed, fixed root causes) but **not** fully
-  reliable — a third, non-deterministic issue remains open (see **Live retailer
-  verification**); Rami Levy's is unconfirmed end-to-end — blocked by an apparent
-  account-state prerequisite (`assortment_unavailable`) not yet fully root-caused.
+- Real-site selectors/endpoints drift over time by nature (see **Live retailer
+  verification** — both adapters' CP8-era selectors were already stale by CP9 and have
+  been refreshed against the real sites as of this checkpoint); expect this to need
+  periodic re-verification, not a one-time fix. Shufersal no longer uses DOM
+  selectors/clicks at all as of the CP9 fetch/`ajaxCall` refactor (see **Live retailer
+  verification**), which removed the two known DOM-click flakiness sources entirely, but
+  it remains built on an undocumented internal interface that can change without notice —
+  `unsupported_site_flow` is the designed-for fallback if it does. Rami Levy is unchanged
+  (still DOM-click-based) and unconfirmed end-to-end — blocked by an apparent account-state
+  prerequisite (`assortment_unavailable`) not yet fully root-caused.
 - `automation.py`'s `prepare_cart_for_retailer` now opens a fresh browser context per
   item (reloading `storage_state` each time) instead of reusing one context for the whole
   run — found necessary for Shufersal (reusing one context across multiple navigations
@@ -653,11 +740,13 @@ for any field the model actually fills in (see `tests/agent/test_parsed_request_
 - [x] Manual walkthrough (grocery-list, recipe, retailer-choice, decline,
       missing-session `login_required`) confirmed against the real containerized stack,
       including one real-browser pass.
-- [x] Live verification against real Shufersal and Rami Levy reported separately, both
-      initially and after a selector-refresh follow-up: Shufersal's real add-to-cart
-      confirmed working end-to-end; Rami Levy's search/navigation confirmed, add-to-cart
-      blocked by an unresolved `assortment_unavailable` condition — documented as an
-      honest open item, not claimed as done.
+- [x] Live verification against real Shufersal and Rami Levy reported separately, across
+      three passes: initial selectors, a selector-refresh follow-up, and a Shufersal-only
+      refactor from DOM clicks to the site's internal fetch/`ajaxCall` flow. Shufersal's
+      real add-to-cart confirmed working end-to-end on the refactored adapter, including a
+      live run of the actual (non-mock) code path; Rami Levy's search/navigation
+      confirmed, add-to-cart blocked by an unresolved `assortment_unavailable` condition —
+      documented as an honest open item, not claimed as done.
 - [x] `pytest`, `ruff check`, `pytest --cov`, and `cd web && npm run build` all pass on the
       final code.
 - [x] Committed with a message referencing CP9.
