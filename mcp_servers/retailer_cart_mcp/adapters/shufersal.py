@@ -167,4 +167,12 @@ class ShufersalAdapter:
         return confirmed
 
     async def get_cart_url(self, page: Page) -> str | None:
-        return f"{BASE_URL}/online/he/cart"
+        # `/online/he/cart` is NOT a real route on this site — confirmed live, CP9
+        # follow-up (2026-08): navigating there directly (fresh context, no referrer)
+        # redirects to a generic fallback page (`/online/he/A?null`) with no cart content
+        # at all. There is no dedicated, directly-linkable cart page here: the real cart is
+        # a client-side flyout (`#cartContainer`) that only renders after the header "הסל
+        # שלי" trigger (a `javascript:void(0)` link, not a URL) is clicked on an
+        # already-loaded page. The best honest link is the site's own homepage, where the
+        # user can click that trigger themselves once logged in.
+        return f"{BASE_URL}/online/he/"
