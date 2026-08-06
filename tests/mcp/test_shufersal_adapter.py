@@ -193,3 +193,14 @@ async def test_detect_block_returns_none_when_ajax_call_present_and_no_blockers(
     reason = await ShufersalAdapter().detect_block(page)
 
     assert reason is None
+
+
+async def test_get_cart_url_does_not_use_the_broken_cart_route():
+    # /online/he/cart and /online/he/cart/cartsummary were both confirmed live to redirect
+    # to a generic fallback page with no cart content — the real cart is a client-side
+    # flyout with no dedicated URL, so this must not point at either broken route.
+    url = await ShufersalAdapter().get_cart_url(FakePage())
+
+    assert url is not None
+    assert not url.rstrip("/").endswith("/cart")
+    assert "cartsummary" not in url

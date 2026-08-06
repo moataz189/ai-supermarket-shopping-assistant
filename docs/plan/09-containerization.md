@@ -502,9 +502,11 @@ request — this does not fix the flakiness, it only fails cheaper when it happe
 **Net effect:** add-to-cart is real, live-verified, and meaningfully more reliable than
 before this pass (two confirmed root causes eliminated) — but it is explicitly **not**
 100% reliable end-to-end, and that shouldn't be read into "selectors verified" language
-elsewhere in this doc. `cart_url` (`https://www.shufersal.co.il/online/he/cart`)
-confirmed correct. Never reached login, checkout, or payment in any run, successful or
-not. Two further real limitations found and handled, not glossed over:
+elsewhere in this doc. `cart_url` (`https://www.shufersal.co.il/online/he/cart`) was
+believed correct at this point in the session — **later found wrong, see the CP9
+follow-up (2026-08-06) `get_cart_url` section below.** Never reached login, checkout, or
+payment in any run, successful or not. Two further real limitations found and handled,
+not glossed over:
 - A one-time "how would you like to receive your order?" modal (`#assortmentModal`)
   blocks add-to-cart on an account with no delivery method/address configured yet — hit
   once during testing, confirmed via screenshot, now detected as `blocked_reason:
@@ -606,6 +608,35 @@ scripted checks and the post-refactor end-to-end confirmation) added a real item
 אחיד פרוס" (sliced bread), quantity 2 — to the real account's live Shufersal cart, plus one
 other real product at quantity 1 during an early payload-shape check. No checkout or
 payment was reached in any of this. Flagged here rather than silently left in the cart.
+
+**Shufersal — second CP9 follow-up (2026-08-06, same day): `get_cart_url` was returning a
+broken link — found live, fixed.** Triggered by a real user report: a request for "גלידה"
+(ice cream) was reported as `added`, but checking the cart via the app's own "Open cart on
+Shufersal" link showed nothing there. Investigated live rather than guessed:
+- `GET /online/he/cart` (the URL `get_cart_url` had been returning, "confirmed correct" in
+  the earlier pass above — that check evidently never actually navigated to it) redirects
+  to a generic fallback page (`/online/he/A?null`) with no cart content at all, in a fresh
+  browser context. So did the one other plausible candidate found on the page,
+  `/online/he/cart/cartsummary` — same broken redirect.
+- There is **no dedicated, directly-linkable cart page on this site at all.** The header's
+  "הסל שלי" ("my cart") control is `href="javascript:void(0)"`, not a URL — clicking it
+  triggers a client-side flyout (`#cartContainer`) populated via the page's own JS/AJAX, not
+  a navigation. Confirmed the flyout itself is accurate: reading `#cartContainer` directly
+  (no URL involved) showed a real, non-zero cart total matching what search's `cartStatus`
+  had already reported — the underlying add-and-confirm logic checked out fine independent
+  of this bug.
+- Fixed `get_cart_url` to return the site's real homepage (`{BASE_URL}/online/he/`, which
+  loads correctly and shows an accurate cart-count badge in the header) instead of the
+  broken `/online/he/cart` path, with a comment explaining there is no better direct link
+  available on this site.
+
+**What this does and doesn't explain about the original report:** this fully explains why
+clicking "Open cart on Shufersal" showed nothing — that link never worked. It does **not**
+by itself rule out the separate, still-open `name_fallback` question flagged just above (a
+generic query like "גלידה" has no exact product-name match on this site and could still
+silently resolve to an unrelated item); which of the two actually applied to that specific
+"גלידה" report was not conclusively isolated this session, and remains open pending the
+user's direction on `name_fallback` policy.
 
 **Rami Levy — status: real search/navigation confirmed; add-to-cart blocked by an
 apparent account-state prerequisite, not fully confirmed end-to-end.** Session loads, real
