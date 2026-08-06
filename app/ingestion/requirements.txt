@@ -1,0 +1,3 @@
+# Subset of the root requirements.txt (source of truth for versions) — app/ingestion +
+# app/db use only sqlalchemy; feed parsing is stdlib xml, no pydantic/mcp/fastapi needed.
+sqlalchemy>=2.0
