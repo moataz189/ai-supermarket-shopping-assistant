@@ -1,0 +1,5 @@
+# Subset of the root requirements.txt (source of truth for versions) — only what
+# mcp_servers/recipe_mcp actually imports. No sqlalchemy (no DB access) and no playwright.
+pydantic>=2.7
+mcp==1.29.0
+httpx>=0.27

@@ -57,8 +57,8 @@ wait_for() {
 wait_for "backend" "http://localhost:8000/health" 90
 curl -sf http://localhost:8000/health
 
-wait_for "web" "http://localhost:5173/" 90
-curl -sf http://localhost:5173/ > /dev/null
+wait_for "web" "http://localhost:3000/" 90
+curl -sf http://localhost:3000/ > /dev/null
 
 echo "=== container status ==="
 docker compose ps

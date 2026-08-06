@@ -1,0 +1,7 @@
+# Subset of the root requirements.txt (source of truth for versions) — only what
+# mcp_servers/supermarket_mcp + app/db actually import. starlette/uvicorn/httpx come in
+# transitively via `mcp` itself; not pinned here since the root requirements.txt never
+# pinned them explicitly either.
+sqlalchemy>=2.0
+pydantic>=2.7
+mcp==1.29.0

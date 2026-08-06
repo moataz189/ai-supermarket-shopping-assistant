@@ -1,7 +1,6 @@
 services:
   supermarket-mcp:
-    build: { context: ., dockerfile: Dockerfile }
-    command: ["python", "-m", "mcp_servers.supermarket_mcp.server"]
+    build: { context: ., dockerfile: mcp_servers/supermarket_mcp/Dockerfile }
     environment:
       DATABASE_URL: sqlite:////data/app.db
       PORT: "8001"
@@ -16,8 +15,7 @@ services:
       start_period: 5s
 
   recipe-mcp:
-    build: { context: ., dockerfile: Dockerfile }
-    command: ["python", "-m", "mcp_servers.recipe_mcp.server"]
+    build: { context: ., dockerfile: mcp_servers/recipe_mcp/Dockerfile }
     environment:
       SPOONACULAR_API_KEY: ${SPOONACULAR_API_KEY}
       PORT: "8002"
@@ -30,7 +28,7 @@ services:
       start_period: 5s
 
   retailer-cart-mcp:
-    build: { context: ., dockerfile: Dockerfile.retailer-cart-mcp }
+    build: { context: ., dockerfile: mcp_servers/retailer_cart_mcp/Dockerfile }
     environment:
       PORT: "8003"
       RETAILER_SESSIONS_DIR: /app/sessions
@@ -45,7 +43,7 @@ services:
       start_period: 10s
 
   backend:
-    build: { context: ., dockerfile: Dockerfile }
+    build: { context: ., dockerfile: app/api/Dockerfile }
     environment:
       DATABASE_URL: sqlite:////data/app.db
       CHECKPOINTER_BACKEND: memory
@@ -78,7 +76,7 @@ services:
 
   web:
     build: { context: ., dockerfile: web/Dockerfile }
-    ports: ["5173:80"]
+    ports: ["3000:80"]
     depends_on:
       backend:
         condition: service_healthy
@@ -90,8 +88,7 @@ services:
       start_period: 5s
 
   ingestion:
-    build: { context: ., dockerfile: Dockerfile }
-    command: ["python", "-m", "app.ingestion.run", "--source", "fixtures"]
+    build: { context: ., dockerfile: app/ingestion/Dockerfile }
     environment:
       DATABASE_URL: sqlite:////data/app.db
     volumes:
