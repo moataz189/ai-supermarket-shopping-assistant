@@ -449,12 +449,21 @@ product names) silently broke the search — fixed with `urllib.parse.quote()` i
 
 **Shufersal — status: real add-to-cart confirmed working end-to-end, live.** Session
 loads, real site navigation succeeds, search finds an exact match by product name
-(`li.tileBlock[data-product-name=...]`), add-to-cart click + quantity fill + update
-confirmed via the input's own value AND independently verified by reloading the homepage
-fresh afterward and reading the real, server-side cart badge/total (went from empty to 1
-item / ₪43.25 after the add — not just a local DOM read). `cart_url`
+(`li.tileBlock[data-product-name=...]`), add-to-cart click + quantity fill + update.
+
+**Confirmation bug found and fixed during this same verification pass:** the first
+version of `add_to_cart`'s confirmation step filled the quantity `<input>` and then read
+that *same* input back — tautological, since it can only ever report the value this
+method itself just wrote, regardless of whether the site's backend actually persisted the
+add. This produced a real false positive live: the app reported an item `"added"` when
+the real cart, checked independently, was still empty. Fixed to reload the page fresh and
+re-query by the matched item_code before reading the quantity back — a genuine
+server round-trip instead of a self-check. Re-verified after the fix, twice, each time
+cross-checked against an independently fresh-reloaded page reading the real, server-side
+cart badge/total directly (not the adapter's own report): cart count/total both increased
+by the added item's real price both times. `cart_url`
 (`https://www.shufersal.co.il/online/he/cart`) confirmed correct. Never reached login,
-checkout, or payment. Two real limitations found and handled, not glossed over:
+checkout, or payment. Two further real limitations found and handled, not glossed over:
 - A one-time "how would you like to receive your order?" modal (`#assortmentModal`)
   blocks add-to-cart on an account with no delivery method/address configured yet — hit
   once during testing, confirmed via screenshot, now detected as `blocked_reason:
