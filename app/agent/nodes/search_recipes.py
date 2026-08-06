@@ -34,4 +34,6 @@ def make_search_recipes(recipe_client):
 
 
 def route_after_search_recipes(state: AgentState) -> str:
+    if not state["recipe_candidates"]:
+        return "recipe_not_found"
     return "resolve_recipe_ambiguity" if state.get("recipe_ambiguous") else "get_recipe_ingredients"
