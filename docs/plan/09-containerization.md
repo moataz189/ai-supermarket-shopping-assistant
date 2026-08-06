@@ -447,23 +447,64 @@ URL-encoded `item_name`/`item_code` before interpolating them into the search UR
 item name containing a reserved URL character (e.g. `%`, common in "X% milk"-style
 product names) silently broke the search — fixed with `urllib.parse.quote()` in both.
 
-**Shufersal — status: real add-to-cart confirmed working end-to-end, live.** Session
-loads, real site navigation succeeds, search finds an exact match by product name
-(`li.tileBlock[data-product-name=...]`), add-to-cart click + quantity fill + update.
+**Shufersal — status: two real, deterministic bugs found and fixed (with tests); a third,
+non-deterministic real-site flakiness issue remains open — not claimed as fully
+reliable.** Session loads, real site navigation succeeds, search finds an exact match by
+product name (`li.tileBlock[data-product-name=...]`).
 
-**Confirmation bug found and fixed during this same verification pass:** the first
-version of `add_to_cart`'s confirmation step filled the quantity `<input>` and then read
-that *same* input back — tautological, since it can only ever report the value this
-method itself just wrote, regardless of whether the site's backend actually persisted the
-add. This produced a real false positive live: the app reported an item `"added"` when
-the real cart, checked independently, was still empty. Fixed to reload the page fresh and
-re-query by the matched item_code before reading the quantity back — a genuine
-server round-trip instead of a self-check. Re-verified after the fix, twice, each time
+**Bug 1 — tautological confirmation, found and fixed:** the first version of
+`add_to_cart`'s confirmation step filled the quantity `<input>` and then read that *same*
+input back — tautological, since it can only ever report the value this method itself
+just wrote, regardless of whether the site's backend actually persisted the add. This
+produced a real false positive live: the app reported an item `"added"` when the real
+cart, checked independently, was still empty. Fixed to reload the page fresh and
+re-query by the matched item_code before reading the quantity back — a genuine server
+round-trip instead of a self-check. Re-verified after the fix, twice, each time
 cross-checked against an independently fresh-reloaded page reading the real, server-side
 cart badge/total directly (not the adapter's own report): cart count/total both increased
-by the added item's real price both times. `cart_url`
-(`https://www.shufersal.co.il/online/he/cart`) confirmed correct. Never reached login,
-checkout, or payment. Two further real limitations found and handled, not glossed over:
+by the added item's real price both times.
+
+**Bug 2 — same-context double-navigation permanently hides the add button, found and
+fixed:** reported live by a user testing the running app (item "גלידה" → matched via
+`name_fallback`) as a 30s `Locator.click` timeout waiting for `button.js-add-to-cart` to
+become visible. Root-caused through 10+ isolated live reproductions (not guessed):
+`search_and_match`'s original design searched by item_code first, then by name — two full
+navigations in the same browser context — and *any* second navigation within one context
+(regardless of what the first one was: the homepage visit, a code search, anything)
+permanently hides that context's add-to-cart button, confirmed stuck even after 20+
+seconds of active polling, not a brief widget-init delay a longer wait would fix. A
+single-navigation, fresh context reproduced success every time. Fixed two ways together:
+`automation.py`'s `prepare_cart_for_retailer` now gives each item its own fresh browser
+context (reloading the same `storage_state`) instead of reusing one context/page for the
+whole run; this adapter's `search_and_match` now searches by name only (the item_code
+pre-search was always a wasted navigation anyway — fixture-style codes never match the
+real site's own `P_xxxxx` internal codes). Both changes are covered by
+`tests/mcp/test_retailer_cart_automation.py` (orchestration-level fake-adapter tests
+asserting exact `detect_block` call counts/cleanup, plus the full mock-site integration
+suite) — 140/140 tests pass after the change, confirming no regression to the tested
+contract.
+
+**Bug 2 fix confirmed against the exact reported case**, then a **third, unresolved
+issue** surfaced one step later: re-running the exact same "גלידה" request afterward got
+past the `js-add-to-cart` click (previously always stuck) but then got stuck on the
+*next* click, `button.js-update-cart` — and, more tellingly, a *different* item
+("חלב בקרטון 3% שומן") that had **fully succeeded moments earlier** with byte-for-byte
+identical code failed the same way on a later run. That inconsistency — identical code,
+identical item, different outcome — points to genuine timing/session variance on
+Shufersal's side (most plausibly its personalization/analytics scripts, network
+conditions, or A/B experiment assignment), not a deterministic client-side bug, and was
+not chased further (diminishing returns on guessing at a third-party site's internal
+timing without instrumenting Shufersal's own network requests, which wasn't undertaken
+this session). Both clicks in `add_to_cart` now use a shortened 10s timeout (down from
+Playwright's 30s default) so a stuck click fails fast rather than tying up the whole
+request — this does not fix the flakiness, it only fails cheaper when it happens.
+
+**Net effect:** add-to-cart is real, live-verified, and meaningfully more reliable than
+before this pass (two confirmed root causes eliminated) — but it is explicitly **not**
+100% reliable end-to-end, and that shouldn't be read into "selectors verified" language
+elsewhere in this doc. `cart_url` (`https://www.shufersal.co.il/online/he/cart`)
+confirmed correct. Never reached login, checkout, or payment in any run, successful or
+not. Two further real limitations found and handled, not glossed over:
 - A one-time "how would you like to receive your order?" modal (`#assortmentModal`)
   blocks add-to-cart on an account with no delivery method/address configured yet — hit
   once during testing, confirmed via screenshot, now detected as `blocked_reason:
@@ -540,9 +581,19 @@ method exists in either adapter). No CAPTCHA/bot-block was encountered for eithe
 - Real-site selectors drift over time by nature (see **Live retailer verification** —
   both adapters' CP8-era selectors were already stale by CP9 and have been refreshed
   against the real sites as of this checkpoint); expect this to need periodic
-  re-verification, not a one-time fix. Shufersal's real add-to-cart is confirmed working
-  end-to-end as of this checkpoint; Rami Levy's is not — blocked by an apparent
+  re-verification, not a one-time fix. Shufersal's real add-to-cart is meaningfully more
+  reliable as of this checkpoint (two confirmed, fixed root causes) but **not** fully
+  reliable — a third, non-deterministic issue remains open (see **Live retailer
+  verification**); Rami Levy's is unconfirmed end-to-end — blocked by an apparent
   account-state prerequisite (`assortment_unavailable`) not yet fully root-caused.
+- `automation.py`'s `prepare_cart_for_retailer` now opens a fresh browser context per
+  item (reloading `storage_state` each time) instead of reusing one context for the whole
+  run — found necessary for Shufersal (reusing one context across multiple navigations
+  permanently hid its add-to-cart button). This is heavier (one browser context per item
+  instead of one per run) and applies to every adapter, including Rami Levy and the mock
+  adapter, not just Shufersal; the mock-site integration suite already covers it (140/140
+  tests pass), but a cart with many items now opens/closes many contexts in sequence —
+  acceptable for the tested/observed cart sizes, worth watching if that changes.
 - The pre-existing (CP8, unchanged by CP9) `name_fallback` matching behavior — falling
   back to the first search result when nothing truly matches a requested item, rather
   than reporting `not_found` — can add an item the user never asked for when a query
