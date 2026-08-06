@@ -32,12 +32,17 @@ class ParsedRequestSchema(BaseModel):
     brand_preference: str | None = None
     selection_preference: Literal["cheapest", "no_preference"] = "no_preference"
 
-    @field_validator("recipe_query", "retailer_preference", "brand_preference", mode="before")
+    @field_validator(
+        "recipe_query", "servings", "budget", "retailer_preference", "brand_preference",
+        mode="before",
+    )
     @classmethod
     def _coerce_empty_list_to_none(cls, value):
-        # Some Bedrock models' tool-calling output fills an unset optional string field
-        # with `[]` instead of omitting it or returning null (observed with
-        # openai.gpt-oss-20b-1:0) — a type-compatibility quirk, not a real value.
+        # Some Bedrock models' tool-calling output fills an unset optional scalar field
+        # (string, int, or float) with `[]` instead of omitting it or returning null
+        # (observed with openai.gpt-oss-20b-1:0, first for brand_preference, then budget)
+        # — a type-compatibility quirk, not a real value. Deliberately excludes `items`/
+        # `dietary_constraints` (list[str] fields where `[]` is a legitimate value).
         if value == []:
             return None
         return value
