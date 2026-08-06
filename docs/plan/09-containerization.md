@@ -432,28 +432,68 @@ scripts/smoke_test.sh
 
 Both real captured sessions (`sessions/shufersal.json`, `sessions/rami_levy.json`, from a
 prior manual `login.py` run) were exercised directly against `retailer-cart-mcp`'s real
-`prepare_retailer_cart` tool over the compose network — **reported separately, per
-retailer, as required**; do not read this as "full live support" for either:
+`prepare_retailer_cart` tool, both directly via `automation.py` and over the compose
+network through the real container — **reported separately, per retailer, as required**.
 
-**Shufersal** — session loads (no `login_required`, no CAPTCHA block detected), real site
-navigation succeeds, correct `cart_url`
-(`https://www.shufersal.co.il/online/he/cart`) returned. Item search for a common Hebrew
-grocery term ("חלב"/milk) returned `not_found` — the adapter's CSS selectors
-(`[data-testid='product-tile']`) and search URL, documented in CP8 as "unverified
-guesses... verify selectors manually against the live site periodically," do not match the
-real site's current markup. Add-to-cart, quantity confirmation, and cart persistence were
-**not exercised** because no item matched. **Status: wiring/session/blocking verified live;
-selectors are stale — needs a follow-up selector-refresh pass (CP8 adapter maintenance, out
-of CP9's scope).**
+**First pass** (selectors as originally written in CP8) found both adapters' CSS
+selectors and Rami Levy's search URL were stale/wrong against the real sites — see
+"selector refresh" below, since fixed.
 
-**Rami Levy** — same result: session loads, real site navigation succeeds, correct
-`cart_url` (`https://www.rami-levy.co.il/cart`) returned, no block detected, item search
-for the same term returned `not_found` (adapter's `.product-box` selectors / `/api/search`
-URL are similarly unverified-guess-stale). **Status: wiring/session/blocking verified
-live; selectors are stale — same follow-up needed.**
+**Selector refresh (CP9 follow-up, same session):** inspected both real sites' actual
+markup live (Playwright, headless, using the captured sessions) and rewrote both
+adapters' `search_and_match`/`add_to_cart`/`detect_block` against verified real
+selectors. Also fixed a real, general bug found along the way: neither adapter
+URL-encoded `item_name`/`item_code` before interpolating them into the search URL, so any
+item name containing a reserved URL character (e.g. `%`, common in "X% milk"-style
+product names) silently broke the search — fixed with `urllib.parse.quote()` in both.
+
+**Shufersal — status: real add-to-cart confirmed working end-to-end, live.** Session
+loads, real site navigation succeeds, search finds an exact match by product name
+(`li.tileBlock[data-product-name=...]`), add-to-cart click + quantity fill + update
+confirmed via the input's own value AND independently verified by reloading the homepage
+fresh afterward and reading the real, server-side cart badge/total (went from empty to 1
+item / ₪43.25 after the add — not just a local DOM read). `cart_url`
+(`https://www.shufersal.co.il/online/he/cart`) confirmed correct. Never reached login,
+checkout, or payment. Two real limitations found and handled, not glossed over:
+- A one-time "how would you like to receive your order?" modal (`#assortmentModal`)
+  blocks add-to-cart on an account with no delivery method/address configured yet — hit
+  once during testing, confirmed via screenshot, now detected as `blocked_reason:
+  "delivery_address_required"` rather than silently failing or hanging. Configuring a
+  delivery address is account setup, not a per-request cart action, so — like login —
+  it's intentionally left to the account owner, never automated.
+- **A real, unintended side effect during this session's own testing, not caused by a
+  normal user request:** a deliberately nonsense test query
+  (`"zzz_no_such_product_zzz"`, used to probe the `not_found` path) tripped the
+  pre-existing `name_fallback` behavior (unchanged by CP9 — documented CP8 design: fall
+  back to the first search result when nothing truly matches, rather than reporting
+  nothing found) and added an unintended, unidentified real item to the live cart. No
+  checkout/payment was reached, but this is a genuine product-behavior question flagged
+  for a separate decision, not resolved here: `name_fallback`'s "guess the first result"
+  behavior can add something the user never asked for. Left unchanged pending explicit
+  direction (see Risks).
+
+**Rami Levy — status: real search/navigation confirmed; add-to-cart blocked by an
+apparent account-state prerequisite, not fully confirmed end-to-end.** Session loads, real
+site navigation succeeds, the real front-end search URL is `/he/online/search?q=...`
+(distinct from `/api/search?q=...`, a raw JSON API the site's own front-end calls
+internally that the original adapter was mistakenly hitting directly — there is no
+`.product-box` HTML anywhere on the real site). Tile identification via
+`.product-img[alt]` and the add-to-cart stepper (`button.btn-acc.plus`, quantity shown in
+`.num-span`, whole-units only — this site has no direct-fill quantity input, only a
++/- stepper, so `UnsupportedQuantityError` is raised for fractional quantities) were
+captured from one successfully-rendered results page. On later attempts in the same
+session, search-result tiles loaded as empty placeholders (image container present, no
+`alt` text, no add-to-cart controls at all) — most likely the same kind of one-time
+delivery/branch setup prerequisite confirmed for Shufersal, though no equivalent visible
+prompt was found to directly confirm that specific cause for this site.
+`detect_block()` now reports this placeholder state as `blocked_reason:
+"assortment_unavailable"` (verified live, both directly and through the container)
+rather than guessing further or letting a hover/click on a nonexistent button hang.
+**Full add-to-cart was not re-confirmed end-to-end for this retailer** — an honest open
+item, not claimed as done.
 
 Neither adapter reached checkout, login, or payment at any point, by construction (no such
-method exists in either adapter). No CAPTCHA/bot-block was encountered in either case, so
+method exists in either adapter). No CAPTCHA/bot-block was encountered for either site, so
 `detect_block()`'s CAPTCHA path was not exercised live.
 
 ## Acceptance Criteria
@@ -488,10 +528,23 @@ method exists in either adapter). No CAPTCHA/bot-block was encountered in either
 - `./sessions/` is a local host directory mounted read-only into `retailer-cart-mcp` — it
   must exist (even empty) before `docker compose up`, and must never be committed (CP8's
   `.gitignore` entry covers this, verified still in effect).
-- Both real retailer adapters' selectors are confirmed stale against the live sites as of
-  this checkpoint (see **Live retailer verification**) — real add-to-cart is not currently
-  functional end-to-end against either site, only the session/navigation/blocking-detection
-  layer. This is a real, load-bearing limitation, not a hypothetical one.
+- Real-site selectors drift over time by nature (see **Live retailer verification** —
+  both adapters' CP8-era selectors were already stale by CP9 and have been refreshed
+  against the real sites as of this checkpoint); expect this to need periodic
+  re-verification, not a one-time fix. Shufersal's real add-to-cart is confirmed working
+  end-to-end as of this checkpoint; Rami Levy's is not — blocked by an apparent
+  account-state prerequisite (`assortment_unavailable`) not yet fully root-caused.
+- The pre-existing (CP8, unchanged by CP9) `name_fallback` matching behavior — falling
+  back to the first search result when nothing truly matches a requested item, rather
+  than reporting `not_found` — can add an item the user never asked for when a query
+  matches nothing meaningfully (observed live during CP9 verification testing). Flagged
+  as a real product-behavior question, deliberately left unchanged pending a separate,
+  explicit decision — not silently fixed or hidden.
+- Both real retailer sites appear to require one-time account setup (a delivery
+  method/address) before add-to-cart fully works — confirmed directly for Shufersal
+  (`#assortmentModal`), inferred but not directly confirmed for Rami Levy. Like login,
+  this is intentionally never automated — it's the account owner's one-time setup, not a
+  per-request cart action.
 - All five images run as root (not a hardened non-root user) — trades container-hardening
   for reliability of two host bind-mounts (`~/.aws` on `backend`, `./sessions` on
   `retailer-cart-mcp`) whose permissions/ownership don't reliably survive a non-root
@@ -540,8 +593,11 @@ for any field the model actually fills in (see `tests/agent/test_parsed_request_
 - [x] Manual walkthrough (grocery-list, recipe, retailer-choice, decline,
       missing-session `login_required`) confirmed against the real containerized stack,
       including one real-browser pass.
-- [x] Live verification against real Shufersal and Rami Levy reported separately, with the
-      stale-selector limitation documented rather than glossed over.
+- [x] Live verification against real Shufersal and Rami Levy reported separately, both
+      initially and after a selector-refresh follow-up: Shufersal's real add-to-cart
+      confirmed working end-to-end; Rami Levy's search/navigation confirmed, add-to-cart
+      blocked by an unresolved `assortment_unavailable` condition — documented as an
+      honest open item, not claimed as done.
 - [x] `pytest`, `ruff check`, `pytest --cov`, and `cd web && npm run build` all pass on the
       final code.
 - [x] Committed with a message referencing CP9.
