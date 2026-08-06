@@ -93,6 +93,42 @@ async def test_search_and_match_falls_back_to_first_result():
     assert match.matched_by == "name_fallback"
 
 
+async def test_search_and_match_prefers_item_code_over_name_mismatch():
+    # our locally-ingested ItemName ("Ice Cream 1kg BRAND") often differs from the site's
+    # own cleaner display name ("Ice Cream") for the identical product — item_code is the
+    # authoritative signal and must win even when name comparison would otherwise fail.
+    page = FakePage(search_results=[_ok([
+        {"code": "P_123", "name": "Ice Cream", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
+    ])])
+
+    match = await ShufersalAdapter().search_and_match(page, "Ice Cream 1kg BRAND", "123")
+
+    assert match.item_code == "P_123"
+    assert match.matched_by == "item_code"
+
+
+async def test_search_and_match_item_code_comparison_ignores_p_prefix_either_side():
+    page = FakePage(search_results=[_ok([
+        {"code": "P_123", "name": "Something Unrelated", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
+    ])])
+
+    match = await ShufersalAdapter().search_and_match(page, "Ice Cream", "P_123")
+
+    assert match.item_code == "P_123"
+    assert match.matched_by == "item_code"
+
+
+async def test_search_and_match_falls_back_to_name_when_code_not_among_results():
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Milk", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
+    ])])
+
+    match = await ShufersalAdapter().search_and_match(page, "Milk", "999-not-present")
+
+    assert match.item_code == "P1"
+    assert match.matched_by == "exact_name"
+
+
 async def test_search_and_match_returns_none_when_no_results():
     page = FakePage(search_results=[_ok([])])
 

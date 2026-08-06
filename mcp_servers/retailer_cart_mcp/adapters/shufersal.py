@@ -37,6 +37,28 @@ add call throwing) surfaces as a structured per-item error with `unsupported_sit
 the reason. There is no fallback to DOM automation — an internal interface disappearing is
 treated as a hard, reported stop, not silently worked around.
 
+`search_and_match` matches by `item_code` first, before falling back to name comparison —
+confirmed live (CP9 follow-up, 2026-08-06) that our locally-ingested catalog's item_codes
+are genuine retailer barcodes/GTINs that match the site's own product codes one-for-one, so
+this is strictly more reliable than name matching (our feed's raw `ItemName` — e.g. brand
+and size concatenated with no spaces — frequently differs from the site's own cleaner
+display name for the identical product, which was breaking exact-name matching for
+otherwise-correct items).
+
+**Open, unresolved question, flagged rather than assumed away:** a real user reported an
+add that this adapter (and independent live checks against the same captured session — a
+fresh search re-query, the site's own cart-flyout total) all confirmed as successful, but
+that did not appear when the user logged into the real site with their own credentials
+separately. The session/cart mechanics were checked as far as code alone can verify
+(`acceleratorSecureGUID`/`miglog-cart` persist identically across fresh browser contexts
+using the same `storage_state`, and an account-restricted URL did not redirect to a login
+page), but whether the captured `sessions/shufersal.json` corresponds to the *same account*
+the user logs into themselves was not established — that requires knowing which credentials
+were used when the session was captured, which isn't recoverable from the session file or
+this adapter's code. Until resolved, don't treat this adapter's own success reporting (nor
+its own live re-verification) as proof an add is visible in any *other* login of the same
+site — only that it's visible within the exact session this adapter was given.
+
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
 always reported and the run stops gracefully; it is never worked around.
@@ -101,8 +123,17 @@ class ShufersalAdapter:
         return response["results"]
 
     async def search_and_match(self, page: Page, item_name: str, item_code: str) -> MatchResult | None:
-        # Only ever searches by name — our fixture-style item_code never matches the real
-        # site's own "P_xxxxx" internal codes, so a by-code pre-search was always wasted.
+        # Always searches by name first (the site's search is text-indexed, not
+        # code-indexed) — but now matches results by item_code *before* falling back to
+        # name comparison. Earlier versions of this adapter assumed item_code would never
+        # match the site's own "P_xxxxx" codes, based on CP8's synthetic test fixtures —
+        # wrong for the real, feed-ingested catalog: those item_codes are genuine retailer
+        # barcodes/GTINs and were confirmed live to match the site's own product codes
+        # one-for-one (CP9 follow-up, 2026-08-06). Matching by code first is strictly more
+        # reliable than name comparison, since our locally-ingested ItemName (raw feed
+        # text, e.g. brand/size concatenated with no spaces) frequently differs from the
+        # site's own cleaner display name for the identical product.
+        #
         # One navigation per fresh context (automation.py gives each item its own), then
         # the rest of this adapter talks to the site entirely through same-origin fetch
         # calls from inside page.evaluate() — no further navigation is needed at all.
@@ -110,6 +141,13 @@ class ShufersalAdapter:
         results = await self._search(page, item_name)
         if not results:
             return None
+
+        normalized_code = item_code.removeprefix("P_") if item_code else None
+        if normalized_code:
+            for item in results:
+                site_code = (item.get("code") or "").removeprefix("P_")
+                if site_code == normalized_code:
+                    return MatchResult(item_code=item["code"], locator=item, matched_by="item_code")
 
         for item in results:
             name = item.get("name")
