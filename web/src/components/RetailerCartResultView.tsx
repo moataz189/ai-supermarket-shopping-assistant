@@ -62,6 +62,13 @@ export function RetailerCartResultView({ result }: RetailerCartResultViewProps) 
           Open cart on {name}
         </a>
       )}
+
+      {result.added.length > 0 && result.cart_url && (
+        <p className="text-xs text-zinc-400">
+          Your {name} cart was updated. If your currently open {name} session still shows
+          an empty cart, sign out and sign back in to refresh the account cart.
+        </p>
+      )}
     </div>
   )
 }
