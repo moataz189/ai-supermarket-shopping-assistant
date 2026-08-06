@@ -1,0 +1,5 @@
+# Subset of the root requirements.txt (source of truth for versions) — only what
+# mcp_servers/retailer_cart_mcp actually imports. No sqlalchemy (no DB access).
+pydantic>=2.7
+mcp==1.29.0
+playwright>=1.62.0
