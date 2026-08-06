@@ -13,7 +13,7 @@ def test_shufersal_parses_real_sample_feed():
 
     products = shufersal.parse(xml_bytes)
 
-    assert len(products) == 5
+    assert len(products) == 9
     assert all(p.store_id == "413" for p in products)
     by_code = {p.item_code: p for p in products}
     grams_item = by_code["10181040009"]
@@ -43,7 +43,7 @@ def test_rami_levy_parses_real_sample_feed():
 
     products = rami_levy.parse(xml_bytes)
 
-    assert len(products) == 5
+    assert len(products) == 9
     assert all(p.store_id == "39" for p in products)
     by_code = {p.item_code: p for p in products}
     tomato = by_code["100"]
@@ -67,3 +67,18 @@ def test_rami_levy_wrong_store_id_raises():
 
     with pytest.raises(FeedValidationError):
         rami_levy.parse(xml_bytes)
+
+
+def test_both_retailers_carry_matching_pasta_and_milk_items():
+    """Both fixtures deliberately carry a few identically-named staples (pasta, milk) so
+    a single grocery-list request can find a real match at both retailers — the original
+    5+5 items had no overlap at all, which made cross-retailer comparison untestable."""
+    shufersal_products = shufersal.parse((FIXTURES / "shufersal_sample.xml").read_bytes())
+    rami_levy_products = rami_levy.parse((FIXTURES / "rami_levy_sample.xml").read_bytes())
+
+    shufersal_names = {p.name for p in shufersal_products}
+    rami_levy_names = {p.name for p in rami_levy_products}
+    shared = shufersal_names & rami_levy_names
+
+    assert "פסטה פנה 500 גרם" in shared
+    assert "חלב תנובה 3% 1 ליטר" in shared
