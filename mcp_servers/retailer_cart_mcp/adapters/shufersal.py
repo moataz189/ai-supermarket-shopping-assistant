@@ -45,19 +45,20 @@ and size concatenated with no spaces — frequently differs from the site's own 
 display name for the identical product, which was breaking exact-name matching for
 otherwise-correct items).
 
-**Open, unresolved question, flagged rather than assumed away:** a real user reported an
-add that this adapter (and independent live checks against the same captured session — a
-fresh search re-query, the site's own cart-flyout total) all confirmed as successful, but
-that did not appear when the user logged into the real site with their own credentials
-separately. The session/cart mechanics were checked as far as code alone can verify
-(`acceleratorSecureGUID`/`miglog-cart` persist identically across fresh browser contexts
-using the same `storage_state`, and an account-restricted URL did not redirect to a login
-page), but whether the captured `sessions/shufersal.json` corresponds to the *same account*
-the user logs into themselves was not established — that requires knowing which credentials
-were used when the session was captured, which isn't recoverable from the session file or
-this adapter's code. Until resolved, don't treat this adapter's own success reporting (nor
-its own live re-verification) as proof an add is visible in any *other* login of the same
-site — only that it's visible within the exact session this adapter was given.
+**A real user report of "confirmed added but not visible in my account" was investigated
+at length (CP9 follow-up, 2026-08-06) and root-caused to something outside this adapter
+entirely, not a bug here.** Ruled out concretely, in order: name matching (fixed above
+regardless, but not the cause), session/account identity (a same-account, freshly captured
+session still didn't appear to show it), and request shape (a genuine Playwright `.click()`
+on the real "add to cart" button was captured and compared byte-for-byte against this
+adapter's `ajaxCall` request — effectively identical, both landed the same way). The actual
+cause: the user was checking an **already-open, already-logged-in browser tab**, which
+doesn't refetch true server-side account state from a page load or a link click — only a
+fresh login (log out, log back in) forces it to. The add was genuinely reaching the real,
+cross-device account cart the whole time; confirmed once the user did a fresh login. No
+adapter behavior change resulted from this beyond the `item_code`-matching and
+`get_cart_url` fixes above, both good independently but neither was the actual cause of
+what looked like a failure.
 
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is

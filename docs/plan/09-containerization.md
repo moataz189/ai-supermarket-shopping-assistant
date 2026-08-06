@@ -661,22 +661,30 @@ correct real price). Two separate things came out of investigating this, live:
    per the user, is always true by the time an item reaches Retailer-Cart MCP. Covered by
    3 new unit tests (16/16 in `test_shufersal_adapter.py`, 156/156 full suite).
 
-2. **A real, unresolved question this adapter's own verification cannot settle:** is the
-   captured `sessions/shufersal.json` even the *same account* the user logs into
-   themselves? Checked as far as code can verify: `acceleratorSecureGUID` and `miglog-cart`
-   (the cookies that appear to carry cart/identity association) stay identical across
-   separate fresh browser contexts loading the same `storage_state` — this isn't spinning
-   up a new anonymous identity per run — and a real account-restricted URL
-   (`/online/he/my-account/personal-area/cart-2-wishlist`) did not redirect to a login page,
-   meaning the session is treated as authenticated for account-scoped pages, not merely
-   anonymous/guest browsing. But none of that proves it's the *same* real-world account the
-   user separately logged into with their own credentials — that depends entirely on which
-   credentials `login.py` was run with when the session file was captured, which isn't
-   recoverable from the file or this adapter's code. **Left explicitly open, not resolved
-   or assumed away** — documented as a caveat directly in `shufersal.py`'s module
-   docstring: this adapter's own success confirmation (however independently re-checked)
-   only proves visibility within the exact session it was given, never that the same
-   result would appear under a separate, later login to the same site.
+2. **A cross-session "empty cart" report, chased hard, that turned out to be a false
+   alarm — root-caused, not left open.** The user confirmed the captured session used the
+   *same* account they were checking manually, which ruled out an account-mismatch theory.
+   Investigated in order, each one ruled out concretely rather than assumed: (a) a
+   freshly-recaptured `login.py` session, used within minutes, still didn't appear on the
+   user's side — ruled out staleness; (b) `acceleratorSecureGUID`/`miglog-cart` stayed
+   identical across fresh contexts and an account-restricted URL didn't redirect to login —
+   the session was genuinely authenticated, not anonymous/guest; (c) a byte-for-byte network
+   comparison between a genuine Playwright `.click()` on the real "add to cart" button and
+   this adapter's `ajaxCall` request showed them landing the same way — ruled out request
+   shape as the variable, since even a literal real click didn't appear on the user's side
+   either. **The actual cause:** the user was checking an already-open, already
+   logged-in browser tab, which doesn't refetch true server-side account state from a page
+   load or a link click — only a fresh login (log out, log back in) forces that refetch.
+   The add was genuinely reaching the real, cross-device account cart the entire time;
+   confirmed once the user did a fresh login and saw it. No further adapter change resulted
+   from this beyond the `item_code` matching and `get_cart_url` fixes above — both good
+   improvements independently, but neither was the actual cause of what looked like a
+   failure. Documented here at length because the investigation genuinely (and reasonably,
+   given the evidence at each step) pointed toward several wrong conclusions — an
+   account-identity mismatch, then a fundamental session-replay limitation — before the
+   real, much simpler cause was found. Worth remembering next time a "says added but I
+   don't see it" report comes in: check for a stale already-open tab before assuming the
+   automation is at fault.
 
 **Rami Levy — status: real search/navigation confirmed; add-to-cart blocked by an
 apparent account-state prerequisite, not fully confirmed end-to-end.** Session loads, real
@@ -818,6 +826,15 @@ for any field the model actually fills in (see `tests/agent/test_parsed_request_
       live run of the actual (non-mock) code path; Rami Levy's search/navigation
       confirmed, add-to-cart blocked by an unresolved `assortment_unavailable` condition —
       documented as an honest open item, not claimed as done.
+- [x] Shufersal add-to-cart confirmed to persist to the real, cross-device account cart —
+      not merely a session-scoped/automation-only cart. Verified by the account owner
+      directly: an item added by this adapter appeared in the real account cart after a
+      fresh login. **Known UX caveat, not a bug:** an already-open, already-logged-in
+      Shufersal browser tab shows stale cart state and does not refetch it from a page load
+      or a link click — only a fresh login (sign out, sign back in) forces a refetch. The
+      app's success UI (`RetailerCartResultView.tsx`) now says this explicitly next to the
+      "Open cart" link so a user checking an already-open tab isn't misled into thinking
+      the add failed.
 - [x] `pytest`, `ruff check`, `pytest --cov`, and `cd web && npm run build` all pass on the
       final code.
 - [x] Committed with a message referencing CP9.
