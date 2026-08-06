@@ -15,3 +15,32 @@ def test_real_brand_preference_string_passes_through_unchanged():
     parsed = ParsedRequestSchema(items=["milk"], brand_preference="Tnuva")
 
     assert parsed.brand_preference == "Tnuva"
+
+
+def test_empty_list_for_optional_budget_field_coerces_to_none():
+    """Same model quirk as brand_preference, observed live for a non-string optional
+    field too — the coercion isn't string-specific."""
+    parsed = ParsedRequestSchema(items=["milk"], budget=[])
+
+    assert parsed.budget is None
+
+
+def test_empty_list_for_optional_servings_field_coerces_to_none():
+    parsed = ParsedRequestSchema(items=["milk"], servings=[])
+
+    assert parsed.servings is None
+
+
+def test_real_budget_value_passes_through_unchanged():
+    parsed = ParsedRequestSchema(items=["milk"], budget=100.0)
+
+    assert parsed.budget == 100.0
+
+
+def test_empty_items_list_stays_empty_list_not_coerced_to_none():
+    """items/dietary_constraints are list[str] fields where [] is a real, valid value
+    (no items given) — must never be coerced to None."""
+    parsed = ParsedRequestSchema(items=[], dietary_constraints=[])
+
+    assert parsed.items == []
+    assert parsed.dietary_constraints == []
