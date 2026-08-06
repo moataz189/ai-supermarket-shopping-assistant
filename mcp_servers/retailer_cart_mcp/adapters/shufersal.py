@@ -5,13 +5,21 @@ against the real site with a captured session — real search URL, real tile att
 don't exist on the real site), real add-to-cart button/quantity-input classes. Re-verify
 periodically; real-site structure still drifts over time.
 
-Full add-to-cart could NOT be confirmed end-to-end live: clicking "add" on an account with
-no delivery method/address configured opens a mandatory "how would you like to receive
-your order?" modal (`#assortmentModal`) that blocks the add — confirmed live, screenshot
-captured. Configuring a delivery address is one-time account setup, not a per-request cart
-action, so it's intentionally out of scope for this automation (same reasoning as
-login — see login.py); detect_block() reports it as `delivery_address_required` instead of
-silently failing or hanging.
+Full add-to-cart confirmed working end-to-end live, cross-checked against an independent
+fresh page reload (not just this adapter's own report) showing the real cart's item count
+and total actually increase by the added item's real price. The quantity-confirmation step
+deliberately reloads the page and re-queries by the matched item_code before reading back
+the quantity — reading the same `<input>` this method itself just filled would only prove
+the DOM write succeeded, not that the site's backend actually persisted it (an earlier
+version of this method had exactly that bug: it filled the input then read that same input
+back, so it reported `confirmed` even on requests that never actually reached the server).
+
+On an account with no delivery method/address configured yet, clicking "add" instead opens
+a mandatory "how would you like to receive your order?" modal (`#assortmentModal`) that
+blocks the add — confirmed live, screenshot captured. Configuring a delivery address is
+one-time account setup, not a per-request cart action, so it's intentionally out of scope
+for this automation (same reasoning as login — see login.py); detect_block() reports it as
+`delivery_address_required` instead of silently failing or hanging.
 
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
@@ -77,8 +85,16 @@ class ShufersalAdapter:
         qty_input = container.locator("input.js-qty-selector-input")
         await qty_input.fill(str(quantity))
         await container.locator("button.js-update-cart").click()
+        await page.wait_for_timeout(1000)
 
-        confirmed_attr = await qty_input.input_value()
+        # Confirm against a fresh page reload, re-querying by the matched item_code (not
+        # the original tile-index locator, whose position could shift on reload) — reading
+        # back the same input we just filled would only prove the DOM write succeeded, not
+        # that the site's backend actually persisted the add.
+        await page.reload()
+        fresh_tile = page.locator(f"li.tileBlock[data-product-code='{match.item_code}']").first
+        fresh_qty_input = fresh_tile.locator(".addToCartWrapperOld input.js-qty-selector-input")
+        confirmed_attr = await fresh_qty_input.input_value()
         confirmed = float(confirmed_attr)
         if confirmed != quantity:
             raise QuantityNotConfirmedError(
