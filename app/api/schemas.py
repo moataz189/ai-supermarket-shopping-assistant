@@ -68,3 +68,4 @@ class ChatResponse(BaseModel):
     chosen_retailer: str | None = None
     retailer_cart_result: RetailerCartResult | None = None
     warnings: list[dict] = []
+    message: str | None = None  # a natural-language reply for general_chat requests

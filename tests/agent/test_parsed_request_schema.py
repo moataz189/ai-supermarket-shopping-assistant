@@ -44,3 +44,23 @@ def test_empty_items_list_stays_empty_list_not_coerced_to_none():
 
     assert parsed.items == []
     assert parsed.dietary_constraints == []
+
+
+def test_empty_list_for_optional_reply_field_coerces_to_none():
+    """Same Bedrock model quirk as brand_preference/budget/servings, checked for `reply`
+    too since it's the same kind of optional scalar string field."""
+    parsed = ParsedRequestSchema(request_type="general_chat", reply=[])
+
+    assert parsed.reply is None
+
+
+def test_real_reply_string_passes_through_unchanged():
+    parsed = ParsedRequestSchema(request_type="general_chat", reply="Hi there!")
+
+    assert parsed.reply == "Hi there!"
+
+
+def test_general_chat_is_a_valid_request_type():
+    parsed = ParsedRequestSchema(request_type="general_chat")
+
+    assert parsed.request_type == "general_chat"
