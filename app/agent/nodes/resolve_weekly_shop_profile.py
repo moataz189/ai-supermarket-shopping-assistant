@@ -2,28 +2,36 @@ from langgraph.types import interrupt
 
 from app.agent.state import AgentState
 
-# Deterministic starter lists, in English (the language-neutral generic term for each
-# product) — item names still flow through the exact same resolve_items/build_*_cart path
-# as a normal grocery list, so a real retailer catalog that doesn't have an English-named
-# match for one of these will surface it as an ordinary missing_items entry, not a crash.
+# Deterministic starter lists, in Hebrew — real Shufersal/Rami Levy catalog data is
+# Hebrew-only (retailer feeds have no English product names at all), so an English generic
+# term like "tomatoes" never matches a real catalog entry even when the equivalent product
+# genuinely exists (e.g. "עגבניה"), confirmed live: every item showed up as missing despite
+# real matches being available. Also confirmed live: search_candidates matches by substring
+# (`name.ilike(f"%{query}%")`, see app/db/repositories.py) against the stored product name,
+# and Israeli retail feeds list fresh produce in singular generic form ("עגבניה", not
+# "עגבניות") — a plural query is a different string, not a substring, and silently misses
+# too. Item names still flow through the exact same resolve_items/build_*_cart path as a
+# normal grocery list, so any of these that still don't match a given retailer's actual
+# catalog (real feeds vary store to store) surface as an ordinary missing_items entry, not
+# a crash.
 STARTER_LISTS: dict[str, list[str]] = {
-    "basic": ["bread", "milk", "eggs", "rice", "pasta", "olive oil", "tomatoes", "onions"],
-    "one_person": ["bread", "milk", "eggs", "chicken breast", "rice", "pasta", "tomatoes", "bananas"],
+    "basic": ["לחם", "חלב", "ביצים", "אורז", "פסטה", "שמן זית", "עגבניה", "בצל"],
+    "one_person": ["לחם", "חלב", "ביצים", "חזה עוף", "אורז", "פסטה", "עגבניה", "בננה"],
     "couple": [
-        "bread", "milk", "eggs", "chicken breast", "rice", "pasta", "tomatoes", "onions",
-        "cheese", "yogurt",
+        "לחם", "חלב", "ביצים", "חזה עוף", "אורז", "פסטה", "עגבניה", "בצל",
+        "גבינה צהובה", "יוגורט",
     ],
     "family": [
-        "bread", "milk", "eggs", "chicken breast", "ground beef", "rice", "pasta", "tomatoes",
-        "onions", "cheese", "yogurt", "apples", "bananas", "cereal",
+        "לחם", "חלב", "ביצים", "חזה עוף", "בשר טחון", "אורז", "פסטה", "עגבניה",
+        "בצל", "גבינה צהובה", "יוגורט", "תפוח", "בננה", "דגני בוקר",
     ],
     "healthy": [
-        "chicken breast", "salmon", "quinoa", "spinach", "broccoli", "tomatoes", "olive oil",
-        "greek yogurt", "eggs", "avocado",
+        "חזה עוף", "סלמון", "קינואה", "תרד", "ברוקולי", "עגבניה", "שמן זית",
+        "יוגורט יווני", "ביצים", "אבוקדו",
     ],
     "vegetarian": [
-        "tofu", "chickpeas", "lentils", "rice", "pasta", "tomatoes", "spinach", "cheese",
-        "eggs", "yogurt",
+        "טופו", "גרגירי חומוס", "עדשים", "אורז", "פסטה", "עגבניה", "תרד", "גבינה צהובה",
+        "ביצים", "יוגורט",
     ],
 }
 
