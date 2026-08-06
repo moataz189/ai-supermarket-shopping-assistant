@@ -15,6 +15,16 @@ class QuantityNotConfirmedError(Exception):
     match what was requested (site-side cap, stock limit, a UI update that didn't take)."""
 
 
+class UnsupportedSiteFlowError(Exception):
+    """Raised by an adapter when it depends on an internal, undocumented site interface
+    (an internal JS helper, an XHR endpoint) that isn't available or doesn't behave as
+    expected on this page load — e.g. the site removed/renamed the function, or an
+    endpoint's response shape changed. This is expected to happen eventually since the
+    interface is undocumented and can change without notice; adapters must report it as a
+    structured failure rather than falling back to guessing, force-clicking, or otherwise
+    working around the missing interface."""
+
+
 @dataclass
 class MatchResult:
     item_code: str
@@ -92,37 +102,55 @@ async def prepare_cart_for_retailer(
                 for item in items:
                     name, item_code, quantity = item["name"], item["item_code"], item["quantity"]
 
+                    # A fresh context per item — not the shared `page` used for
+                    # open_site()/get_cart_url() above — reloading the same
+                    # storage_state. Reusing one page/context across multiple full
+                    # navigations left at least one real site's add-to-cart button
+                    # permanently hidden after the context's first navigation (confirmed
+                    # live against Shufersal, CP9: reproduced 8 ways, root-caused to a
+                    # context-scoped personalization/analytics script that only
+                    # initializes certain widgets correctly on that context's first page
+                    # load — a fresh context per item sidesteps it, since each one gets
+                    # its own first-and-only navigation).
+                    item_context = None
                     try:
-                        match = await adapter.search_and_match(page, name, item_code)
-                    except Exception as exc:
-                        failed.append({"name": name, "item_code": item_code, "status": "error", "reason": str(exc)})
-                        continue
+                        item_context = await browser.new_context(storage_state=storage_state_path)
+                        item_page = await item_context.new_page()
 
-                    blocked_reason = await _safe_detect_block(adapter, page)
-                    if blocked_reason:
-                        break
+                        try:
+                            match = await adapter.search_and_match(item_page, name, item_code)
+                        except Exception as exc:
+                            failed.append({"name": name, "item_code": item_code, "status": "error", "reason": str(exc)})
+                            continue
 
-                    if match is None:
-                        failed.append({"name": name, "item_code": item_code, "status": "not_found"})
-                        continue
+                        blocked_reason = await _safe_detect_block(adapter, item_page)
+                        if blocked_reason:
+                            break
 
-                    try:
-                        confirmed_qty = await adapter.add_to_cart(page, match, quantity)
-                    except Exception as exc:
-                        failed.append({"name": name, "item_code": item_code, "status": "error", "reason": str(exc)})
-                        continue
+                        if match is None:
+                            failed.append({"name": name, "item_code": item_code, "status": "not_found"})
+                            continue
 
-                    added.append({
-                        "name": name,
-                        "item_code": item_code,
-                        "status": "added",
-                        "matched_by": match.matched_by,
-                        "quantity_confirmed": confirmed_qty,
-                    })
+                        try:
+                            confirmed_qty = await adapter.add_to_cart(item_page, match, quantity)
+                        except Exception as exc:
+                            failed.append({"name": name, "item_code": item_code, "status": "error", "reason": str(exc)})
+                            continue
 
-                    blocked_reason = await _safe_detect_block(adapter, page)
-                    if blocked_reason:
-                        break
+                        added.append({
+                            "name": name,
+                            "item_code": item_code,
+                            "status": "added",
+                            "matched_by": match.matched_by,
+                            "quantity_confirmed": confirmed_qty,
+                        })
+
+                        blocked_reason = await _safe_detect_block(adapter, item_page)
+                        if blocked_reason:
+                            break
+                    finally:
+                        if item_context is not None:
+                            await item_context.close()
 
             _mark_skipped(items, added, failed)
 
