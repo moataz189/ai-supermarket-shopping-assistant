@@ -142,6 +142,23 @@ def test_choosing_retailer_invokes_playwright():
         app.dependency_overrides.clear()
 
 
+def test_greeting_returns_a_conversational_message_not_a_shopping_flow():
+    llm = FakeLLM(ParsedRequestSchema(request_type="general_chat", reply="Hi! How can I help?"))
+    fake_app = build_graph(FakeSupermarketDataClient({}, {}), llm, MemorySaver())
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "hi"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "success"
+        assert body["message"] == "Hi! How can I help?"
+        assert body["carts"] == {}
+        assert body["chosen_retailer"] is None
+        assert body["clarification"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_declining_skips_playwright():
     candidates = {
         ("milk", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],

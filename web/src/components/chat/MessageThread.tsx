@@ -94,7 +94,13 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
             )
           }
 
-          if (response.carts) {
+          if (response.message) {
+            return <AssistantBubble key={turn.id}>{response.message}</AssistantBubble>
+          }
+
+          // `carts` is `{}` (truthy in JS), not null, on non-cart responses like
+          // general_chat — only render the comparison view when it actually has entries.
+          if (response.carts && Object.keys(response.carts).length > 0) {
             return (
               <div key={turn.id} className="flex flex-col gap-3">
                 <AssistantBubble>{leadText(response.status)}</AssistantBubble>

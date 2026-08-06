@@ -9,7 +9,7 @@ class ParsedItem(TypedDict, total=False):
 
 
 class ParsedRequest(TypedDict):
-    request_type: Literal["recipe", "grocery_list"]
+    request_type: Literal["recipe", "grocery_list", "general_chat"]
     items: list[ParsedItem]
     recipe_query: str | None
     servings: int | None
@@ -19,6 +19,7 @@ class ParsedRequest(TypedDict):
     retailer_preference: str | None
     brand_preference: str | None
     selection_preference: Literal["cheapest", "no_preference"]
+    reply: str | None  # only meaningful when request_type == "general_chat" (CP10)
 
 
 class RecipeCandidate(TypedDict):

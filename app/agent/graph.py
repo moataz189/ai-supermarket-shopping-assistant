@@ -3,6 +3,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.nodes.build_retailer_cart import make_build_retailer_cart
 from app.agent.nodes.choose_retailer import choose_retailer
 from app.agent.nodes.finalize import finalize
+from app.agent.nodes.general_chat import general_chat
 from app.agent.nodes.get_recipe_ingredients import make_get_recipe_ingredients
 from app.agent.nodes.parse_request import make_parse_request
 from app.agent.nodes.prepare_retailer_cart import make_prepare_retailer_cart
@@ -15,8 +16,11 @@ from app.agent.state import AgentState
 
 
 def route_after_parse(state: AgentState) -> str:
-    if state["parsed_request"]["request_type"] == "recipe":
+    request_type = state["parsed_request"]["request_type"]
+    if request_type == "recipe":
         return "search_recipes"
+    if request_type == "general_chat":
+        return "general_chat"
     return "resolve_items"
 
 
@@ -31,6 +35,7 @@ def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_cli
     way — it's only ever used once the user has actually chosen a retailer (CP4)."""
     graph = StateGraph(AgentState)
     graph.add_node("parse_request", make_parse_request(llm))
+    graph.add_node("general_chat", general_chat)
     graph.add_node("search_recipes", make_search_recipes(recipe_client))
     graph.add_node("recipe_not_found", recipe_not_found)
     graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
@@ -45,8 +50,9 @@ def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_cli
 
     graph.add_edge(START, "parse_request")
     graph.add_conditional_edges(
-        "parse_request", route_after_parse, ["search_recipes", "resolve_items"]
+        "parse_request", route_after_parse, ["search_recipes", "resolve_items", "general_chat"]
     )
+    graph.add_edge("general_chat", END)
     graph.add_conditional_edges(
         "search_recipes",
         route_after_search_recipes,

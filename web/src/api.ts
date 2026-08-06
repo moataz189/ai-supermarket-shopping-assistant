@@ -58,6 +58,7 @@ export interface ChatResponse {
   chosen_retailer?: string | null
   retailer_cart_result?: RetailerCartResult | null
   warnings: Record<string, unknown>[]
+  message?: string | null
 }
 
 export async function postChat(threadId: string | null, message: string): Promise<ChatResponse> {
