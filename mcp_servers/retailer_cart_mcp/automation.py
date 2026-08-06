@@ -15,6 +15,16 @@ class QuantityNotConfirmedError(Exception):
     match what was requested (site-side cap, stock limit, a UI update that didn't take)."""
 
 
+class UnsupportedSiteFlowError(Exception):
+    """Raised by an adapter when it depends on an internal, undocumented site interface
+    (an internal JS helper, an XHR endpoint) that isn't available or doesn't behave as
+    expected on this page load — e.g. the site removed/renamed the function, or an
+    endpoint's response shape changed. This is expected to happen eventually since the
+    interface is undocumented and can change without notice; adapters must report it as a
+    structured failure rather than falling back to guessing, force-clicking, or otherwise
+    working around the missing interface."""
+
+
 @dataclass
 class MatchResult:
     item_code: str
