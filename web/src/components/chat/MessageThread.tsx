@@ -8,6 +8,7 @@ import { ClarificationCard } from '@/components/clarification/ClarificationCard'
 import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
 import { RetailerCartResultView } from '@/components/RetailerCartResultView'
+import { WarningsList } from './WarningsList'
 
 interface MessageThreadProps {
   turns: Turn[]
@@ -112,11 +113,7 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
                 )}
                 {response.warnings.length > 0 && (
                   <AssistantBubble>
-                    <ul className="list-disc space-y-1 pl-4 text-sm">
-                      {response.warnings.map((w, i) => (
-                        <li key={i}>{JSON.stringify(w)}</li>
-                      ))}
-                    </ul>
+                    <WarningsList warnings={response.warnings} />
                   </AssistantBubble>
                 )}
                 {!response.retailer_cart_result && response.warnings.length === 0 && (
@@ -137,11 +134,7 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
                 </div>
                 {response.warnings.length > 0 && (
                   <AssistantBubble>
-                    <ul className="list-disc space-y-1 pl-4 text-sm">
-                      {response.warnings.map((w, i) => (
-                        <li key={i}>{JSON.stringify(w)}</li>
-                      ))}
-                    </ul>
+                    <WarningsList warnings={response.warnings} />
                   </AssistantBubble>
                 )}
               </div>
