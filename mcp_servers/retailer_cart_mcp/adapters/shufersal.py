@@ -37,13 +37,19 @@ add call throwing) surfaces as a structured per-item error with `unsupported_sit
 the reason. There is no fallback to DOM automation — an internal interface disappearing is
 treated as a hard, reported stop, not silently worked around.
 
-`search_and_match` matches by `item_code` first, before falling back to name comparison —
-confirmed live (CP9 follow-up, 2026-08-06) that our locally-ingested catalog's item_codes
-are genuine retailer barcodes/GTINs that match the site's own product codes one-for-one, so
-this is strictly more reliable than name matching (our feed's raw `ItemName` — e.g. brand
-and size concatenated with no spaces — frequently differs from the site's own cleaner
-display name for the identical product, which was breaking exact-name matching for
-otherwise-correct items).
+`search_and_match` searches by `item_code` first, before ever searching by name — confirmed
+live (CP9 follow-up, 2026-08-06 then 2026-08-07) that our locally-ingested catalog's
+item_codes are genuine retailer barcodes/GTINs that match the site's own product codes
+one-for-one, and that the site's search engine treats a bare numeric query as an exact
+barcode lookup (no `P_` prefix — confirmed live that a prefixed query breaks into an
+unrelated substring match). This isn't just about matching results more reliably than name
+comparison (our feed's raw `ItemName` — e.g. brand/size concatenated with no spaces —
+frequently differs from the site's own cleaner display name for the identical product): a
+*name* search can return several genuinely different products sharing the exact same
+display name (confirmed live: 10 distinct products all named "לחם אחיד פרוס"), so even
+exact-name matching is ambiguous in a way code matching never is. Only falls back to a name
+search (then exact-name, then first-result) when there's no item_code, or the code search
+itself finds nothing.
 
 **A real user report of "confirmed added but not visible in my account" was investigated
 at length (CP9 follow-up, 2026-08-06) and root-caused to something outside this adapter
@@ -76,6 +82,14 @@ from mcp_servers.retailer_cart_mcp.automation import (
 )
 
 BASE_URL = "https://www.shufersal.co.il"
+
+
+def _find_by_code(results: list[dict], normalized_code: str) -> MatchResult | None:
+    for item in results:
+        site_code = (item.get("code") or "").removeprefix("P_")
+        if site_code == normalized_code:
+            return MatchResult(item_code=item["code"], locator=item, matched_by="item_code")
+    return None
 
 
 class ShufersalAdapter:
@@ -124,31 +138,36 @@ class ShufersalAdapter:
         return response["results"]
 
     async def search_and_match(self, page: Page, item_name: str, item_code: str) -> MatchResult | None:
-        # Always searches by name first (the site's search is text-indexed, not
-        # code-indexed) — but now matches results by item_code *before* falling back to
-        # name comparison. Earlier versions of this adapter assumed item_code would never
-        # match the site's own "P_xxxxx" codes, based on CP8's synthetic test fixtures —
-        # wrong for the real, feed-ingested catalog: those item_codes are genuine retailer
-        # barcodes/GTINs and were confirmed live to match the site's own product codes
-        # one-for-one (CP9 follow-up, 2026-08-06). Matching by code first is strictly more
-        # reliable than name comparison, since our locally-ingested ItemName (raw feed
-        # text, e.g. brand/size concatenated with no spaces) frequently differs from the
-        # site's own cleaner display name for the identical product.
+        # Searches by item_code FIRST when we have one — confirmed live (CP9 follow-up,
+        # 2026-08-07) that the site's search engine treats a bare numeric code as an exact
+        # barcode lookup (query = the digits only, no "P_" prefix — confirmed live that a
+        # prefixed query breaks into an unrelated substring match across the whole
+        # catalog). This isn't just an optimization: a name search for "לחם אחיד פרוס" (a
+        # generic bread name) returned 10 *different* products sharing that exact name —
+        # exact-name matching is ambiguous in real product catalogs in a way code matching
+        # never is. Only falls back to a name search if code search finds nothing, or there
+        # is no item_code to search by at all.
         #
         # One navigation per fresh context (automation.py gives each item its own), then
         # the rest of this adapter talks to the site entirely through same-origin fetch
         # calls from inside page.evaluate() — no further navigation is needed at all.
         await page.goto(BASE_URL)
+
+        normalized_code = item_code.removeprefix("P_") if item_code else None
+        if normalized_code:
+            code_results = await self._search(page, normalized_code)
+            match = _find_by_code(code_results, normalized_code)
+            if match is not None:
+                return match
+
         results = await self._search(page, item_name)
         if not results:
             return None
 
-        normalized_code = item_code.removeprefix("P_") if item_code else None
         if normalized_code:
-            for item in results:
-                site_code = (item.get("code") or "").removeprefix("P_")
-                if site_code == normalized_code:
-                    return MatchResult(item_code=item["code"], locator=item, matched_by="item_code")
+            match = _find_by_code(results, normalized_code)
+            if match is not None:
+                return match
 
         for item in results:
             name = item.get("name")
