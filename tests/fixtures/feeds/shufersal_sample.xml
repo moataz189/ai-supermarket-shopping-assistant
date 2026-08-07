@@ -139,7 +139,7 @@
     </Item>
     <Item>
       <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
-      <ItemCode>7290000000003</ItemCode>
+      <ItemCode>7296073219347</ItemCode>
       <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
       <ItemType>1</ItemType>
       <ItemName>לחם אחיד פרוס</ItemName>
@@ -151,8 +151,8 @@
       <UnitOfMeasure>יחידות</UnitOfMeasure>
       <bIsWeighted>0</bIsWeighted>
       <QtyInPackage>1</QtyInPackage>
-      <ItemPrice>7.50</ItemPrice>
-      <UnitOfMeasurePrice>7.50</UnitOfMeasurePrice>
+      <ItemPrice>8.38</ItemPrice>
+      <UnitOfMeasurePrice>8.38</UnitOfMeasurePrice>
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus />
     </Item>
