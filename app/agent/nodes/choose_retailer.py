@@ -4,7 +4,11 @@ from langgraph.types import interrupt
 async def choose_retailer(state):
     carts = state["retailer_carts"]
     shufersal, rami_levy = carts["shufersal"], carts["rami_levy"]
-    diff = round(shufersal["total"] - rami_levy["total"], 2)
+    # A ₪0.00 cart (every requested item missing) is not "cheaper" than a real, priced
+    # one — comparing them by raw total diff would make an empty cart look like the best
+    # deal. Savings only mean something when both sides are real, priced carts.
+    comparable = shufersal["total"] > 0 and rami_levy["total"] > 0
+    diff = round(shufersal["total"] - rami_levy["total"], 2) if comparable else 0
 
     answer = interrupt({
         "reason": "retailer_choice",
