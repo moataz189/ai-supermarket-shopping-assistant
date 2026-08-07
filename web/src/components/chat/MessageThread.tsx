@@ -98,6 +98,34 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
             return <AssistantBubble key={turn.id}>{response.message}</AssistantBubble>
           }
 
+          // Once a specific retailer is chosen, never show the comparison again — only
+          // that retailer's own cart-preparation result and its (already server-side
+          // filtered, see finalize.py) warnings. Declining ("just show me this") leaves
+          // chosen_retailer unset, so the comparison view below still applies there.
+          if (response.chosen_retailer) {
+            return (
+              <div key={turn.id} className="flex flex-col gap-3">
+                {response.retailer_cart_result && (
+                  <div className="flex justify-start">
+                    <RetailerCartResultView result={response.retailer_cart_result} />
+                  </div>
+                )}
+                {response.warnings.length > 0 && (
+                  <AssistantBubble>
+                    <ul className="list-disc space-y-1 pl-4 text-sm">
+                      {response.warnings.map((w, i) => (
+                        <li key={i}>{JSON.stringify(w)}</li>
+                      ))}
+                    </ul>
+                  </AssistantBubble>
+                )}
+                {!response.retailer_cart_result && response.warnings.length === 0 && (
+                  <AssistantBubble>All done.</AssistantBubble>
+                )}
+              </div>
+            )
+          }
+
           // `carts` is `{}` (truthy in JS), not null, on non-cart responses like
           // general_chat — only render the comparison view when it actually has entries.
           if (response.carts && Object.keys(response.carts).length > 0) {
@@ -107,11 +135,6 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
                 <div className="flex justify-start">
                   <RetailerComparison carts={response.carts} chosenRetailer={response.chosen_retailer} />
                 </div>
-                {response.retailer_cart_result && (
-                  <div className="flex justify-start">
-                    <RetailerCartResultView result={response.retailer_cart_result} />
-                  </div>
-                )}
                 {response.warnings.length > 0 && (
                   <AssistantBubble>
                     <ul className="list-disc space-y-1 pl-4 text-sm">

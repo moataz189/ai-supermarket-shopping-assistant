@@ -15,6 +15,9 @@ export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }
   const name = formatRetailerName(retailer)
   const overBudget = cart.over_budget_by != null
   const hasSavings = cart.savings_vs_other != null && cart.savings_vs_other > 0
+  // A ₪0.00 cart with missing items has nothing to compare, not a bargain — flagged
+  // clearly instead of silently looking like just a cheap/empty cart.
+  const isIncomplete = cart.total === 0 && cart.missing_items.length > 0
 
   return (
     <div
@@ -40,6 +43,11 @@ export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }
         {hasSavings && (
           <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
             Save ₪{cart.savings_vs_other!.toFixed(2)}
+          </Badge>
+        )}
+        {isIncomplete && (
+          <Badge variant="secondary" className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+            Incomplete cart
           </Badge>
         )}
         {cart.budget != null && (
