@@ -41,16 +41,22 @@ tile state, so a slow-but-genuine render no longer reads as a false block.
 
 A further real run (2026-08-08) surfaced two more per-item outcomes:
 - Loose/weighed produce (tomatoes, tile marked "לק"ג") reported `QuantityNotConfirmedError`
-  ("requested 1 ... site shows 0.5") — confirmed live that a single "+" click sets the
-  site's own minimum sellable weight (0.5), not "1", and a second click doesn't register
-  as a further increment at all (confirmed live: it triggers a delivery-slot modal that
-  blocks further interaction on that page instead). Per explicit product decision, this
-  is no longer treated as an error: `add_to_cart` detects the
-  `span[aria-label="לקילו גרם"]` marker and routes to `_add_weighed_item`, which clicks
-  once and reports whatever weight the site confirms as a successful add — a usable cart
-  at the retailer's minimum matters more here than an exact, unreachable requested amount.
-  This is deliberately generic (the marker, not a name/category allowlist), so it applies
-  to any weight-sold product, not just tomatoes.
+  ("requested 1 ... site shows 0.5") — confirmed live that each "+" click adds the site's
+  own fixed weight step (0.5), not a whole "1". A second click initially appeared not to
+  register at all; re-investigated live and root-caused to a one-time "delivery area"
+  modal (`#delivery-modal`) that a session's very first add-to-cart click triggers,
+  blocking all further interaction until dismissed via its `#close-popup` button — not a
+  per-click behavior (confirmed live: closing it once, every click after that increments
+  cleanly, 5 straight clicks went 0.5 -> 1 -> 1.5 -> 2 -> 2.5 with no plateau). Per
+  explicit product decision, `add_to_cart` detects the `span[aria-label="לקילו גרם"]`
+  marker and routes to `_add_weighed_item`, which clicks (dismissing that one-time modal
+  if it appears) until the requested quantity is reached, reporting whatever multiple of
+  the site's step got there as a successful add — never an error, since there's no way to
+  hit an arbitrary exact weight on this control regardless. If a click ever doesn't move
+  the confirmed number (a genuine site-side cap, e.g. stock or a promo limit, rather than
+  the one-time modal), it stops there and reports that lower amount as the successful add
+  instead of looping or failing. This is deliberately generic (the marker, not a
+  name/category allowlist), so it applies to any weight-sold product, not just tomatoes.
 - A packaged bread item reported `QuantityNotConfirmedError` ("requested 1 ... site shows
   2.0") on one run but not on repeated live re-checks of the same product/click sequence
   immediately after (which consistently confirmed "1"). Left as-is: the whole-unit path
@@ -151,16 +157,12 @@ class RamiLevyAdapter:
 
     async def add_to_cart(self, page: Page, match: MatchResult, quantity: float) -> float:
         # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
-        # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: a single click
-        # sets the site's own minimum sellable weight (observed: 0.5) rather than "1", and
-        # a second click doesn't register (confirmed live: it triggers a delivery-slot
-        # modal that blocks further interaction, not a second increment) — there's no way
-        # to hit an exact requested weight here. Per explicit product decision, this is
-        # treated as a successful add at whatever the site confirms, not a mismatch
-        # against the caller's requested quantity — a usable cart with the retailer's
-        # minimum matters more here than an exact, unreachable amount.
+        # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: each click adds
+        # the site's own fixed weight step (observed: 0.5) rather than a whole "1" — so
+        # this clicks repeatedly until the requested quantity is reached, landing on
+        # whatever multiple of that step gets there (see _add_weighed_item).
         if await match.locator.locator('span[aria-label="לקילו גרם"]').count() > 0:
-            return await self._add_weighed_item(match)
+            return await self._add_weighed_item(page, match, quantity)
 
         # No direct-fill quantity input on this site — only a stepper (+/- buttons showing
         # a running count), so only whole-unit quantities are representable.
@@ -184,15 +186,39 @@ class RamiLevyAdapter:
             )
         return confirmed
 
-    async def _add_weighed_item(self, match: MatchResult) -> float:
-        await match.locator.hover()
+    async def _add_weighed_item(self, page: Page, match: MatchResult, quantity: float) -> float:
+        # A product's *very first* add-to-cart click in a fresh session triggers a
+        # one-time "delivery area" modal (#delivery-modal) that blocks all further page
+        # interaction until dismissed via its #close-popup button — confirmed live,
+        # CP9 2026-08-08, that this is a one-off per-session gate, not a per-click
+        # behavior: every click after the first one closes cleanly with no modal, and a
+        # sequence of 5 clicks on the same tile increased 0.5 -> 1 -> 1.5 -> 2 -> 2.5
+        # with no plateau. If a click ever DOESN'T change the confirmed number (a real
+        # site-side cap — stock or a promo limit — rather than the one-time modal), this
+        # stops there and reports that lower amount as the successful add, rather than
+        # looping or failing outright: a partial weight in the cart is more useful than
+        # none, and matches the same "report reality" spirit as raising
+        # QuantityNotConfirmedError does on the whole-unit path above, just resolved as a
+        # success here per explicit product decision (see module docstring) instead of
+        # an error, since there is no way to represent an exact weight on this site at all.
         plus_btn = match.locator.locator("button.btn-acc.plus")
-        await plus_btn.wait_for(state="visible", timeout=5000)
-        await plus_btn.click()
-
         qty_display = match.locator.locator(".num-span")
-        await qty_display.wait_for(state="visible", timeout=5000)
-        return float((await qty_display.inner_text()).strip())
+        close_popup = page.locator("#close-popup")
+
+        confirmed = 0.0
+        for _ in range(20):  # site's own step is ~0.5kg; 20 clicks covers up to ~10kg
+            if confirmed >= quantity:
+                break
+            await match.locator.hover()
+            await plus_btn.wait_for(state="visible", timeout=5000)
+            await plus_btn.click()
+            if await close_popup.count() > 0 and await close_popup.is_visible():
+                await close_popup.click()
+            new_confirmed = float((await qty_display.inner_text()).strip())
+            if new_confirmed == confirmed:
+                break
+            confirmed = new_confirmed
+        return confirmed
 
     async def get_cart_url(self, page: Page) -> str | None:
         return f"{BASE_URL}/cart"
