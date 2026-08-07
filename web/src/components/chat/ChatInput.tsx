@@ -36,7 +36,7 @@ export function ChatInput({ variant, onSend, disabled, placeholder }: ChatInputP
         value={value}
         onChange={(e) => setValue(e.target.value)}
         disabled={disabled}
-        placeholder={placeholder ?? 'e.g. pasta for 4 people, budget 100'}
+        placeholder={placeholder ?? 'e.g. Weekly shopping under ₪250, Shakshuka for 4, Milk and eggs'}
         className={
           isHero
             ? 'h-12 flex-1 rounded-2xl border-0 text-base shadow-none focus-visible:ring-0'
