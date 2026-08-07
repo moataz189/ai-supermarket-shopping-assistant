@@ -1,4 +1,6 @@
-import { motion } from 'framer-motion'
+import { useCallback, useRef } from 'react'
+import type { CSSProperties, MouseEvent } from 'react'
+import { motion, useReducedMotion } from 'framer-motion'
 import { GroceryIllustration } from '@/components/illustrations/GroceryIllustration'
 import { ChatInput } from '@/components/chat/ChatInput'
 import { PromptChips } from '@/components/chat/PromptChips'
@@ -9,41 +11,83 @@ interface HeroProps {
   disabled?: boolean
 }
 
+const itemVariants = {
+  hidden: { opacity: 0, y: 14 },
+  visible: { opacity: 1, y: 0 },
+}
+
 export function Hero({ onSend, disabled }: HeroProps) {
+  const sectionRef = useRef<HTMLElement>(null)
+  const reduceMotion = useReducedMotion()
+
+  // Mouse-tracking spotlight: updates CSS custom properties directly on the DOM node
+  // (not React state) so it never re-renders on every mousemove — just a 4th layer in the
+  // same backgroundImage stack that already renders reliably (see the other three
+  // gradients below), positioned via --spot-x/--spot-y.
+  const handleMouseMove = useCallback(
+    (e: MouseEvent<HTMLElement>) => {
+      if (reduceMotion) return
+      const el = sectionRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const x = ((e.clientX - rect.left) / rect.width) * 100
+      const y = ((e.clientY - rect.top) / rect.height) * 100
+      el.style.setProperty('--spot-x', `${x}%`)
+      el.style.setProperty('--spot-y', `${y}%`)
+    },
+    [reduceMotion],
+  )
+
   return (
     <motion.section
+      ref={sectionRef}
+      onMouseMove={handleMouseMove}
       exit={{ opacity: 0, height: 0 }}
       transition={{ duration: 0.25, ease: 'easeInOut' }}
+      initial="hidden"
+      animate="visible"
+      variants={{ visible: { transition: { staggerChildren: 0.12, delayChildren: 0.05 } } }}
       className="overflow-hidden pb-16 pt-16 text-center sm:pt-24"
-      style={{
-        // Subtle premium backdrop — soft radial-gradient glows in the existing emerald
-        // palette, as plain CSS background layers (not separate absolutely-positioned/
-        // blurred elements) so there's no z-index/stacking-context interaction with the
-        // content below at all. Purely decorative, well behind the content by construction.
-        // Deliberately asymmetric — one dominant glow (top) plus a bigger, stronger one on
-        // the left and a smaller, softer one on the right, rather than three evenly
-        // matched circles. Reads as designed rather than tiled/templated.
-        backgroundImage: [
-          'radial-gradient(520px circle at 46% 0%, rgba(16,185,129,0.20), transparent 70%)',
-          'radial-gradient(460px circle at 6% 42%, rgba(110,231,183,0.26), transparent 70%)',
-          'radial-gradient(340px circle at 94% 30%, rgba(94,234,212,0.16), transparent 70%)',
-        ].join(', '),
-      }}
+      style={
+        {
+          // Subtle premium backdrop — plain CSS background layers on the section itself
+          // (not separate absolutely-positioned/blurred elements) so there's no z-index/
+          // stacking-context interaction with the content below at all — confirmed live
+          // that approach silently fails to paint in this exact overflow-hidden +
+          // framer-motion combination. Deliberately asymmetric (one bigger/stronger glow,
+          // one smaller/softer) rather than evenly matched circles, plus a 4th spotlight
+          // layer that follows the cursor via --spot-x/--spot-y (falls back to a fixed
+          // point, and is never updated at all, when the user prefers reduced motion).
+          backgroundImage: [
+            'radial-gradient(600px circle at var(--spot-x, 50%) var(--spot-y, 10%), rgba(16,185,129,0.16), transparent 60%)',
+            'radial-gradient(520px circle at 46% 0%, rgba(16,185,129,0.20), transparent 70%)',
+            'radial-gradient(460px circle at 6% 42%, rgba(110,231,183,0.26), transparent 70%)',
+            'radial-gradient(340px circle at 94% 30%, rgba(94,234,212,0.16), transparent 70%)',
+          ].join(', '),
+        } as CSSProperties
+      }
     >
       <div className="mx-auto flex max-w-3xl flex-col items-center px-4">
-        <GroceryIllustration />
-        <h1 className="mt-6 bg-gradient-to-r from-zinc-900 to-emerald-800 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl">
+        <motion.div variants={itemVariants}>
+          <GroceryIllustration />
+        </motion.div>
+        <motion.h1
+          variants={itemVariants}
+          className="animate-gradient-shift mt-6 bg-gradient-to-r from-zinc-900 via-emerald-700 to-zinc-900 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl"
+        >
           AI Supermarket Shopping Assistant
-        </h1>
-        <p className="mt-3 text-lg text-zinc-500">
+        </motion.h1>
+        <motion.p variants={itemVariants} className="mt-3 text-lg text-zinc-500">
           Describe your shopping list, recipe or budget. We&apos;ll compare Shufersal and Rami Levy and
           prepare the best shopping cart.
-        </p>
-        <SupportedRetailers />
-        <div className="mt-6 w-full">
+        </motion.p>
+        <motion.div variants={itemVariants}>
+          <SupportedRetailers />
+        </motion.div>
+        <motion.div variants={itemVariants} className="mt-6 w-full">
           <ChatInput variant="hero" onSend={onSend} disabled={disabled} />
           <PromptChips onSelect={onSend} disabled={disabled} />
-        </div>
+        </motion.div>
       </div>
     </motion.section>
   )
