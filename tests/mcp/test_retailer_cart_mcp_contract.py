@@ -55,6 +55,10 @@ async def test_prepare_retailer_cart_refuses_for_unsupported_retailer():
             "reason": "unsupported_retailer",
             "matched_by": None,
             "quantity_confirmed": None,
+            "requested_quantity": None,
+            "requested_unit": None,
+            "cart_quantity": None,
+            "cart_unit": None,
         }
     ]
 

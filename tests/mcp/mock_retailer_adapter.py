@@ -6,6 +6,7 @@ weaker fuzzy match — never trusting the site to tell it which kind of match it
 """
 
 from mcp_servers.retailer_cart_mcp.automation import (
+    AddToCartResult,
     MatchResult,
     QuantityNotConfirmedError,
     UnsupportedQuantityError,
@@ -51,7 +52,12 @@ class MockRetailerAdapter:
         code = await first.get_attribute("data-item-code")
         return MatchResult(item_code=code, locator=first, matched_by="name_fallback")
 
-    async def add_to_cart(self, page, match: MatchResult, quantity: float) -> float:
+    async def add_to_cart(
+        self, page, match: MatchResult, quantity: float, unit: str | None = None
+    ) -> AddToCartResult:
+        # This mock site doesn't simulate weight-sold products — `unit` is accepted (to
+        # satisfy the RetailerAdapter protocol used by prepare_cart_for_retailer) but
+        # unused, exactly like both real adapters' legacy (unit=None) whole-unit path.
         await match.locator.locator("[data-testid='add-to-cart']").click()
 
         await page.locator("input[name='quantity']").fill(str(quantity))
@@ -69,7 +75,7 @@ class MockRetailerAdapter:
             raise QuantityNotConfirmedError(
                 f"requested {quantity} for {match.item_code}, site shows {confirmed}"
             )
-        return confirmed
+        return AddToCartResult(confirmed, "unit")
 
     async def get_cart_url(self, page) -> str | None:
         await page.goto(f"{self.base_url}/cart")
