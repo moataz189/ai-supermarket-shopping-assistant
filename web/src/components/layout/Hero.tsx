@@ -49,7 +49,7 @@ export function Hero({ onSend, disabled }: HeroProps) {
       initial="hidden"
       animate="visible"
       variants={{ visible: { transition: { staggerChildren: 0.12, delayChildren: 0.05 } } }}
-      className="relative overflow-hidden pb-6 pt-8 text-center sm:pt-10"
+      className="relative overflow-hidden pb-6 pt-10 text-center sm:pt-12"
       style={
         {
           // Subtle premium backdrop — plain CSS background layers on the section itself
