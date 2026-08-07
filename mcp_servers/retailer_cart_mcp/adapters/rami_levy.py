@@ -27,6 +27,18 @@ not an actual block:
 A full add/confirm round trip was re-verified live end-to-end with the corrected
 selectors (hover -> click `button.btn-acc.plus` -> `.num-span` read back as `"1"`).
 
+A real multi-item run against this fixed adapter (2026-08-08) still intermittently
+reported `assortment_unavailable` on later items in the same run, even though a manual
+re-check of the identical search immediately after showed a fully hydrated page. Not
+reproducible locally even under concurrent load, but the difference is resource
+headroom: `page.goto()` only waits for the `load` event, not for this Vue app to finish
+hydrating product data into the SSR tile shells, and the container this actually runs in
+has much less CPU/memory slack than a dev machine to finish that hydration within the
+same wall-clock window. `_wait_for_tiles_hydrated()` below waits (up to 8s, on the same
+already-loaded page — no retry, no new request, nothing that looks like evasion) for
+`.product-img img[alt]` to catch up to `.product-img` before either adapter method reads
+tile state, so a slow-but-genuine render no longer reads as a false block.
+
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
 always reported and the run stops gracefully; it is never worked around.
@@ -35,6 +47,7 @@ always reported and the run stops gracefully; it is never worked around.
 from urllib.parse import quote
 
 from playwright.async_api import Page
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from mcp_servers.retailer_cart_mcp.automation import (
     MatchResult,
@@ -43,6 +56,23 @@ from mcp_servers.retailer_cart_mcp.automation import (
 )
 
 BASE_URL = "https://www.rami-levy.co.il"
+
+
+async def _wait_for_tiles_hydrated(page: Page, timeout_ms: int = 8000) -> None:
+    """Waits for search-result tiles' `alt` text to hydrate in, if any tiles are present
+    at all. Best-effort: on timeout this just falls through, and the caller's own
+    count()-based check makes the final (honest) call using whatever state exists then."""
+    try:
+        await page.wait_for_function(
+            """() => {
+                const wraps = document.querySelectorAll('.product-img');
+                if (wraps.length === 0) return true;
+                return document.querySelectorAll('.product-img img[alt]').length === wraps.length;
+            }""",
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError:
+        pass  # fall through — caller's own count()-based check makes the final call
 
 
 class RamiLevyAdapter:
@@ -64,6 +94,7 @@ class RamiLevyAdapter:
         # `.product-img img[alt]`, not `.product-img[alt]`. Only checked once tiles
         # actually exist, so this never false-positives on pages with no search
         # performed yet (e.g. right after open_site).
+        await _wait_for_tiles_hydrated(page)
         images = page.locator(".product-img")
         if await images.count() > 0 and await page.locator(".product-img img[alt]").count() == 0:
             return "assortment_unavailable"
@@ -74,6 +105,7 @@ class RamiLevyAdapter:
         # barcode is only reachable via the product image's URL), so item_code-based
         # matching isn't attempted here — name matching is the only reliable path.
         await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")
+        await _wait_for_tiles_hydrated(page)
         # `alt` lives on the `<img>` nested inside `.product-img`, not on that div itself
         # (see module docstring). The tile/card container — where the add-to-cart
         # controls render — is the closest ancestor carrying `big-plus-minus`; there is
