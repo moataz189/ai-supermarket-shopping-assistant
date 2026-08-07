@@ -5,6 +5,7 @@ import { GroceryIllustration } from '@/components/illustrations/GroceryIllustrat
 import { ChatInput } from '@/components/chat/ChatInput'
 import { PromptChips } from '@/components/chat/PromptChips'
 import { SupportedRetailers } from '@/components/layout/SupportedRetailers'
+import { FeatureHighlights } from '@/components/layout/FeatureHighlights'
 
 interface HeroProps {
   onSend: (text: string) => void
@@ -87,6 +88,9 @@ export function Hero({ onSend, disabled }: HeroProps) {
         <motion.div variants={itemVariants} className="mt-6 w-full">
           <ChatInput variant="hero" onSend={onSend} disabled={disabled} />
           <PromptChips onSelect={onSend} disabled={disabled} />
+        </motion.div>
+        <motion.div variants={itemVariants} className="w-full">
+          <FeatureHighlights />
         </motion.div>
       </div>
     </motion.section>
