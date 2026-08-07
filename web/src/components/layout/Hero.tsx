@@ -6,6 +6,7 @@ import { ChatInput } from '@/components/chat/ChatInput'
 import { PromptChips } from '@/components/chat/PromptChips'
 import { SupportedRetailers } from '@/components/layout/SupportedRetailers'
 import { FeatureHighlights } from '@/components/layout/FeatureHighlights'
+import { GroceryEdgeDecor } from '@/components/layout/GroceryEdgeDecor'
 
 interface HeroProps {
   onSend: (text: string) => void
@@ -48,7 +49,7 @@ export function Hero({ onSend, disabled }: HeroProps) {
       initial="hidden"
       animate="visible"
       variants={{ visible: { transition: { staggerChildren: 0.12, delayChildren: 0.05 } } }}
-      className="overflow-hidden pb-16 pt-16 text-center sm:pt-24"
+      className="relative overflow-hidden pb-16 pt-16 text-center sm:pt-24"
       style={
         {
           // Subtle premium backdrop — plain CSS background layers on the section itself
@@ -68,7 +69,8 @@ export function Hero({ onSend, disabled }: HeroProps) {
         } as CSSProperties
       }
     >
-      <div className="mx-auto flex max-w-3xl flex-col items-center px-4">
+      <GroceryEdgeDecor />
+      <div className="relative z-10 mx-auto flex max-w-3xl flex-col items-center px-4">
         <motion.div variants={itemVariants}>
           <GroceryIllustration />
         </motion.div>
