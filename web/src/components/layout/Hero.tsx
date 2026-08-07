@@ -20,16 +20,19 @@ export function Hero({ onSend, disabled }: HeroProps) {
         // palette, as plain CSS background layers (not separate absolutely-positioned/
         // blurred elements) so there's no z-index/stacking-context interaction with the
         // content below at all. Purely decorative, well behind the content by construction.
+        // Deliberately asymmetric — one dominant glow (top) plus a bigger, stronger one on
+        // the left and a smaller, softer one on the right, rather than three evenly
+        // matched circles. Reads as designed rather than tiled/templated.
         backgroundImage: [
-          'radial-gradient(480px circle at 50% 0%, rgba(16,185,129,0.18), transparent 70%)',
-          'radial-gradient(420px circle at 8% 38%, rgba(110,231,183,0.22), transparent 70%)',
-          'radial-gradient(420px circle at 92% 48%, rgba(94,234,212,0.20), transparent 70%)',
+          'radial-gradient(520px circle at 46% 0%, rgba(16,185,129,0.20), transparent 70%)',
+          'radial-gradient(460px circle at 6% 42%, rgba(110,231,183,0.26), transparent 70%)',
+          'radial-gradient(340px circle at 94% 30%, rgba(94,234,212,0.16), transparent 70%)',
         ].join(', '),
       }}
     >
       <div className="mx-auto flex max-w-3xl flex-col items-center px-4">
         <GroceryIllustration />
-        <h1 className="mt-6 text-4xl font-semibold tracking-tight text-zinc-900 sm:text-5xl">
+        <h1 className="mt-6 bg-gradient-to-r from-zinc-900 to-emerald-800 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl">
           AI Supermarket Shopping Assistant
         </h1>
         <p className="mt-3 text-lg text-zinc-500">
