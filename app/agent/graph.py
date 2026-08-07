@@ -11,16 +11,20 @@ from app.agent.nodes.recipe_not_found import recipe_not_found
 from app.agent.nodes.resolve_ambiguity import resolve_ambiguity, route_after_resolve
 from app.agent.nodes.resolve_items import make_resolve_items
 from app.agent.nodes.resolve_recipe_ambiguity import resolve_recipe_ambiguity
+from app.agent.nodes.resolve_weekly_shop_profile import resolve_weekly_shop_profile
 from app.agent.nodes.search_recipes import make_search_recipes, route_after_search_recipes
 from app.agent.state import AgentState
 
 
 def route_after_parse(state: AgentState) -> str:
-    request_type = state["parsed_request"]["request_type"]
+    parsed = state["parsed_request"]
+    request_type = parsed["request_type"]
     if request_type == "recipe":
         return "search_recipes"
     if request_type == "general_chat":
         return "general_chat"
+    if request_type == "grocery_list" and not parsed["items"] and parsed.get("budget") is not None:
+        return "resolve_weekly_shop_profile"
     return "resolve_items"
 
 
@@ -40,6 +44,7 @@ def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_cli
     graph.add_node("recipe_not_found", recipe_not_found)
     graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
     graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
+    graph.add_node("resolve_weekly_shop_profile", resolve_weekly_shop_profile)
     graph.add_node("resolve_items", make_resolve_items(client))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)
     graph.add_node("build_shufersal_cart", make_build_retailer_cart("shufersal", client))
@@ -50,9 +55,12 @@ def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_cli
 
     graph.add_edge(START, "parse_request")
     graph.add_conditional_edges(
-        "parse_request", route_after_parse, ["search_recipes", "resolve_items", "general_chat"]
+        "parse_request",
+        route_after_parse,
+        ["search_recipes", "resolve_items", "general_chat", "resolve_weekly_shop_profile"],
     )
     graph.add_edge("general_chat", END)
+    graph.add_edge("resolve_weekly_shop_profile", "resolve_items")
     graph.add_conditional_edges(
         "search_recipes",
         route_after_search_recipes,

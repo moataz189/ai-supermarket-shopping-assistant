@@ -16,7 +16,9 @@ export function ClarificationCard({ clarification, answeredOptionId, onSelect }:
     <div className="w-full max-w-lg rounded-3xl border border-zinc-200 bg-white p-5">
       <p className="font-medium text-zinc-900">{question}</p>
 
-      {availability_by_retailer ? (
+      {options.length === 0 ? (
+        <p className="mt-2 text-sm text-zinc-500">Type your answer in the message box below.</p>
+      ) : availability_by_retailer ? (
         <div className="mt-4 space-y-4">
           {Object.entries(availability_by_retailer).map(([retailer, names]) => (
             <div key={retailer}>
