@@ -7,4 +7,12 @@ httpx>=0.27
 langgraph==1.2.10
 langgraph-checkpoint-sqlite==3.1.1
 langchain-aws==1.6.4
+# Pinned exact, not left to langchain-aws's own loose ranges (boto3>=1.43.32,
+# numpy<3,>=1.0.0) — those open ranges made pip's resolver backtrack through many
+# candidate versions of langchain-aws's dependency tree, which reproducibly failed
+# mid-build with a misleading "no version found" for whatever package it happened to be
+# checking when it gave up (hit live in CP9, 2026-08-07, on two different packages across
+# two builds). Pinning removes the ambiguity pip was backtracking to resolve.
+boto3==1.43.66
+numpy==2.4.6
 playwright>=1.62.0
