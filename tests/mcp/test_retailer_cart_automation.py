@@ -4,7 +4,11 @@ import httpx
 import pytest
 
 from mcp_servers.retailer_cart_mcp import automation
-from mcp_servers.retailer_cart_mcp.automation import MatchResult, prepare_cart_for_retailer
+from mcp_servers.retailer_cart_mcp.automation import (
+    AddToCartResult,
+    MatchResult,
+    prepare_cart_for_retailer,
+)
 from tests.mcp.mock_retailer_adapter import MockRetailerAdapter
 
 
@@ -241,10 +245,10 @@ class _ScriptedAdapter:
             raise RuntimeError("search_and_match boom")
         return MatchResult(item_code=item_code, locator=None, matched_by="item_code")
 
-    async def add_to_cart(self, page, match, quantity):
+    async def add_to_cart(self, page, match, quantity, unit=None):
         if self.fail_at == "add_to_cart":
             raise RuntimeError("add_to_cart boom")
-        return quantity
+        return AddToCartResult(quantity, "unit")
 
     async def get_cart_url(self, page):
         if self.fail_at == "get_cart_url":
@@ -355,3 +359,91 @@ async def test_skipped_after_block_tracks_by_item_code_not_name(monkeypatch):
 
     failed_by_code = {f["item_code"]: f["reason"] for f in result["failed"]}
     assert failed_by_code == {"SKU-YOG-A": "skipped_after_block", "SKU-YOG-B": "skipped_after_block"}
+
+
+# ---------------------------------------------------------------------------
+# Recipe-quantity-aware routing: `unit` on a request item, QuantityConversionRequiredError
+# handling, and the requested_*/cart_* fields that only appear for recipe-derived items.
+# ---------------------------------------------------------------------------
+
+
+class _WeighedItemAdapter(_ScriptedAdapter):
+    """Simulates a weight-sold product: add_to_cart reports back in "kg" regardless of
+    the raw requested number, exactly like a real weighed-produce adapter would after
+    running its own retailer-specific conversion."""
+
+    async def add_to_cart(self, page, match, quantity, unit=None):
+        return AddToCartResult(0.5, "kg")
+
+
+async def test_recipe_item_with_unit_gets_requested_and_cart_fields(monkeypatch):
+    browser = _FakeBrowser()
+    _patch_playwright(monkeypatch, browser)
+    adapter = _WeighedItemAdapter()
+    items = [{"name": "tomatoes", "item_code": "c1", "quantity": 400, "unit": "g"}]
+
+    result = await prepare_cart_for_retailer(adapter, items)
+
+    assert result["added"] == [{
+        "name": "tomatoes",
+        "item_code": "c1",
+        "status": "added",
+        "matched_by": "item_code",
+        "quantity_confirmed": 0.5,
+        "requested_quantity": 400,
+        "requested_unit": "g",
+        "cart_quantity": 0.5,
+        "cart_unit": "kg",
+    }]
+
+
+async def test_legacy_item_without_unit_has_no_new_fields(monkeypatch):
+    # Byte-identical to pre-existing behavior when no recipe unit is involved — this is
+    # the explicit no-regression guarantee for ordinary grocery-list/weekly-shop items.
+    browser = _FakeBrowser()
+    _patch_playwright(monkeypatch, browser)
+    adapter = _ScriptedAdapter()
+    items = [{"name": "milk", "item_code": "c1", "quantity": 1}]
+
+    result = await prepare_cart_for_retailer(adapter, items)
+
+    assert result["added"] == [{
+        "name": "milk",
+        "item_code": "c1",
+        "status": "added",
+        "matched_by": "item_code",
+        "quantity_confirmed": 1,
+    }]
+
+
+class _IncompatibleUnitAdapter(_ScriptedAdapter):
+    """Simulates a retailer that sells the matched product by kg while the recipe asked
+    for a bare unit count — no deterministic conversion exists, so this must raise
+    QuantityConversionRequiredError rather than guess."""
+
+    async def add_to_cart(self, page, match, quantity, unit=None):
+        raise automation.QuantityConversionRequiredError(
+            f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no deterministic conversion",
+            requested_quantity=quantity,
+            requested_unit=unit,
+            retailer_selling_method="by_weight",
+        )
+
+
+async def test_quantity_conversion_required_is_reported_structurally_not_as_a_guess(monkeypatch):
+    browser = _FakeBrowser()
+    _patch_playwright(monkeypatch, browser)
+    adapter = _IncompatibleUnitAdapter()
+    items = [{"name": "tomatoes", "item_code": "c1", "quantity": 2, "unit": "unit"}]
+
+    result = await prepare_cart_for_retailer(adapter, items)
+
+    assert result["added"] == []
+    assert len(result["failed"]) == 1
+    failure = result["failed"][0]
+    assert failure["item_code"] == "c1"
+    assert failure["status"] == "quantity_conversion_required"
+    assert failure["requested_quantity"] == 2
+    assert failure["requested_unit"] == "unit"
+    # never silently guessed a weight and added anyway
+    assert result["blocked"] is False

@@ -13,6 +13,7 @@ from mcp_servers.retailer_cart_mcp.automation import (
     QuantityNotConfirmedError,
     UnsupportedSiteFlowError,
 )
+from mcp_servers.retailer_cart_mcp.quantity import QuantityConversionRequiredError
 
 
 class _EmptyLocator:
@@ -182,9 +183,10 @@ async def test_add_to_cart_confirms_via_fresh_search_round_trip():
         {"code": "P1", "name": "Milk", "cartStatus": {"inCart": True, "qty": 2}},
     ])])
 
-    confirmed = await ShufersalAdapter().add_to_cart(page, match, 2)
+    result = await ShufersalAdapter().add_to_cart(page, match, 2)
 
-    assert confirmed == 2
+    assert result.quantity == 2
+    assert result.unit == "unit"
     assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 2}]
 
 
@@ -268,3 +270,102 @@ async def test_get_cart_url_does_not_use_the_broken_cart_route():
     assert url is not None
     assert not url.rstrip("/").endswith("/cart")
     assert "cartsummary" not in url
+
+
+# ---------------------------------------------------------------------------
+# Recipe-quantity-aware add_to_cart: weight normalization, unit pass-through, the
+# whole-package default for a weight/volume unit against a BY_UNIT product, and the
+# quantity_conversion_required case when no deterministic conversion exists.
+# ---------------------------------------------------------------------------
+
+
+def _weighed_match():
+    return MatchResult(
+        item_code="P22",
+        locator={"code": "P22", "name": "Tomato", "sellingMethod": {"code": "BY_WEIGHT"}},
+        matched_by="exact_name",
+    )
+
+
+def _by_unit_match():
+    return MatchResult(
+        item_code="P1",
+        locator={"code": "P1", "name": "Pasta", "sellingMethod": {"code": "BY_UNIT"}},
+        matched_by="exact_name",
+    )
+
+
+async def test_weighed_product_normalizes_grams_to_kg_and_sends_exact_value():
+    page = FakePage(search_results=[_ok([
+        {"code": "P22", "name": "Tomato", "cartStatus": {"inCart": True, "qty": 0.4}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _weighed_match(), 400, "g")
+
+    assert result.quantity == pytest.approx(0.4)
+    assert result.unit == "kg"
+    assert page.add_calls == [{"productCode": "P22", "sellingMethod": "BY_WEIGHT", "qty": pytest.approx(0.4)}]
+
+
+async def test_weighed_product_kg_unit_passes_through_unchanged():
+    page = FakePage(search_results=[_ok([
+        {"code": "P22", "name": "Tomato", "cartStatus": {"inCart": True, "qty": 1.1}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _weighed_match(), 1.1, "kg")
+
+    assert result.quantity == pytest.approx(1.1)
+    assert result.unit == "kg"
+
+
+async def test_weighed_product_with_count_unit_raises_quantity_conversion_required():
+    # Recipe asked for "2 units" of a product this retailer only sells by weight — no
+    # deterministic unit->weight conversion exists, so this must not guess one.
+    page = FakePage()
+
+    with pytest.raises(QuantityConversionRequiredError) as exc_info:
+        await ShufersalAdapter().add_to_cart(page, _weighed_match(), 2, "unit")
+
+    assert exc_info.value.requested_quantity == 2
+    assert exc_info.value.requested_unit == "unit"
+    assert exc_info.value.retailer_selling_method == "BY_WEIGHT"
+    assert page.add_calls == []  # never attempted a guessed add
+
+
+async def test_by_unit_product_with_count_unit_uses_recipe_count_directly():
+    # "3 eggs" (or here, "3 large") -> quantity 3, not replaced with 1.
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 3}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _by_unit_match(), 3, "large")
+
+    assert result.quantity == 3
+    assert result.unit == "unit"
+    assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 3}]
+
+
+async def test_by_unit_product_with_weight_unit_buys_one_whole_package():
+    # "250 g pasta" matched to a product sold as a whole package -> buy 1 of it, not an
+    # invented package count.
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 1}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _by_unit_match(), 250, "g")
+
+    assert result.quantity == 1
+    assert result.unit == "unit"
+    assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 1}]
+
+
+async def test_legacy_call_without_unit_is_unchanged():
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 2}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _by_unit_match(), 2)
+
+    assert result.quantity == 2
+    assert result.unit == "unit"
+    assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 2}]

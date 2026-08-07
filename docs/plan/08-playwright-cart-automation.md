@@ -541,3 +541,105 @@ part of the automated request-handling flow, and never run in CI or in a contain
 - [ ] All listed tests pass; `ruff check` clean.
 - [ ] Web UI shows the real-cart result once a retailer is chosen.
 - [ ] Committed with message referencing CP8. **M3 milestone complete at this point.**
+
+## CP9 follow-up — Recipe-quantity-aware carts (2026-08-08)
+
+**The bug.** Recipe MCP (CP6) always returned real, scaled ingredient amounts (e.g.
+"400 g" tomatoes, "8 ounces" spaghetti — scaled correctly for the requested servings),
+and this survived correctly as far as `parsed_request["items"]`
+(`get_recipe_ingredients.py` already set `quantity`/`unit` per item, confirmed by
+`tests/agent/test_graph_recipe_happy_path.py`). But `build_retailer_cart.py` never read
+those fields — it hardcoded `"qty": 1` for every cart line — so `prepare_retailer_cart.py`
+always sent `quantity: 1` to the Retailer-Cart MCP regardless of what the recipe actually
+asked for. Recipe scaling never reached the real cart at all.
+
+**Propagation, end to end.** `build_retailer_cart.py` now also carries
+`requested_quantity`/`requested_unit` (the item's real recipe amount, or `None` for an
+ordinary grocery-list/weekly-shop item — those still default to the pre-existing
+behavior, unchanged). `prepare_retailer_cart.py` sends this as-is to the Retailer-Cart
+MCP (`CartItemRequest.quantity`/`unit`) rather than the fixed `qty`. The *retailer-specific*
+conversion — normalizing a weight, rounding up to what that site actually supports,
+falling back to "buy one whole package" for a weight/volume unit against a whole-unit
+product — happens one layer further in, inside each adapter, using the new shared,
+retailer-agnostic helpers in `mcp_servers/retailer_cart_mcp/quantity.py`
+(`normalize_weight_to_kg`, `is_count_unit`, `round_up_to_increment`). `unit=None` is the
+explicit signal for "no recipe data — run the exact legacy whole-unit path," so ordinary
+grocery-list/weekly-shop behavior is byte-identical to before this feature existed.
+
+**Requested quantity vs. cart quantity — kept separate, never collapsed.**
+`CartItemResult`/`RetailerCartItemResult` carry `requested_quantity`/`requested_unit` (what
+the recipe asked for) *and* `cart_quantity`/`cart_unit` (what the retailer's own selling
+rules actually resulted in) as distinct fields — both flow unchanged through
+`finalize.py`/`ChatResponse` to the frontend. `quantity_confirmed` (pre-existing field) is
+kept too, for backward compatibility with the pre-existing UI code path.
+
+**Weight normalization/rounding.** For a product sold by weight, the recipe's amount is
+normalized to kg (`normalize_weight_to_kg`) and rounded *up* to the smallest retailer-
+supported increment — `round_up_to_increment(requested_kg, increment_kg)` =
+`ceil(requested/increment) * increment`, guarded against float precision artifacts.
+Shufersal's `/cart/add` accepts an exact kg float with no rounding at all (confirmed live:
+0.4 requested → 0.4 confirmed) — the increment there is effectively infinitesimal, so the
+recipe's own weight is used as-is. Rami Levy's DOM stepper only moves in a fixed
+per-product step with no way to represent an arbitrary weight — the adapter discovers that
+step empirically from the very first click's own delta (never hardcoded to 0.5, so this
+works for any weighed product, not just tomatoes) and clicks until the rounded-up target is
+reached.
+
+**Unsupported unit-to-weight conversion.** When the recipe's unit and the matched
+product's retailer selling method are genuinely incompatible with no deterministic
+conversion between them (a bare count against a weight-only product — e.g. "2 units" of
+something sold only by kg), the adapter raises `QuantityConversionRequiredError` instead
+of guessing a conversion. This surfaces as `status: "quantity_conversion_required"` with
+`requested_quantity`/`requested_unit` still attached, so the failure is structured and
+explainable, not a silent wrong add. The reverse case — a weight/volume unit against a
+whole-unit product, e.g. "250 g pasta" — is *not* treated as an error: it buys one whole
+package, the same way a person shops for packaged goods, since that's the overwhelmingly
+common real case and there's no reasonable per-product package-size source to compute an
+exact count from anyway.
+
+**A second, unrelated bug found and fixed along the way**: Rami Levy's one-time
+"delivery area" modal (`#delivery-modal`/`#close-popup`), which appears after a session's
+very first add-to-cart click of *any* kind, was originally handled only on the weighed-item
+click path. A live multi-click whole-unit add (3 clicks) hung on its 2nd click the exact
+same way — the modal isn't weight-specific, so the dismiss logic
+(`_click_plus_and_dismiss_first_click_modal`) is now shared by both click paths.
+
+**Frontend.** A new `RecipeIngredientsView` component renders the scaled ingredient list
+(name/quantity/unit) and is shown *before* the retailer comparison — both on the
+`retailer_choice` interrupt (`choose_retailer.py` now includes `recipe` in the interrupt
+payload, via a small shared `app/agent/recipe_info.py` helper also used by `finalize.py`)
+and on a declined comparison view — so the user sees what a recipe actually requires
+before picking a retailer, not only after. `RetailerCard` shows a recipe item's real
+requested amount instead of the always-`1` comparison `qty`. `RetailerCartResultView`
+shows "Recipe needs: X / Added to cart: Y" for a recipe item (both lines shown even when
+they match, e.g. eggs), and a `quantity_conversion_required` failure renders as a neutral
+amber "needs manual check" badge rather than a red error, since nothing was guessed wrong.
+
+**Tests.** `tests/mcp/test_quantity.py` (pure conversion-math unit tests: weight
+normalization, count-unit classification, the rounding formula, including the exact-
+multiple/float-precision edge case). `tests/mcp/test_shufersal_adapter.py` and the new
+`tests/mcp/test_rami_levy_adapter.py` (a minimal fake-locator harness, since this adapter
+had no automated tests before — real DOM mechanics stay live-verified by hand, as before;
+only the new *decision* logic is unit-tested) cover both adapters' weight/count/
+incompatible-unit branches. `tests/mcp/test_retailer_cart_automation.py` covers the
+orchestration-level routing (`unit=None` byte-identical to legacy, `requested_*`/`cart_*`
+fields only present for recipe items, `QuantityConversionRequiredError` → structured
+failure). `tests/agent/test_recipe_quantity_propagation.py` covers the full graph path
+(Recipe MCP → state → cart line → Retailer-Cart MCP call → final result), scaling (4→8
+servings doubling 400 g → 800 g), the interrupt-time `recipe` payload, and explicit
+no-regression checks for both a plain grocery-list item and a weekly-shop-profile item
+(still `quantity: 1, unit: None`).
+
+**Manual verification (2026-08-08, live, via `docker compose up -d --build`).** "pasta for
+4 people" → "Ratatouille Pasta" through the real web UI: the ingredient list rendered
+correctly with real mixed Spoonacular units (large, servings, cloves, cups, teaspoon,
+ounces) before the retailer comparison. Catalog matching for recipe items against the
+Hebrew-only real product DB is a separate, pre-existing gap (recipe items search by their
+English canonical name, not the localized `display_name` — same root cause as documented
+in `resolve_weekly_shop_profile.py`) unrelated to this fix and out of scope here, so the
+full add-to-cart round trip for a *matched* recipe item was verified directly against the
+running `retailer-cart-mcp` container (real MCP call, real Hebrew item names, real sites):
+Rami Levy correctly rounded a 400 g request up to a supported weight (never down) and
+reported `requested_quantity=400/g` alongside a distinct `cart_quantity`/`cart_unit`;
+Shufersal added the exact 0.4 kg requested with no rounding. No checkout/login/payment path
+was touched, as before.

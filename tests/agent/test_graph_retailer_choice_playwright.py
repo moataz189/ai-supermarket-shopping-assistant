@@ -66,7 +66,7 @@ async def test_choosing_a_retailer_invokes_the_client_with_only_that_retailers_i
     assert len(retailer_cart_client.calls) == 1
     called_retailer, called_items = retailer_cart_client.calls[0]
     assert called_retailer == "shufersal"
-    assert called_items == [{"name": "milk", "item_code": "S-MILK", "quantity": 1}]
+    assert called_items == [{"name": "milk", "item_code": "S-MILK", "quantity": 1, "unit": None}]
     assert final["final_result"]["retailer_cart_result"] == canned_result
 
 

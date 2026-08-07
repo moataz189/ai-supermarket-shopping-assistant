@@ -34,4 +34,5 @@ async def chat(request: ChatRequest, agent_app=Depends(get_agent_app)) -> ChatRe
         retailer_cart_result=final.get("retailer_cart_result"),
         warnings=result["warnings"],
         message=final.get("message"),
+        recipe=final.get("recipe"),
     )

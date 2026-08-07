@@ -8,6 +8,7 @@ import { ClarificationCard } from '@/components/clarification/ClarificationCard'
 import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
 import { RetailerCartResultView } from '@/components/RetailerCartResultView'
+import { RecipeIngredientsView } from '@/components/RecipeIngredientsView'
 import { WarningsList } from './WarningsList'
 
 interface MessageThreadProps {
@@ -66,16 +67,23 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
           if (clarification && clarification.reason === 'retailer_choice' && clarification.carts) {
             const carts = clarification.carts
             return (
-              <div key={turn.id} className="flex justify-start">
-                <RetailerComparison
-                  carts={carts}
-                  options={clarification.options}
-                  answeredOptionId={answeredOptionId}
-                  onChoose={(optionId) => {
-                    const label = clarification.options.find((o) => o.id === optionId)?.label ?? optionId
-                    onSelectOption(turn.id, optionId, label)
-                  }}
-                />
+              <div key={turn.id} className="flex flex-col gap-3">
+                {clarification.recipe && (
+                  <div className="flex justify-start">
+                    <RecipeIngredientsView recipe={clarification.recipe} />
+                  </div>
+                )}
+                <div className="flex justify-start">
+                  <RetailerComparison
+                    carts={carts}
+                    options={clarification.options}
+                    answeredOptionId={answeredOptionId}
+                    onChoose={(optionId) => {
+                      const label = clarification.options.find((o) => o.id === optionId)?.label ?? optionId
+                      onSelectOption(turn.id, optionId, label)
+                    }}
+                  />
+                </div>
               </div>
             )
           }
@@ -129,6 +137,11 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
             return (
               <div key={turn.id} className="flex flex-col gap-3">
                 <AssistantBubble>{leadText(response.status)}</AssistantBubble>
+                {response.recipe && (
+                  <div className="flex justify-start">
+                    <RecipeIngredientsView recipe={response.recipe} />
+                  </div>
+                )}
                 <div className="flex justify-start">
                   <RetailerComparison carts={response.carts} chosenRetailer={response.chosen_retailer} />
                 </div>

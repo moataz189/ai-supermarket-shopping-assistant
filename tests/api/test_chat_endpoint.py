@@ -136,7 +136,18 @@ def test_choosing_retailer_invokes_playwright():
         resume = client.post("/chat", json={"thread_id": thread_id, "message": "shufersal"})
         assert resume.status_code == 200
         resume_body = resume.json()
-        assert resume_body["retailer_cart_result"] == canned_result
+        # The HTTP response goes through pydantic's RetailerCartItemResult, which fills
+        # in the new requested_*/cart_* fields (None here — this is a plain grocery item,
+        # not a recipe one) — canned_result itself has no such keys, so compare against
+        # an explicitly-extended expectation rather than the raw fixture.
+        expected_result = {
+            **canned_result,
+            "added": [
+                {**canned_result["added"][0], "requested_quantity": None, "requested_unit": None,
+                 "cart_quantity": None, "cart_unit": None}
+            ],
+        }
+        assert resume_body["retailer_cart_result"] == expected_result
         assert len(retailer_cart_client.calls) == 1
     finally:
         app.dependency_overrides.clear()

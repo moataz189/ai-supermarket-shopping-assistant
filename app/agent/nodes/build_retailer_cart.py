@@ -44,12 +44,25 @@ def make_build_retailer_cart(retailer: str, client):
 
             best = min(candidates, key=lambda c: c["price"])
             price_info = await client.get_product_price(retailer, best["item_code"])
+            # `quantity`/`unit` are only ever set on recipe-derived items (CP7's
+            # get_recipe_ingredients) — None for ordinary grocery-list/weekly-shop items,
+            # exactly the pre-existing behavior. `qty` here (used only for this
+            # retailer's own price-comparison subtotal/total/budget math) intentionally
+            # stays 1 regardless — recipe quantities are a real amount to add to the
+            # retailer's cart, not a multiplier on the comparison-view price, and scaling
+            # that math is out of scope for this fix (see docs/plan). The retailer cart's
+            # actual add-to-cart quantity is requested_quantity/requested_unit below,
+            # threaded through prepare_retailer_cart.py to the Retailer-Cart MCP, where
+            # each retailer's own selling-method/increment rules decide the real
+            # cart_quantity/cart_unit — see mcp_servers/retailer_cart_mcp/quantity.py.
             lines.append({
                 "name": name,
                 "item_code": best["item_code"],
                 "product_name": best["name"],
                 "unit_price": price_info["unit_price"],
                 "qty": 1,
+                "requested_quantity": item.get("quantity"),
+                "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
                 "subtotal": price_info["price"],
             })
 

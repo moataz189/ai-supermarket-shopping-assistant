@@ -1,3 +1,6 @@
+from app.agent.recipe_info import recipe_info
+
+
 def finalize(state):
     carts = state["retailer_carts"]
     chosen_retailer = state.get("chosen_retailer")
@@ -21,5 +24,6 @@ def finalize(state):
             "carts": carts,
             "chosen_retailer": state.get("chosen_retailer"),
             "retailer_cart_result": state.get("retailer_cart_result"),
+            "recipe": recipe_info(state),
         },
     }
