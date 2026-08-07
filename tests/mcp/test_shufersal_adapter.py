@@ -27,6 +27,7 @@ class FakePage:
         self._search_results = list(search_results) if search_results is not None else []
         self.add_raises = add_raises
         self.add_calls = []
+        self.search_urls = []
 
     async def goto(self, url):
         pass
@@ -46,6 +47,7 @@ class FakePage:
                 raise self.add_raises
             return None
         if "fetch(url" in script:
+            self.search_urls.append(arg)
             if not self._search_results:
                 raise AssertionError("no more scripted search responses")
             return self._search_results.pop(0)
@@ -57,11 +59,12 @@ def _ok(results):
 
 
 async def test_search_and_match_exact_name_match():
+    # item_code="" (falsy) — no code to search by, exercises the pure name-matching path.
     page = FakePage(search_results=[_ok([
         {"code": "P1", "name": "Milk", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
     ])])
 
-    match = await ShufersalAdapter().search_and_match(page, "Milk", "ignored-code")
+    match = await ShufersalAdapter().search_and_match(page, "Milk", "")
 
     assert match.item_code == "P1"
     assert match.matched_by == "exact_name"
@@ -72,7 +75,7 @@ async def test_search_and_match_case_insensitive_exact_match():
         {"code": "P1", "name": "MILK 3%", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
     ])])
 
-    match = await ShufersalAdapter().search_and_match(page, "milk 3%", "ignored-code")
+    match = await ShufersalAdapter().search_and_match(page, "milk 3%", "")
 
     assert match.matched_by == "exact_name"
 
@@ -87,16 +90,16 @@ async def test_search_and_match_falls_back_to_first_result():
         },
     ])])
 
-    match = await ShufersalAdapter().search_and_match(page, "Milk", "ignored-code")
+    match = await ShufersalAdapter().search_and_match(page, "Milk", "")
 
     assert match.item_code == "P2"
     assert match.matched_by == "name_fallback"
 
 
-async def test_search_and_match_prefers_item_code_over_name_mismatch():
-    # our locally-ingested ItemName ("Ice Cream 1kg BRAND") often differs from the site's
-    # own cleaner display name ("Ice Cream") for the identical product — item_code is the
-    # authoritative signal and must win even when name comparison would otherwise fail.
+async def test_search_and_match_finds_by_code_search_alone_without_a_name_search():
+    # confirmed live: querying the bare numeric code directly returns exactly the right
+    # product — this must resolve from the code search alone, never touching the name
+    # search at all (only one response queued; a second _search call would raise).
     page = FakePage(search_results=[_ok([
         {"code": "P_123", "name": "Ice Cream", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
     ])])
@@ -107,7 +110,7 @@ async def test_search_and_match_prefers_item_code_over_name_mismatch():
     assert match.matched_by == "item_code"
 
 
-async def test_search_and_match_item_code_comparison_ignores_p_prefix_either_side():
+async def test_search_and_match_code_search_query_strips_p_prefix():
     page = FakePage(search_results=[_ok([
         {"code": "P_123", "name": "Something Unrelated", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
     ])])
@@ -116,12 +119,29 @@ async def test_search_and_match_item_code_comparison_ignores_p_prefix_either_sid
 
     assert match.item_code == "P_123"
     assert match.matched_by == "item_code"
+    assert page.search_urls[0].endswith("q=123&limit=20")  # not "P_123"
 
 
-async def test_search_and_match_falls_back_to_name_when_code_not_among_results():
+async def test_search_and_match_disambiguates_same_name_products_by_code():
+    # confirmed live: a name search for a generic product name can return several
+    # genuinely different products sharing the exact same display name — code must pick
+    # out the right one even when the first (or any) name match would otherwise "look"
+    # like a valid exact_name hit.
     page = FakePage(search_results=[_ok([
-        {"code": "P1", "name": "Milk", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
+        {"code": "P_100", "name": "לחם אחיד פרוס", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}},
     ])])
+
+    match = await ShufersalAdapter().search_and_match(page, "לחם אחיד פרוס", "100")
+
+    assert match.item_code == "P_100"
+    assert match.matched_by == "item_code"
+
+
+async def test_search_and_match_falls_back_to_name_when_code_search_finds_nothing():
+    page = FakePage(search_results=[
+        _ok([{"code": "P9", "name": "Unrelated", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}}]),
+        _ok([{"code": "P1", "name": "Milk", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}}]),
+    ])
 
     match = await ShufersalAdapter().search_and_match(page, "Milk", "999-not-present")
 
@@ -129,10 +149,18 @@ async def test_search_and_match_falls_back_to_name_when_code_not_among_results()
     assert match.matched_by == "exact_name"
 
 
-async def test_search_and_match_returns_none_when_no_results():
-    page = FakePage(search_results=[_ok([])])
+async def test_search_and_match_returns_none_when_no_results_by_code_or_name():
+    page = FakePage(search_results=[_ok([]), _ok([])])
 
     match = await ShufersalAdapter().search_and_match(page, "Milk", "ignored-code")
+
+    assert match is None
+
+
+async def test_search_and_match_returns_none_when_no_results_and_no_code():
+    page = FakePage(search_results=[_ok([])])
+
+    match = await ShufersalAdapter().search_and_match(page, "Milk", "")
 
     assert match is None
 
