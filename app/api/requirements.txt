@@ -8,3 +8,7 @@ mcp==1.29.0
 langgraph==1.2.10
 langgraph-checkpoint-sqlite==3.1.1
 langchain-aws==1.6.4
+# See requirements.txt for why these are pinned exact instead of left to
+# langchain-aws's own loose ranges.
+boto3==1.43.66
+numpy==2.4.6
