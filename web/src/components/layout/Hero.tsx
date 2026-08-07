@@ -49,7 +49,7 @@ export function Hero({ onSend, disabled }: HeroProps) {
       initial="hidden"
       animate="visible"
       variants={{ visible: { transition: { staggerChildren: 0.12, delayChildren: 0.05 } } }}
-      className="relative overflow-hidden pb-16 pt-16 text-center sm:pt-24"
+      className="relative overflow-hidden pb-6 pt-8 text-center sm:pt-10"
       style={
         {
           // Subtle premium backdrop — plain CSS background layers on the section itself
@@ -76,25 +76,25 @@ export function Hero({ onSend, disabled }: HeroProps) {
         </motion.div>
         <motion.div
           variants={itemVariants}
-          className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-sm font-medium text-emerald-700"
+          className="mt-2 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-700"
         >
           <span aria-hidden>🛒</span>
           You choose what to buy. I&apos;ll build the cart.
         </motion.div>
         <motion.h1
           variants={itemVariants}
-          className="animate-gradient-shift mt-6 bg-gradient-to-r from-zinc-900 via-emerald-700 to-zinc-900 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl"
+          className="animate-gradient-shift mt-2 bg-gradient-to-r from-zinc-900 via-emerald-700 to-zinc-900 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl"
         >
           AI Supermarket Shopping Assistant
         </motion.h1>
-        <motion.p variants={itemVariants} className="mt-3 text-lg text-zinc-500">
+        <motion.p variants={itemVariants} className="mt-1.5 text-lg text-zinc-500">
           Describe your shopping list, recipe or budget. We&apos;ll compare Shufersal and Rami Levy and
           prepare the best shopping cart.
         </motion.p>
         <motion.div variants={itemVariants}>
           <SupportedRetailers />
         </motion.div>
-        <motion.div variants={itemVariants} className="mt-6 w-full">
+        <motion.div variants={itemVariants} className="mt-2 w-full">
           <ChatInput variant="hero" onSend={onSend} disabled={disabled} />
           <PromptChips onSelect={onSend} disabled={disabled} />
         </motion.div>

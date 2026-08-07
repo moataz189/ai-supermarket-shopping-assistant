@@ -18,10 +18,10 @@ const FEATURES = [
 
 export function FeatureHighlights() {
   return (
-    <div className="mt-10 grid w-full grid-cols-1 gap-6 sm:grid-cols-3 sm:gap-6">
+    <div className="mt-2.5 grid w-full grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
       {FEATURES.map(({ emoji, title, description }) => (
-        <div key={title} className="flex flex-col items-center gap-1 text-center">
-          <span className="text-2xl" aria-hidden>
+        <div key={title} className="flex flex-col items-center gap-0.5 text-center">
+          <span className="text-xl" aria-hidden>
             {emoji}
           </span>
           <p className="text-sm font-semibold text-zinc-700">{title}</p>
