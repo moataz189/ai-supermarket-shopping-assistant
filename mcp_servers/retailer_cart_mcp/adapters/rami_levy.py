@@ -39,6 +39,20 @@ already-loaded page — no retry, no new request, nothing that looks like evasio
 `.product-img img[alt]` to catch up to `.product-img` before either adapter method reads
 tile state, so a slow-but-genuine render no longer reads as a false block.
 
+A further real run (2026-08-08) surfaced two more per-item outcomes, both live-verified
+to be genuine site behavior rather than adapter bugs:
+- Loose/weighed produce (tomatoes, tile marked "לק"ג") reported `QuantityNotConfirmedError`
+  ("requested 1 ... site shows 0.5") — confirmed live that a single "+" click sets a
+  default weight (0.5), not "1", and a second click didn't register within a normal
+  timeout at all. `add_to_cart` now detects the `span[aria-label="לקילו גרם"]` marker on
+  the tile and raises `UnsupportedQuantityError` up front for these instead.
+- A packaged bread item reported `QuantityNotConfirmedError` ("requested 1 ... site shows
+  2.0") on one run but not on repeated live re-checks of the same product/click sequence
+  immediately after (which consistently confirmed "1"). Left as-is: `add_to_cart` already
+  does the right thing here by construction — it never silently accepts a site-confirmed
+  quantity that doesn't match what was requested, so a stale promo/pack-size default or a
+  one-off UI quirk surfaces as an honest, reported mismatch rather than a silent wrong add.
+
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
 always reported and the run stops gracefully; it is never worked around.
@@ -136,6 +150,18 @@ class RamiLevyAdapter:
                 f"Rami Levy only supports whole-unit quantities, got {quantity}"
             )
         quantity = int(quantity)
+
+        # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
+        # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: a single click
+        # sets a default weight (observed: 0.5) rather than "1", and a second click didn't
+        # register at all within a normal timeout (the control likely swaps to a different
+        # weight-entry widget after the first click) — there's no reliable way to hit an
+        # exact requested unit count here, so this is reported honestly up front rather
+        # than attempting clicks and surfacing a confusing partial-state mismatch.
+        if await match.locator.locator('span[aria-label="לקילו גרם"]').count() > 0:
+            raise UnsupportedQuantityError(
+                f"Rami Levy sells {match.item_code} by weight (per kg), not by whole unit"
+            )
 
         await match.locator.hover()
         plus_btn = match.locator.locator("button.btn-acc.plus")
