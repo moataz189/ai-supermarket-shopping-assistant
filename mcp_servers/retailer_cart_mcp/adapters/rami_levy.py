@@ -7,18 +7,25 @@ site with a captured session. The real front-end search page is `/he/online/sear
 (a server-rendered results page) — distinct from `/api/search?q=`, which is a raw JSON
 API the front-end calls internally and was what the previous version of this adapter
 mistakenly navigated to directly (there is no `.product-box` HTML anywhere on the real
-site; that selector never matched anything). Tile identification (`.product-img[alt]`)
-and the add-to-cart button/quantity-stepper classes (`button.btn-acc.plus`/`.num-span`)
-come from one successfully-rendered results page captured live.
+site; that selector never matched anything).
 
-Full add-to-cart could not be re-confirmed end-to-end in the same session: on later
-attempts, search-result tiles loaded as empty placeholders (`.product-img` present but
-with no `alt` text and no add-to-cart controls rendered at all) — most likely the same
-kind of one-time account/delivery setup prerequisite confirmed for Shufersal
-(`#assortmentModal`), though no equivalent visible prompt was found for this site to
-confirm that specific cause. detect_block() reports this placeholder state as
-`assortment_unavailable` rather than guessing further or letting it hang/crash — a
-genuine open follow-up, not silently worked around.
+A CP9 follow-up (2026-08-08, live) root-caused what earlier looked like a site block
+(`assortment_unavailable` on every real search) to two wrong selectors in this adapter,
+not an actual block:
+- `.product-img` is a `<div>` wrapper; the real `alt` text lives on the `<img>` nested
+  inside it. `.product-img[alt]` can therefore never match anything — confirmed live
+  (`.product-img[alt]` count 0 on a results page that was, on inspection, fully
+  hydrated with real product tiles, prices and images). Fixed to `.product-img img[alt]`.
+- The tile container is not reachable via `ancestor::div[@role='button']` — there is a
+  `role="button"` element in each tile, but it's a *sibling* of the image wrapper, not
+  an ancestor (confirmed live via `closest('[role=button]')` returning null from the
+  image). The actual card container is the closest ancestor carrying the
+  `big-plus-minus` class (also confirmed live to be exactly one match per tile), which
+  is what the `button.btn-acc.plus`/`.num-span` add-to-cart controls render inside of
+  once hovered.
+
+A full add/confirm round trip was re-verified live end-to-end with the corrected
+selectors (hover -> click `button.btn-acc.plus` -> `.num-span` read back as `"1"`).
 
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
@@ -51,11 +58,14 @@ class RamiLevyAdapter:
         if await page.locator("input#login-email").count() > 0:
             return "login_required"
         # Search-result tiles rendered as empty placeholders (image container present,
-        # no product data hydrated into it) — observed live, cause not fully confirmed
-        # (see module docstring). Only checked once tiles actually exist, so this never
-        # false-positives on pages with no search performed yet (e.g. right after open_site).
+        # no product data hydrated into it) — a genuine site-side state, distinct from
+        # the normal case where `.product-img` divs are present but their `alt` text
+        # lives on the nested `<img>` (see module docstring), which is why this checks
+        # `.product-img img[alt]`, not `.product-img[alt]`. Only checked once tiles
+        # actually exist, so this never false-positives on pages with no search
+        # performed yet (e.g. right after open_site).
         images = page.locator(".product-img")
-        if await images.count() > 0 and await page.locator(".product-img[alt]").count() == 0:
+        if await images.count() > 0 and await page.locator(".product-img img[alt]").count() == 0:
             return "assortment_unavailable"
         return None
 
@@ -64,7 +74,12 @@ class RamiLevyAdapter:
         # barcode is only reachable via the product image's URL), so item_code-based
         # matching isn't attempted here — name matching is the only reliable path.
         await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")
-        images = page.locator(".product-img[alt]")
+        # `alt` lives on the `<img>` nested inside `.product-img`, not on that div itself
+        # (see module docstring). The tile/card container — where the add-to-cart
+        # controls render — is the closest ancestor carrying `big-plus-minus`; there is
+        # no `role="button"` ancestor of the image (that role is on an unrelated sibling
+        # element within the same tile).
+        images = page.locator(".product-img img[alt]")
         count = await images.count()
         if count == 0:
             return None
@@ -73,10 +88,12 @@ class RamiLevyAdapter:
             img = images.nth(i)
             alt = await img.get_attribute("alt")
             if alt is not None and alt.strip().lower() == item_name.strip().lower():
-                tile = img.locator("xpath=ancestor::div[@role='button'][1]")
+                tile = img.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' big-plus-minus ')][1]")
                 return MatchResult(item_code=item_code, locator=tile, matched_by="exact_name")
 
-        first_tile = images.first.locator("xpath=ancestor::div[@role='button'][1]")
+        first_tile = images.first.locator(
+            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' big-plus-minus ')][1]"
+        )
         return MatchResult(item_code=item_code, locator=first_tile, matched_by="name_fallback")
 
     async def add_to_cart(self, page: Page, match: MatchResult, quantity: float) -> float:
