@@ -74,6 +74,13 @@ export function Hero({ onSend, disabled }: HeroProps) {
         <motion.div variants={itemVariants}>
           <GroceryIllustration />
         </motion.div>
+        <motion.div
+          variants={itemVariants}
+          className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-sm font-medium text-emerald-700"
+        >
+          <span aria-hidden>🛒</span>
+          You choose what to buy. I&apos;ll build the cart.
+        </motion.div>
         <motion.h1
           variants={itemVariants}
           className="animate-gradient-shift mt-6 bg-gradient-to-r from-zinc-900 via-emerald-700 to-zinc-900 bg-clip-text text-4xl font-semibold tracking-tight text-transparent sm:text-5xl"
