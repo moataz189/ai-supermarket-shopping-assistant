@@ -39,19 +39,26 @@ already-loaded page — no retry, no new request, nothing that looks like evasio
 `.product-img img[alt]` to catch up to `.product-img` before either adapter method reads
 tile state, so a slow-but-genuine render no longer reads as a false block.
 
-A further real run (2026-08-08) surfaced two more per-item outcomes, both live-verified
-to be genuine site behavior rather than adapter bugs:
+A further real run (2026-08-08) surfaced two more per-item outcomes:
 - Loose/weighed produce (tomatoes, tile marked "לק"ג") reported `QuantityNotConfirmedError`
-  ("requested 1 ... site shows 0.5") — confirmed live that a single "+" click sets a
-  default weight (0.5), not "1", and a second click didn't register within a normal
-  timeout at all. `add_to_cart` now detects the `span[aria-label="לקילו גרם"]` marker on
-  the tile and raises `UnsupportedQuantityError` up front for these instead.
+  ("requested 1 ... site shows 0.5") — confirmed live that a single "+" click sets the
+  site's own minimum sellable weight (0.5), not "1", and a second click doesn't register
+  as a further increment at all (confirmed live: it triggers a delivery-slot modal that
+  blocks further interaction on that page instead). Per explicit product decision, this
+  is no longer treated as an error: `add_to_cart` detects the
+  `span[aria-label="לקילו גרם"]` marker and routes to `_add_weighed_item`, which clicks
+  once and reports whatever weight the site confirms as a successful add — a usable cart
+  at the retailer's minimum matters more here than an exact, unreachable requested amount.
+  This is deliberately generic (the marker, not a name/category allowlist), so it applies
+  to any weight-sold product, not just tomatoes.
 - A packaged bread item reported `QuantityNotConfirmedError` ("requested 1 ... site shows
   2.0") on one run but not on repeated live re-checks of the same product/click sequence
-  immediately after (which consistently confirmed "1"). Left as-is: `add_to_cart` already
-  does the right thing here by construction — it never silently accepts a site-confirmed
-  quantity that doesn't match what was requested, so a stale promo/pack-size default or a
-  one-off UI quirk surfaces as an honest, reported mismatch rather than a silent wrong add.
+  immediately after (which consistently confirmed "1"). Left as-is: the whole-unit path
+  still never silently accepts a site-confirmed quantity that doesn't match what was
+  requested, so a stale promo/pack-size default or a one-off UI quirk surfaces as an
+  honest, reported mismatch rather than a silent wrong add — unlike the weighed-produce
+  case above, there's no known, generic site-side reason a whole-unit item wouldn't
+  confirm the exact requested count.
 
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
@@ -143,6 +150,18 @@ class RamiLevyAdapter:
         return MatchResult(item_code=item_code, locator=first_tile, matched_by="name_fallback")
 
     async def add_to_cart(self, page: Page, match: MatchResult, quantity: float) -> float:
+        # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
+        # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: a single click
+        # sets the site's own minimum sellable weight (observed: 0.5) rather than "1", and
+        # a second click doesn't register (confirmed live: it triggers a delivery-slot
+        # modal that blocks further interaction, not a second increment) — there's no way
+        # to hit an exact requested weight here. Per explicit product decision, this is
+        # treated as a successful add at whatever the site confirms, not a mismatch
+        # against the caller's requested quantity — a usable cart with the retailer's
+        # minimum matters more here than an exact, unreachable amount.
+        if await match.locator.locator('span[aria-label="לקילו גרם"]').count() > 0:
+            return await self._add_weighed_item(match)
+
         # No direct-fill quantity input on this site — only a stepper (+/- buttons showing
         # a running count), so only whole-unit quantities are representable.
         if quantity != int(quantity):
@@ -150,18 +169,6 @@ class RamiLevyAdapter:
                 f"Rami Levy only supports whole-unit quantities, got {quantity}"
             )
         quantity = int(quantity)
-
-        # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
-        # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: a single click
-        # sets a default weight (observed: 0.5) rather than "1", and a second click didn't
-        # register at all within a normal timeout (the control likely swaps to a different
-        # weight-entry widget after the first click) — there's no reliable way to hit an
-        # exact requested unit count here, so this is reported honestly up front rather
-        # than attempting clicks and surfacing a confusing partial-state mismatch.
-        if await match.locator.locator('span[aria-label="לקילו גרם"]').count() > 0:
-            raise UnsupportedQuantityError(
-                f"Rami Levy sells {match.item_code} by weight (per kg), not by whole unit"
-            )
 
         await match.locator.hover()
         plus_btn = match.locator.locator("button.btn-acc.plus")
@@ -176,6 +183,16 @@ class RamiLevyAdapter:
                 f"requested {quantity} for {match.item_code}, site shows {confirmed}"
             )
         return confirmed
+
+    async def _add_weighed_item(self, match: MatchResult) -> float:
+        await match.locator.hover()
+        plus_btn = match.locator.locator("button.btn-acc.plus")
+        await plus_btn.wait_for(state="visible", timeout=5000)
+        await plus_btn.click()
+
+        qty_display = match.locator.locator(".num-span")
+        await qty_display.wait_for(state="visible", timeout=5000)
+        return float((await qty_display.inner_text()).strip())
 
     async def get_cart_url(self, page: Page) -> str | None:
         return f"{BASE_URL}/cart"
