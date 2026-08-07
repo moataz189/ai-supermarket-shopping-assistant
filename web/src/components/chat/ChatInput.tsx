@@ -28,7 +28,7 @@ export function ChatInput({ variant, onSend, disabled, placeholder }: ChatInputP
       onSubmit={handleSubmit}
       className={
         isHero
-          ? 'mx-auto flex w-full max-w-2xl items-center gap-2 rounded-3xl border border-zinc-200 bg-white p-2 shadow-lg shadow-zinc-200/50'
+          ? 'mx-auto flex w-full max-w-2xl items-center gap-2 rounded-3xl border border-zinc-200 bg-white p-2 shadow-lg shadow-emerald-900/10'
           : 'mx-auto flex w-full max-w-3xl items-center gap-2 rounded-3xl border border-zinc-200 bg-white p-2 shadow-md'
       }
     >

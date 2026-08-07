@@ -12,7 +12,11 @@ export function GroceryIllustration() {
 
   return (
     <div className="relative mx-auto h-40 w-40 sm:h-48 sm:w-48">
-      <div className="absolute inset-0 rounded-full bg-emerald-100" />
+      <motion.div
+        className="absolute inset-0 rounded-full bg-emerald-100"
+        animate={reduceMotion ? undefined : { scale: [1, 1.04, 1] }}
+        transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+      />
       <motion.div
         className="absolute inset-0 flex items-center justify-center"
         animate={reduceMotion ? undefined : { y: [0, -8, 0] }}
