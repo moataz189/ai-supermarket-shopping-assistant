@@ -955,3 +955,42 @@ should choose what to actually search for, rather than silently truncating/guess
 shorter query (which would reopen the same "how much do we trust this" question #5 just
 closed). Nothing was added to the real Rami Levy cart during this investigation — every
 attempt correctly reported `not_found`.
+
+## CP9 follow-up #7 — Rami Levy now searches by item_code too, resolving #6's open question (2026-08-08)
+
+**Resolved, not by shortening the query — by not needing the full-name query at all.**
+The user supplied a real barcode for the pasta product (`7290117769690`, found via the
+product's own image URL, as this adapter's docstring already noted is the only place a
+barcode is reachable on this site) and asked why `search_and_match` doesn't search by
+`item_code` the way Shufersal's does. The adapter's existing comment claimed "the real
+site doesn't expose our fixture-style item_code on search tiles" — true of the fixture's
+*fake* codes, but that claim had never actually been tested against a *real* barcode.
+Confirmed live: querying Rami Levy's real search with the real barcode returned only that
+product's tile(s) (5 identical tiles — likely the same product surfaced in multiple page
+sections); querying with two different nonexistent/fake barcodes both returned zero
+results. This is exactly the same trustworthy, disambiguating signal Shufersal's adapter
+already relies on for code search.
+
+`RamiLevyAdapter.search_and_match` now tries `item_code` first (mirroring Shufersal): a
+non-empty result for a barcode query is trusted directly, no further name comparison
+needed, since the site itself already disambiguated by an exact code. Falls back to the
+existing exact-name-only path (see #5/#6) only when there's no item_code or the code
+search finds nothing — unchanged otherwise. This sidesteps #6's full-name-query problem
+entirely for anything with a real code, rather than attempting to fix the query length
+itself (which would have reopened the "how much do we trust a partial-query result"
+question #5 deliberately closed).
+
+Also updated `tests/fixtures/feeds/rami_levy_sample.xml`'s pasta entry's `ItemCode` to
+this same real barcode (previously the fixture-style `300001`) and re-ingested.
+
+**Live verification.** Rebuilt and restarted `retailer-cart-mcp`. Re-ran
+`prepare_cart_for_retailer` for Rami Levy with the real barcode: `matched_by:
+"item_code"`, `status: "added"`, `quantity_confirmed: 1.0` — a real, correct add,
+resolving the `not_found` from #6. Left in the real cart (a correct, intentional add, not
+a mismatch to clean up this time).
+
+No unit test was added for `search_and_match`'s new code-first path — consistent with
+this adapter's established boundary (see this file's own module docstring and
+`tests/mcp/test_rami_levy_adapter.py`'s: only `add_to_cart`'s decision logic is
+unit-tested against a fake locator tree; `search_and_match`'s real-DOM/site behavior is
+verified live by hand, same as the rest of this adapter's history).
