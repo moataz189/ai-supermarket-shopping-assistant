@@ -12,6 +12,9 @@ export type Turn =
       // Only set after answering an 'ambiguous_product' clarification (CP9 follow-up,
       // 2026-08-08) — one chosen option id per retailer, e.g. { shufersal: 'Tara' }.
       answeredByRetailer?: Record<string, string>
+      // Only set after answering a 'recipe_ingredient_selection' clarification (CP10) —
+      // the ingredient ids the user chose to buy.
+      answeredIngredientIds?: string[]
     }
   | {
       id: string

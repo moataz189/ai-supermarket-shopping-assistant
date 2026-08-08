@@ -60,6 +60,15 @@ class AgentState(TypedDict, total=False):
     # retailer's for "the same" grocery item, so each retailer's own resolution is kept
     # independent — see resolve_items.py/resolve_ambiguity.py/build_retailer_cart.py)
     pending_clarification_item: str | None
+    recipe_items: list[ParsedItem]            # CP10: the full scaled recipe ingredient
+    # list, exactly as get_recipe_ingredients.py produced it — preserved here even after
+    # select_recipe_ingredients.py filters parsed_request["items"] down to only what the
+    # user chose to buy, so the original list is never lost. Unset for grocery-list/
+    # weekly-shop requests, which never go through ingredient selection at all.
+    selected_recipe_items: list[str]          # CP10: names of the recipe_items the user
+    # selected to buy — a subset of recipe_items, mirrored into parsed_request["items"]
+    # (the list every downstream node — resolve_items, build_retailer_cart — actually
+    # consumes) so nothing downstream needs to know ingredient selection exists at all.
     retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
     chosen_retailer: str | None
     retailer_cart_result: dict | None         # CP8's prepare_retailer_cart tool result

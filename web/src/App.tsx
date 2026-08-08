@@ -112,6 +112,22 @@ function App() {
     sendMessage(displayLabel, JSON.stringify(answersByRetailer), false, threadId)
   }
 
+  // Recipe ingredient selection (CP10): the selected ingredient ids, JSON-encoded the
+  // same structured-answer way as the per-retailer clarification above. What follows
+  // could be the retailer comparison or the "you already have everything" result
+  // (selecting nothing) — genuinely either, so no comparison skeleton is assumed here.
+  function handleSelectIngredients(turnId: string, selectedIds: string[], displayLabel: string) {
+    if (isBusy) return
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === turnId && t.role === 'assistant' && t.status === 'done'
+          ? { ...t, answeredIngredientIds: selectedIds }
+          : t,
+      ),
+    )
+    sendMessage(displayLabel, JSON.stringify(selectedIds), false, threadId)
+  }
+
   function handleRetry(turnId: string) {
     if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
@@ -136,6 +152,7 @@ function App() {
               turns={turns}
               onSelectOption={handleSelectOption}
               onSelectMultipleOption={handleSelectMultipleOption}
+              onSelectIngredients={handleSelectIngredients}
               onRetry={handleRetry}
             />
           </div>

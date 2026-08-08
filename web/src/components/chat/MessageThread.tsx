@@ -5,6 +5,7 @@ import { UserBubble } from './UserBubble'
 import { AssistantBubble } from './AssistantBubble'
 import { TypingIndicator } from './TypingIndicator'
 import { ClarificationCard } from '@/components/clarification/ClarificationCard'
+import { IngredientSelectionCard } from '@/components/clarification/IngredientSelectionCard'
 import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
 import { RetailerCartResultView } from '@/components/RetailerCartResultView'
@@ -16,6 +17,7 @@ interface MessageThreadProps {
   turns: Turn[]
   onSelectOption: (turnId: string, optionId: string, label: string) => void
   onSelectMultipleOption: (turnId: string, answersByRetailer: Record<string, string>, displayLabel: string) => void
+  onSelectIngredients: (turnId: string, selectedIds: string[], displayLabel: string) => void
   onRetry: (turnId: string) => void
 }
 
@@ -25,7 +27,13 @@ function leadText(status: string): string {
     : "Here's your comparison:"
 }
 
-export function MessageThread({ turns, onSelectOption, onSelectMultipleOption, onRetry }: MessageThreadProps) {
+export function MessageThread({
+  turns,
+  onSelectOption,
+  onSelectMultipleOption,
+  onSelectIngredients,
+  onRetry,
+}: MessageThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -63,8 +71,27 @@ export function MessageThread({ turns, onSelectOption, onSelectMultipleOption, o
             )
           }
 
-          const { response, answeredOptionId, answeredByRetailer } = turn
+          const { response, answeredOptionId, answeredByRetailer, answeredIngredientIds } = turn
           const clarification = response.clarification
+
+          if (clarification && clarification.reason === 'recipe_ingredient_selection') {
+            return (
+              <div key={turn.id} className="flex justify-start">
+                <IngredientSelectionCard
+                  clarification={clarification}
+                  answeredIngredientIds={answeredIngredientIds}
+                  onConfirm={(selectedIds) => {
+                    const byId = new Map((clarification.ingredients ?? []).map((i) => [i.id, i.display_name]))
+                    const displayLabel =
+                      selectedIds.length === 0
+                        ? 'None — I already have everything'
+                        : selectedIds.map((id) => byId.get(id) ?? id).join(', ')
+                    onSelectIngredients(turn.id, selectedIds, displayLabel)
+                  }}
+                />
+              </div>
+            )
+          }
 
           if (clarification && clarification.reason === 'retailer_choice' && clarification.carts) {
             const carts = clarification.carts
@@ -113,7 +140,20 @@ export function MessageThread({ turns, onSelectOption, onSelectMultipleOption, o
           }
 
           if (response.message) {
-            return <AssistantBubble key={turn.id}>{response.message}</AssistantBubble>
+            // Covers both general_chat replies and the "you already have everything"
+            // result (CP10 — no_ingredients_to_buy.py) — the latter also carries the
+            // recipe's full original ingredient list, shown here so declining to buy
+            // anything still leaves the user with a record of what the recipe needed.
+            return (
+              <div key={turn.id} className="flex flex-col gap-3">
+                {response.recipe && (
+                  <div className="flex justify-start">
+                    <RecipeIngredientsView recipe={response.recipe} />
+                  </div>
+                )}
+                <AssistantBubble>{response.message}</AssistantBubble>
+              </div>
+            )
           }
 
           // Once a specific retailer is chosen, never show the comparison again — only
