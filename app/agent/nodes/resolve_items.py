@@ -72,16 +72,17 @@ def make_resolve_items(client):
             name = item["name"]
             if name in resolved_choices or name in dietary_conflicts:
                 continue
-            # Recipe-derived items carry an English canonical `name` (Spoonacular) but a
-            # real, localized `display_name` when one exists (see
-            # get_recipe_ingredients.py) — searching with the English name against the
-            # Hebrew-only real catalog (see resolve_weekly_shop_profile.py's docstring)
-            # never matches even when the equivalent product genuinely exists (confirmed
-            # live: a recipe needing tomatoes was reported missing despite "עגבניה"
-            # existing in the catalog). Grocery-list items have no display_name at all
-            # (already typed in the user's own language), so this is a no-op fallback
-            # for them — `name` itself is used unchanged.
-            search_name = item.get("display_name") or name
+            # Recipe-derived items carry an English canonical `name` (Spoonacular) and a
+            # `search_name` that's *always* tried in Hebrew when a translation exists
+            # (see get_recipe_ingredients.py) — the real catalog is Hebrew-only
+            # regardless of what language this conversation is in, so searching with the
+            # English name never matches even when the equivalent product genuinely
+            # exists (confirmed live, twice: once for a Hebrew-language conversation,
+            # then again for an English one — `display_name` alone isn't enough, since it
+            # follows the conversation's own language and stays English there).
+            # Grocery-list items have no search_name/display_name at all (already typed
+            # in the user's own language), so this is a no-op fallback for them.
+            search_name = item.get("search_name") or item.get("display_name") or name
             if name not in item_candidates:
                 item_candidates[name] = await _candidates_by_retailer(client, search_name, forbidden)
             by_retailer = item_candidates[name]

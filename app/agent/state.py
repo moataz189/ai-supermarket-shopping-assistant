@@ -3,7 +3,11 @@ from typing import Literal, TypedDict
 
 class ParsedItem(TypedDict, total=False):
     name: str
-    display_name: str  # localized label; only set for recipe-derived items (CP7)
+    display_name: str  # user-facing label in this conversation's own language; only set
+    # for recipe-derived items (CP7)
+    search_name: str  # catalog search query — always tried in Hebrew when a translation
+    # exists, independent of the conversation's language (the real catalog is Hebrew-only
+    # regardless); only set for recipe-derived items (CP9 follow-up)
     quantity: float | None
     unit: str  # only set for recipe-derived items (CP7) — grocery-list items have none
 
