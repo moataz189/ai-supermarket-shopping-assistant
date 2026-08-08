@@ -165,8 +165,17 @@ class ShufersalAdapter:
         # catalog). This isn't just an optimization: a name search for "לחם אחיד פרוס" (a
         # generic bread name) returned 10 *different* products sharing that exact name —
         # exact-name matching is ambiguous in real product catalogs in a way code matching
-        # never is. Only falls back to a name search if code search finds nothing, or there
-        # is no item_code to search by at all.
+        # never is. Falls back to a name search if code search finds nothing, or there is
+        # no item_code to search by at all — but only an *exact* name match is accepted.
+        #
+        # No "just take the first search result" fallback beyond that (removed CP9
+        # follow-up, 2026-08-08) — confirmed live to cause a real wrong-product add: our
+        # local catalog's item_code/name come from a fixture-derived dataset, not the
+        # live site's own data, so a genuinely unmatched item can legitimately have no
+        # code or exact-name hit at all. Guessing the top (non-deterministically ranked)
+        # search result for a real product name added cheese ravioli to a real cart for a
+        # "pasta" request. Reporting an honest `not_found` (see automation.py) is always
+        # safer than a real, wrong purchase.
         #
         # One navigation per fresh context (automation.py gives each item its own), then
         # the rest of this adapter talks to the site entirely through same-origin fetch
@@ -194,8 +203,7 @@ class ShufersalAdapter:
             if name is not None and name.strip().lower() == item_name.strip().lower():
                 return MatchResult(item_code=item["code"], locator=item, matched_by="exact_name")
 
-        first = results[0]
-        return MatchResult(item_code=first["code"], locator=first, matched_by="name_fallback")
+        return None
 
     async def _confirm_quantity(self, page: Page, item_name: str, item_code: str) -> float:
         # A fresh server round trip, not a locally-held value — re-runs the same search

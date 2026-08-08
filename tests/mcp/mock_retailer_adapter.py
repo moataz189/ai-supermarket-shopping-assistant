@@ -1,8 +1,10 @@
 """Implements RetailerAdapter against tests/mcp/mock_site_server.py's Flask app.
 
-Mirrors what a best-effort real adapter (shufersal.py / rami_levy.py) does: search by
-item_code first (barcode-style lookup), fall back to an exact product-name match, then a
-weaker fuzzy match — never trusting the site to tell it which kind of match it got.
+Mirrors what a real adapter (shufersal.py / rami_levy.py) does: search by item_code
+first (barcode-style lookup), fall back to an exact product-name match — never trusting
+the site to tell it which kind of match it got, and never guessing a "first search
+result" beyond that (removed CP9 follow-up, 2026-08-08 — see the real adapters'
+docstrings for why: it caused a real wrong-product add against a real cart).
 """
 
 from mcp_servers.retailer_cart_mcp.automation import (
@@ -48,9 +50,7 @@ class MockRetailerAdapter:
                 code = await tile.get_attribute("data-item-code")
                 return MatchResult(item_code=code, locator=tile, matched_by="exact_name")
 
-        first = tiles.first
-        code = await first.get_attribute("data-item-code")
-        return MatchResult(item_code=code, locator=first, matched_by="name_fallback")
+        return None
 
     async def add_to_cart(
         self, page, match: MatchResult, quantity: float, unit: str | None = None

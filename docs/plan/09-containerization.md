@@ -760,12 +760,17 @@ method exists in either adapter). No CAPTCHA/bot-block was encountered for eithe
   adapter, not just Shufersal; the mock-site integration suite already covers it (140/140
   tests pass), but a cart with many items now opens/closes many contexts in sequence —
   acceptable for the tested/observed cart sizes, worth watching if that changes.
-- The pre-existing (CP8, unchanged by CP9) `name_fallback` matching behavior — falling
-  back to the first search result when nothing truly matches a requested item, rather
-  than reporting `not_found` — can add an item the user never asked for when a query
-  matches nothing meaningfully (observed live during CP9 verification testing). Flagged
-  as a real product-behavior question, deliberately left unchanged pending a separate,
-  explicit decision — not silently fixed or hidden.
+- **Resolved (CP9 follow-up, 2026-08-08):** the `name_fallback` matching behavior flagged
+  below as an open question was removed from both adapters (and the mock adapter) after
+  it stopped being hypothetical — a real recipe-cart run added `רביולי גבינות` (cheese
+  ravioli) to a real Shufersal account cart for a "pasta" request, root-caused to exactly
+  this fallback picking a non-deterministically-ranked top search result when neither
+  item_code nor exact-name matching found the fixture-catalog-derived item on the live
+  site. `search_and_match` in both adapters now returns `None` (reported as `not_found`,
+  already a fully-supported path in `automation.py`) instead of guessing when nothing
+  matches exactly — see `docs/plan/08-playwright-cart-automation.md`'s corresponding
+  follow-up section for the live verification (wrong item removed from the real cart,
+  the same request re-run and confirmed to report `not_found` with nothing added).
 - Both real retailer sites appear to require one-time account setup (a delivery
   method/address) before add-to-cart fully works — confirmed directly for Shufersal
   (`#assortmentModal`), inferred but not directly confirmed for Rami Levy. Like login,

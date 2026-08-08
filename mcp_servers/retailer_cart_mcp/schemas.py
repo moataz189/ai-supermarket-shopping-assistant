@@ -20,7 +20,7 @@ class CartItemResult(BaseModel):
     item_code: str
     status: Literal["added", "not_found", "error", "quantity_conversion_required"]
     reason: str | None = None
-    matched_by: Literal["item_code", "exact_name", "name_fallback"] | None = None
+    matched_by: Literal["item_code", "exact_name"] | None = None
     quantity_confirmed: float | None = None
     # Only populated when the request carried a real recipe unit (see CartItemRequest.unit
     # above) — None for ordinary grocery-list/weekly-shop items, exactly as before this

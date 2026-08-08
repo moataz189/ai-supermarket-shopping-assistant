@@ -33,3 +33,26 @@ class RetailerFeedStatus(Base):
     retailer: Mapped[str] = mapped_column(String(32), primary_key=True)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime)
     stale: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class IngredientTranslation(Base):
+    """Persistent cache of English recipe-ingredient name -> Hebrew supermarket-catalog
+    search term (CP9 follow-up, 2026-08-08). Real Shufersal/Rami Levy catalogs are
+    Hebrew-only, independent of what language a given conversation is in — this is a
+    dedicated, retailer-agnostic search term, separate from `ParsedItem.display_name`
+    (the user-facing label, which does follow the conversation's language).
+
+    Populated two ways: a small set of already-verified-correct terms seeded at startup
+    (`seed_ingredient_translations`), and on-demand via the LLM
+    (`app/agent/ingredient_translation.py`) the first time a genuinely new ingredient is
+    seen — written back here so the LLM is never asked to translate the same ingredient
+    twice."""
+
+    __tablename__ = "ingredient_translations"
+
+    # Normalized (stripped, lowercased) English name — the cache key. Deliberately not
+    # the raw `original_name` itself, so "Heavy Cream" and "heavy cream" share one entry.
+    canonical_name: Mapped[str] = mapped_column(String(256), primary_key=True)
+    original_name: Mapped[str] = mapped_column(String(256))  # exact string as first seen
+    search_name_he: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(DateTime)

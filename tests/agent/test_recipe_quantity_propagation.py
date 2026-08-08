@@ -74,7 +74,7 @@ async def test_recipe_ingredient_quantity_survives_into_graph_state():
     # Requirement 1: Recipe MCP quantity survives into graph state.
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=4, items=[]))
     app = build_graph(
-        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client()
+        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
     )
     config = {"configurable": {"thread_id": "t1"}}
 
@@ -92,7 +92,7 @@ async def test_recipe_scaling_survives_downstream_into_the_cart_line():
     # scaled amount (not qty=1) is what build_retailer_cart puts on the cart line.
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
-        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client()
+        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
     )
     config = {"configurable": {"thread_id": "t2"}}
 
@@ -165,7 +165,7 @@ async def test_recipe_info_is_shown_on_the_retailer_choice_interrupt_before_a_ch
     # on the retailer_choice interrupt itself, not only after the user has already picked.
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
-        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client()
+        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
     )
     config = {"configurable": {"thread_id": "t5b"}}
 
@@ -183,7 +183,7 @@ async def test_recipe_info_is_shown_on_the_retailer_choice_interrupt_before_a_ch
 async def test_finalize_exposes_the_scaled_recipe_ingredient_list():
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
-        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client()
+        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
     )
     config = {"configurable": {"thread_id": "t5"}}
 

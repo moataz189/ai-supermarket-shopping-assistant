@@ -81,7 +81,10 @@ async def test_search_and_match_case_insensitive_exact_match():
     assert match.matched_by == "exact_name"
 
 
-async def test_search_and_match_falls_back_to_first_result():
+async def test_search_and_match_returns_none_when_no_exact_name_match():
+    # The "just take the first search result" fallback was removed (CP9 follow-up,
+    # 2026-08-08) after it added a real, wrong product to a real cart live — a search hit
+    # with no exact name match must be reported honestly as unmatched, not guessed at.
     page = FakePage(search_results=[_ok([
         {
             "code": "P2",
@@ -93,8 +96,7 @@ async def test_search_and_match_falls_back_to_first_result():
 
     match = await ShufersalAdapter().search_and_match(page, "Milk", "")
 
-    assert match.item_code == "P2"
-    assert match.matched_by == "name_fallback"
+    assert match is None
 
 
 async def test_search_and_match_finds_by_code_search_alone_without_a_name_search():

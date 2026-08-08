@@ -5,8 +5,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.db.models import Base, RetailerFeedStatus, RetailerProduct
+from app.db.models import Base, IngredientTranslation, RetailerFeedStatus, RetailerProduct
 from mcp_servers.supermarket_mcp import server
+from mcp_servers.supermarket_mcp.schemas import IngredientTranslationEntry
 
 
 @pytest.fixture
@@ -119,3 +120,73 @@ def test_get_product_price_returns_none_for_missing_product(db_session_factory):
     result = server.get_product_price("shufersal", "does-not-exist")
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_ingredient_translations / save_ingredient_translations (CP9 follow-up,
+# 2026-08-08) — the persistent cache backing get_recipe_ingredients.py's Hebrew catalog
+# search terms. Lives here (not the backend) since this is the one service with direct
+# SQLite access.
+# ---------------------------------------------------------------------------
+
+
+def test_get_ingredient_translations_returns_only_cached_names(db_session_factory):
+    with db_session_factory() as session:
+        session.add(IngredientTranslation(
+            canonical_name="tomatoes", original_name="tomatoes", search_name_he="עגבניה",
+            created_at=datetime.now(timezone.utc),
+        ))
+        session.commit()
+
+    result = server.get_ingredient_translations(["tomatoes", "pasta"])
+
+    assert result.translations == {"tomatoes": "עגבניה"}
+
+
+def test_get_ingredient_translations_normalizes_case_and_whitespace(db_session_factory):
+    with db_session_factory() as session:
+        session.add(IngredientTranslation(
+            canonical_name="heavy cream", original_name="heavy cream", search_name_he="שמנת מתוקה",
+            created_at=datetime.now(timezone.utc),
+        ))
+        session.commit()
+
+    result = server.get_ingredient_translations(["  Heavy Cream  "])
+
+    assert result.translations == {"  Heavy Cream  ": "שמנת מתוקה"}
+
+
+def test_get_ingredient_translations_empty_query_returns_empty(db_session_factory):
+    result = server.get_ingredient_translations([])
+
+    assert result.translations == {}
+
+
+def test_save_ingredient_translations_then_get_finds_it(db_session_factory):
+    server.save_ingredient_translations([IngredientTranslationEntry(name="pasta", search_name_he="פסטה")])
+
+    result = server.get_ingredient_translations(["pasta"])
+
+    assert result.translations == {"pasta": "פסטה"}
+
+
+def test_save_ingredient_translations_never_overwrites_an_existing_entry(db_session_factory):
+    server.save_ingredient_translations([IngredientTranslationEntry(name="pasta", search_name_he="פסטה")])
+    # A second save for the same (canonicalized) name — e.g. two concurrent requests
+    # translating the same never-before-seen ingredient — must not clobber the first.
+    server.save_ingredient_translations([IngredientTranslationEntry(name="Pasta", search_name_he="WRONG")])
+
+    result = server.get_ingredient_translations(["pasta"])
+
+    assert result.translations == {"pasta": "פסטה"}
+
+
+def test_save_ingredient_translations_dedupes_within_the_same_batch(db_session_factory):
+    server.save_ingredient_translations([
+        IngredientTranslationEntry(name="pasta", search_name_he="פסטה"),
+        IngredientTranslationEntry(name="Pasta", search_name_he="WRONG"),
+    ])
+
+    result = server.get_ingredient_translations(["pasta"])
+
+    assert result.translations == {"pasta": "פסטה"}
