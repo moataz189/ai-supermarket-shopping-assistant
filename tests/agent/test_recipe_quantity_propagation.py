@@ -99,7 +99,8 @@ async def test_recipe_scaling_survives_downstream_into_the_cart_line():
     )
     config = {"configurable": {"thread_id": "t2"}}
 
-    result = await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
 
     shufersal_lines = {line["name"]: line for line in result["retailer_carts"]["shufersal"]["items"]}
     assert shufersal_lines["tomatoes"]["requested_quantity"] == 800.0
@@ -122,6 +123,7 @@ async def test_build_retailer_cart_no_longer_hardcodes_qty_1_quantity_for_recipe
     config = {"configurable": {"thread_id": "t3"}}
 
     await app.ainvoke({"raw_message": "shakshuka"}, config=config)
+    await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
     await app.ainvoke(Command(resume="shufersal"), config=config)
 
     assert len(retailer_cart_client.calls) == 1
@@ -155,6 +157,7 @@ async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_resul
     config = {"configurable": {"thread_id": "t4"}}
 
     await app.ainvoke({"raw_message": "shakshuka"}, config=config)
+    await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
     final = await app.ainvoke(Command(resume="rami_levy"), config=config)
 
     added = final["final_result"]["retailer_cart_result"]["added"][0]
@@ -175,7 +178,8 @@ async def test_recipe_info_is_shown_on_the_retailer_choice_interrupt_before_a_ch
     )
     config = {"configurable": {"thread_id": "t5b"}}
 
-    result = await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
 
     payload = result["__interrupt__"][0].value
     assert payload["reason"] == "retailer_choice"
@@ -195,6 +199,7 @@ async def test_finalize_exposes_the_scaled_recipe_ingredient_list():
     config = {"configurable": {"thread_id": "t5"}}
 
     await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
     result = await app.ainvoke(Command(resume="decline"), config=config)
 
     recipe = result["final_result"]["recipe"]

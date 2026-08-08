@@ -10,19 +10,21 @@ from app.api.schemas import ChatRequest, ChatResponse
 router = APIRouter()
 
 
-def _resume_value(message: str) -> str | dict:
+def _resume_value(message: str) -> str | dict | list:
     """A resume answer is normally the plain string the user typed or clicked (a
-    retailer/recipe choice, free text). resolve_ambiguity.py's per-retailer clarification
-    (CP9 follow-up, 2026-08-08) is the one case that needs a structured answer — one
-    choice per retailer — so the frontend JSON-encodes that as the message string instead.
-    Only treated as structured when it parses to a *dict* specifically; any other valid
-    JSON (a bare number, a quoted string) is vanishingly unlikely free text and is passed
-    through as the original string regardless, same as before this existed."""
+    retailer/recipe choice, free text). Two clarifications need a structured answer
+    instead, so the frontend JSON-encodes it as the message string: resolve_ambiguity.py's
+    per-retailer clarification (CP9 follow-up, 2026-08-08 — one choice per retailer, a
+    dict) and select_recipe_ingredients.py's ingredient selection (CP10 — the selected
+    ingredient ids, a list). Only treated as structured when it parses to a *dict* or
+    *list* specifically; any other valid JSON (a bare number, a quoted string) is
+    vanishingly unlikely free text and is passed through as the original string
+    regardless, same as before this existed."""
     try:
         parsed = json.loads(message)
     except (json.JSONDecodeError, TypeError):
         return message
-    return parsed if isinstance(parsed, dict) else message
+    return parsed if isinstance(parsed, (dict, list)) else message
 
 
 @router.post("/chat", response_model=ChatResponse)

@@ -25,6 +25,20 @@ class RecipeInfo(BaseModel):
     ingredients: list[RecipeIngredient]
 
 
+class IngredientSelectionOption(BaseModel):
+    """One row on the recipe ingredient-selection screen (CP10) — a checkbox with a
+    quantity/unit, not just a label. `id` and `name` are always the same value today
+    (the ingredient's own stable name), kept as two separate fields to match the wire
+    contract explicitly rather than overload `name` as both identity and display data."""
+
+    id: str
+    name: str
+    display_name: str
+    quantity: float | None = None
+    unit: str | None = None
+    selected: bool
+
+
 class Clarification(BaseModel):
     reason: str
     question: str
@@ -39,9 +53,17 @@ class Clarification(BaseModel):
     # candidates; a retailer already auto-resolved (exactly one candidate) or with no
     # candidates at all is simply absent here, never asked about. The user picks
     # independently per retailer present — e.g. {"shufersal": [...], "rami_levy": [...]}.
-    recipe: RecipeInfo | None = None  # populated only when reason == "retailer_choice"
-    # and the original request was a recipe — shown before the user picks so a recipe's
-    # requested quantities are visible up front, not just inferable from the final cart.
+    ingredients: list[IngredientSelectionOption] | None = None  # only when reason ==
+    # "recipe_ingredient_selection" (CP10) — the full scaled recipe ingredient list, each
+    # pre-selected (spec: pressing Continue with no changes should buy everything). The
+    # resume answer is the list of selected ids, sent explicitly rather than encoded in
+    # free text (app/api/routes/chat.py's _resume_value already recognizes a JSON array).
+    recipe: RecipeInfo | None = None  # populated when reason == "retailer_choice" (shown
+    # before the user picks a retailer so a recipe's requested quantities are visible up
+    # front, not just inferable from the final cart) or reason ==
+    # "recipe_ingredient_selection" (CP10 — the header above the ingredient checkboxes,
+    # title/servings/full ingredient list); None for any other reason or a non-recipe
+    # request.
 
 
 class CartLine(BaseModel):

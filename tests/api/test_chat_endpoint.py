@@ -7,7 +7,13 @@ from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
 from app.api.dependencies import get_agent_app
 from app.api.main import app
-from tests.agent.fakes import FakeLLM, FakeRetailerCartClient, FakeSupermarketDataClient
+from tests.agent.fakes import (
+    TEST_INGREDIENT_DICTIONARY,
+    FakeLLM,
+    FakeRecipeClient,
+    FakeRetailerCartClient,
+    FakeSupermarketDataClient,
+)
 
 client = TestClient(app)
 
@@ -151,6 +157,72 @@ def test_choosing_retailer_invokes_playwright():
         }
         assert resume_body["retailer_cart_result"] == expected_result
         assert len(retailer_cart_client.calls) == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_recipe_ingredient_selection_contract_end_to_end():
+    # Matches the spec's example contract exactly: reason, question, and a structured
+    # `ingredients` list (id/name/display_name/quantity/unit/selected) — not free text.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=4, items=[]))
+    recipe_client = FakeRecipeClient(
+        search_results={"shakshuka": [{"id": 1, "title": "Shakshuka"}]},
+        recipes={1: {
+            "title": "Shakshuka", "servings": 4,
+            "ingredients": [
+                {"name": "eggs", "amount": 4.0, "unit": "large"},
+                {"name": "tomatoes", "amount": 400.0, "unit": "g"},
+            ],
+        }},
+    )
+    candidates = {
+        ("ביצים", "shufersal"): [{"item_code": "S-EGG", "name": "Eggs", "price": 12.0}],
+        ("Eggs", "shufersal"): [{"item_code": "S-EGG", "name": "Eggs", "price": 12.0}],
+        ("ביצים", "rami_levy"): [{"item_code": "R-EGG", "name": "Eggs", "price": 11.0}],
+        ("Eggs", "rami_levy"): [{"item_code": "R-EGG", "name": "Eggs", "price": 11.0}],
+        ("עגבניה", "shufersal"): [{"item_code": "S-TOM", "name": "Tomatoes", "price": 8.0}],
+        ("Tomatoes", "shufersal"): [{"item_code": "S-TOM", "name": "Tomatoes", "price": 8.0}],
+        ("עגבניה", "rami_levy"): [{"item_code": "R-TOM", "name": "Tomatoes", "price": 7.0}],
+        ("Tomatoes", "rami_levy"): [{"item_code": "R-TOM", "name": "Tomatoes", "price": 7.0}],
+    }
+    prices = {
+        ("shufersal", "S-EGG"): {"unit_price": 12.0, "price": 12.0},
+        ("shufersal", "S-TOM"): {"unit_price": 8.0, "price": 8.0},
+        ("rami_levy", "R-EGG"): {"unit_price": 11.0, "price": 11.0},
+        ("rami_levy", "R-TOM"): {"unit_price": 7.0, "price": 7.0},
+    }
+    fake_app = build_graph(
+        FakeSupermarketDataClient(candidates, prices), llm, MemorySaver(),
+        recipe_client=recipe_client, ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
+    )
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "shakshuka"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "needs_clarification"
+        thread_id = body["thread_id"]
+        clarification = body["clarification"]
+        assert clarification["reason"] == "recipe_ingredient_selection"
+        assert clarification["question"] == "Which ingredients do you need to buy?"
+        by_name = {ing["name"]: ing for ing in clarification["ingredients"]}
+        # English-language conversation ("shakshuka" has no Hebrew characters) — display
+        # follows the conversation's own language, same as before ingredient selection
+        # existed; search still always uses Hebrew regardless (see resume below).
+        assert by_name["tomatoes"] == {
+            "id": "tomatoes", "name": "tomatoes", "display_name": "tomatoes",
+            "quantity": 400.0, "unit": "g", "selected": True,
+        }
+        assert by_name["eggs"]["selected"] is True
+
+        # Resume sends the selected ingredient ids explicitly, as a JSON array.
+        answer = json.dumps(["tomatoes"])
+        resume = client.post("/chat", json={"thread_id": thread_id, "message": answer})
+        assert resume.status_code == 200
+        resume_body = resume.json()
+        assert resume_body["status"] == "awaiting_retailer_choice"
+        shufersal_items = resume_body["clarification"]["carts"]["shufersal"]["items"]
+        assert [i["name"] for i in shufersal_items] == ["tomatoes"]  # eggs was never selected
     finally:
         app.dependency_overrides.clear()
 

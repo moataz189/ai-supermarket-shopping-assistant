@@ -16,6 +16,15 @@ export interface RecipeInfo {
   ingredients: RecipeIngredient[]
 }
 
+export interface IngredientSelectionOption {
+  id: string
+  name: string
+  display_name: string
+  quantity?: number | null
+  unit?: string | null
+  selected: boolean
+}
+
 export interface Clarification {
   reason: string
   question: string
@@ -26,6 +35,10 @@ export interface Clarification {
   // genuinely ambiguous on its own candidates. A retailer already auto-resolved (or with
   // no candidates at all) is simply absent — never asked about.
   options_by_retailer?: Record<string, ClarificationOption[]> | null
+  // Only set for reason === 'recipe_ingredient_selection' (CP10) — the full scaled
+  // recipe ingredient list, each pre-selected. The resume answer is the selected ids as
+  // a JSON array (see App.tsx's handleSelectIngredients), not free text.
+  ingredients?: IngredientSelectionOption[] | null
   recipe?: RecipeInfo | null
 }
 
