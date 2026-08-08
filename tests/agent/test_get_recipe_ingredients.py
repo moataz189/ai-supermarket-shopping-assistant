@@ -114,3 +114,56 @@ async def test_hebrew_conversation_ingredient_unresolved_in_either_table_stays_e
 
     items_by_name = {i["name"]: i for i in result["parsed_request"]["items"]}
     assert items_by_name["an obscure spice"]["display_name"] == "an obscure spice"
+
+
+async def test_sea_salt_and_pepper_splits_into_two_independent_pantry_items():
+    # Targeted special case (CP9 follow-up, 2026-08-08), not a general splitting
+    # mechanism — no real product contains both salt and pepper, so this one compound
+    # ingredient is expanded into its two real, separately-sold products, each resolved
+    # and searched independently through the normal flow.
+    dictionary = {"sea salt": "מלח ים", "black pepper": "פלפל שחור"}
+    recipe_client = FakeRecipeClient(
+        search_results={"ratatouille": [{"id": 2, "title": "Ratatouille Pasta"}]},
+        recipes={
+            2: {
+                "title": "Ratatouille Pasta",
+                "servings": 4,
+                "ingredients": [
+                    {"name": "sea salt and pepper", "amount": 4.0, "unit": "servings"},
+                ],
+            }
+        },
+    )
+    node = make_get_recipe_ingredients(recipe_client, dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 2}
+
+    result = await node(state)
+
+    items = result["parsed_request"]["items"]
+    assert len(items) == 2
+    by_name = {i["name"]: i for i in items}
+    assert set(by_name) == {"sea salt", "black pepper"}
+    assert by_name["sea salt"]["search_name"] == "מלח ים"
+    assert by_name["sea salt"]["translation_resolved"] is True
+    assert by_name["black pepper"]["search_name"] == "פלפל שחור"
+    assert by_name["black pepper"]["translation_resolved"] is True
+    # No mathematical split of the recipe's own "4 servings" — each split ingredient is
+    # an ordinary pantry item with no quantity/unit at all (the same default whole-unit
+    # behavior a plain grocery-list item already gets).
+    assert "quantity" not in by_name["sea salt"]
+    assert "unit" not in by_name["sea salt"]
+    assert "quantity" not in by_name["black pepper"]
+    assert "unit" not in by_name["black pepper"]
+
+
+async def test_ordinary_ingredients_are_unaffected_by_the_sea_salt_and_pepper_special_case():
+    dictionary = {"tomato": "עגבנייה"}
+    node = make_get_recipe_ingredients(_shakshuka_recipe_client(), dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    # Unchanged from before this special case existed — no splitting for anything else.
+    items = result["parsed_request"]["items"]
+    assert len(items) == 2
+    assert {i["name"] for i in items} == {"tomato", "an obscure spice"}
