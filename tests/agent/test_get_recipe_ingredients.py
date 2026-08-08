@@ -73,3 +73,44 @@ async def test_empty_dictionary_leaves_every_ingredient_unresolved_without_crash
     assert len(items) == 2
     assert all(item["translation_resolved"] is False for item in items)
     assert all(item["search_name"] == item["name"] for item in items)
+
+
+async def test_hebrew_conversation_shows_the_dictionary_hebrew_term_as_display_name_too():
+    # Real user report, 2026-08-08: in a Hebrew conversation, only the handful of
+    # ingredients covered by the tiny legacy phrase table (app/agent/i18n.py) showed up
+    # in Hebrew — everything else the big dictionary *did* resolve for search still
+    # displayed in English, an inconsistent half-translated ingredient list. "tomato" has
+    # no entry in the small legacy table, only the big dictionary.
+    dictionary = {"tomato": "עגבנייה"}
+    node = make_get_recipe_ingredients(_shakshuka_recipe_client(), dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "he"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    items_by_name = {i["name"]: i for i in result["parsed_request"]["items"]}
+    assert items_by_name["tomato"]["display_name"] == "עגבנייה"
+
+
+async def test_english_conversation_keeps_english_display_name_even_when_dictionary_resolves():
+    # display_name follows the conversation's own language — an English conversation must
+    # not start showing Hebrew text just because the (Hebrew-only) search dictionary
+    # resolved the ingredient.
+    dictionary = {"tomato": "עגבנייה"}
+    node = make_get_recipe_ingredients(_shakshuka_recipe_client(), dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    items_by_name = {i["name"]: i for i in result["parsed_request"]["items"]}
+    assert items_by_name["tomato"]["display_name"] == "tomato"
+
+
+async def test_hebrew_conversation_ingredient_unresolved_in_either_table_stays_english():
+    dictionary = {"tomato": "עגבנייה"}  # no entry for "an obscure spice"
+    node = make_get_recipe_ingredients(_shakshuka_recipe_client(), dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "he"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    items_by_name = {i["name"]: i for i in result["parsed_request"]["items"]}
+    assert items_by_name["an obscure spice"]["display_name"] == "an obscure spice"
