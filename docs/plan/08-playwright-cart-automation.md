@@ -626,9 +626,8 @@ orchestration-level routing (`unit=None` byte-identical to legacy, `requested_*`
 fields only present for recipe items, `QuantityConversionRequiredError` → structured
 failure). `tests/agent/test_recipe_quantity_propagation.py` covers the full graph path
 (Recipe MCP → state → cart line → Retailer-Cart MCP call → final result), scaling (4→8
-servings doubling 400 g → 800 g), the interrupt-time `recipe` payload, and explicit
-no-regression checks for both a plain grocery-list item and a weekly-shop-profile item
-(still `quantity: 1, unit: None`).
+servings doubling 400 g → 800 g), the interrupt-time `recipe` payload, and an explicit
+no-regression check for a plain grocery-list item (`quantity: 1, unit: None`, unaffected).
 
 **Manual verification (2026-08-08, live, via `docker compose up -d --build`).** "pasta for
 4 people" → "Ratatouille Pasta" through the real web UI: the ingredient list rendered
@@ -643,3 +642,44 @@ Rami Levy correctly rounded a 400 g request up to a supported weight (never down
 reported `requested_quantity=400/g` alongside a distinct `cart_quantity`/`cart_unit`;
 Shufersal added the exact 0.4 kg requested with no rounding. No checkout/login/payment path
 was touched, as before.
+
+## CP9 follow-up #2 — Weekly-shop-profile quantities (2026-08-08)
+
+**The same bug, a second source.** Following user feedback: the weekly-shop-profile
+starter lists (`resolve_weekly_shop_profile.py`) had the identical "always quantity=1"
+gap as recipes, just from a different origin — a single person's list and a family's list
+sent the same generic amount for every item regardless of household size (e.g. tomatoes:
+0.5 kg for one person is realistic, but a family needs closer to 1 kg).
+
+Since the requested-quantity pipeline built for recipes (this same document, CP9 follow-up
+#1) is entirely generic — driven by whatever `quantity`/`unit` a `parsed_request["items"]`
+entry carries, regardless of source — no new plumbing was needed. `STARTER_LISTS` changed
+from `dict[str, list[str]]` to `dict[str, list[dict]]`: each entry now carries a real
+`quantity`/`unit` sized for that profile's household (e.g. `{"name": "עגבניה", "quantity":
+0.5, "unit": "kg"}` for `one_person`, `1`/`kg` for `family`), hand-authored per profile
+(kept independent per list, same as the item sets themselves — not derived via a shared
+per-person multiplier). Weight/volume items (produce, meat, fish) use kg; items normally
+sold as one fixed retail package (bread, milk, rice, pasta, cheese...) use a plain unit
+count instead of an invented weight, for the same reason as the recipe flow's "buy one
+whole package" default. A freeform/custom list (the user types their own items) is
+unaffected — those still carry no quantity information at all, exactly as before.
+
+**Tests.** `tests/agent/test_graph_weekly_shop_profile.py` gained
+`test_starter_list_quantities_scale_by_household_size` (tomatoes: 0.5 kg for one_person,
+1 kg for family — the user's own example) and
+`test_custom_freeform_list_still_has_no_quantity_no_regression`.
+`tests/agent/test_recipe_quantity_propagation.py`'s weekly-shop test was rewritten from
+asserting the old "always 1/None" shape to asserting each item's real per-profile
+quantity/unit reaches the Retailer-Cart MCP call.
+
+**Manual verification (live, via rebuilt `backend`/`web` containers).** "Weekly shopping
+under 250" → "Weekly family shop" through the real web UI and API: bread/milk/pasta
+correctly showed "2×"/"3×"/"3× unit" (matching the authored family quantities) in both
+retailers' comparison carts, and Rami Levy's cart showed "1 × kg" for tomatoes — exactly
+the family quantity authored. Choosing Shufersal and running the real add-to-cart
+confirmed bread/milk/pasta added at the requested counts; yellow cheese (authored as a
+whole-package unit) turned out to be sold by weight on the real site and was correctly
+reported as `quantity_conversion_required` instead of silently guessed — a live
+confirmation that the "never guess an incompatible conversion" safety net works
+correctly even when this document's own authored assumption about a product's selling
+method turns out to be wrong.

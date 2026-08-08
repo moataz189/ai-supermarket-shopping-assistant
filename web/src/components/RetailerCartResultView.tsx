@@ -8,8 +8,10 @@ interface RetailerCartResultViewProps {
 }
 
 function AddedItem({ item }: { item: RetailerCartItemResult }) {
-  // A recipe item (requested_quantity set) shows what the recipe actually asked for
-  // alongside what ended up in the cart — e.g. a retailer's own weight increment can
+  // requested_quantity is set for any item with a real requested amount — a recipe
+  // ingredient, or a weekly-shop-profile item sized for that profile's household (e.g.
+  // 0.5 kg tomatoes for one person, 1 kg for a family). Shows what was actually asked
+  // for alongside what ended up in the cart — e.g. a retailer's own weight increment can
   // round "400 g" up to "0.5 kg"; this is a successful, expected adjustment, not an
   // error, so it's shown as plain detail rather than a warning even when the two differ.
   if (item.requested_quantity != null) {
@@ -17,7 +19,7 @@ function AddedItem({ item }: { item: RetailerCartItemResult }) {
       <li className="flex items-center justify-between gap-2">
         <span className="truncate">{item.name}</span>
         <span className="shrink-0 text-right text-xs text-zinc-500">
-          <span className="block">Recipe needs: {formatQuantity(item.requested_quantity, item.requested_unit)}</span>
+          <span className="block">Requested: {formatQuantity(item.requested_quantity, item.requested_unit)}</span>
           <span className="block font-medium text-emerald-700">
             Added to cart: {formatQuantity(item.cart_quantity ?? item.quantity_confirmed ?? 0, item.cart_unit)}
           </span>

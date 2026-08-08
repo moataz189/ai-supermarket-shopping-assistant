@@ -14,24 +14,90 @@ from app.agent.state import AgentState
 # normal grocery list, so any of these that still don't match a given retailer's actual
 # catalog (real feeds vary store to store) surface as an ordinary missing_items entry, not
 # a crash.
-STARTER_LISTS: dict[str, list[str]] = {
-    "basic": ["לחם", "חלב", "ביצים", "אורז", "פסטה", "שמן זית", "עגבניה", "בצל"],
-    "one_person": ["לחם", "חלב", "ביצים", "חזה עוף", "אורז", "פסטה", "עגבניה", "בננה"],
+#
+# Each entry also carries a real quantity/unit — sized per profile's household (e.g.
+# "one_person" gets 0.5 kg tomatoes, "family" gets 1 kg), following a real user report that
+# every profile silently got the same "1" regardless of household size. These flow through
+# the exact same requested_quantity/requested_unit path as a recipe's ingredients (see
+# build_retailer_cart.py / mcp_servers/retailer_cart_mcp/quantity.py) — a retailer-specific
+# increment/selling-method conversion happens later, at the Retailer-Cart MCP layer, not
+# here. Weight/volume items (produce, meat, fish) are in kg; items normally sold as one
+# fixed retail package (bread, milk, rice, pasta, cheese...) use a plain unit count instead
+# of an invented weight, since there's no deterministic per-product package size to convert
+# a weight into a package count with (same reasoning as the recipe flow's "buy one whole
+# package" default — see quantity.py's module docstring).
+STARTER_LISTS: dict[str, list[dict]] = {
+    "basic": [
+        {"name": "לחם", "quantity": 1, "unit": "unit"},
+        {"name": "חלב", "quantity": 1, "unit": "unit"},
+        {"name": "ביצים", "quantity": 1, "unit": "unit"},
+        {"name": "אורז", "quantity": 1, "unit": "unit"},
+        {"name": "פסטה", "quantity": 1, "unit": "unit"},
+        {"name": "שמן זית", "quantity": 1, "unit": "unit"},
+        {"name": "עגבניה", "quantity": 0.5, "unit": "kg"},
+        {"name": "בצל", "quantity": 0.5, "unit": "kg"},
+    ],
+    "one_person": [
+        {"name": "לחם", "quantity": 1, "unit": "unit"},
+        {"name": "חלב", "quantity": 1, "unit": "unit"},
+        {"name": "ביצים", "quantity": 1, "unit": "unit"},
+        {"name": "חזה עוף", "quantity": 0.4, "unit": "kg"},
+        {"name": "אורז", "quantity": 1, "unit": "unit"},
+        {"name": "פסטה", "quantity": 1, "unit": "unit"},
+        {"name": "עגבניה", "quantity": 0.5, "unit": "kg"},
+        {"name": "בננה", "quantity": 1, "unit": "kg"},
+    ],
     "couple": [
-        "לחם", "חלב", "ביצים", "חזה עוף", "אורז", "פסטה", "עגבניה", "בצל",
-        "גבינה צהובה", "יוגורט",
+        {"name": "לחם", "quantity": 2, "unit": "unit"},
+        {"name": "חלב", "quantity": 2, "unit": "unit"},
+        {"name": "ביצים", "quantity": 1, "unit": "unit"},
+        {"name": "חזה עוף", "quantity": 0.8, "unit": "kg"},
+        {"name": "אורז", "quantity": 1, "unit": "unit"},
+        {"name": "פסטה", "quantity": 2, "unit": "unit"},
+        {"name": "עגבניה", "quantity": 1, "unit": "kg"},
+        {"name": "בצל", "quantity": 0.5, "unit": "kg"},
+        {"name": "גבינה צהובה", "quantity": 1, "unit": "unit"},
+        {"name": "יוגורט", "quantity": 4, "unit": "unit"},
     ],
     "family": [
-        "לחם", "חלב", "ביצים", "חזה עוף", "בשר טחון", "אורז", "פסטה", "עגבניה",
-        "בצל", "גבינה צהובה", "יוגורט", "תפוח", "בננה", "דגני בוקר",
+        {"name": "לחם", "quantity": 2, "unit": "unit"},
+        {"name": "חלב", "quantity": 3, "unit": "unit"},
+        {"name": "ביצים", "quantity": 2, "unit": "unit"},
+        {"name": "חזה עוף", "quantity": 1.2, "unit": "kg"},
+        {"name": "בשר טחון", "quantity": 1, "unit": "kg"},
+        {"name": "אורז", "quantity": 2, "unit": "unit"},
+        {"name": "פסטה", "quantity": 3, "unit": "unit"},
+        {"name": "עגבניה", "quantity": 1, "unit": "kg"},
+        {"name": "בצל", "quantity": 1, "unit": "kg"},
+        {"name": "גבינה צהובה", "quantity": 2, "unit": "unit"},
+        {"name": "יוגורט", "quantity": 8, "unit": "unit"},
+        {"name": "תפוח", "quantity": 1.5, "unit": "kg"},
+        {"name": "בננה", "quantity": 2, "unit": "kg"},
+        {"name": "דגני בוקר", "quantity": 2, "unit": "unit"},
     ],
     "healthy": [
-        "חזה עוף", "סלמון", "קינואה", "תרד", "ברוקולי", "עגבניה", "שמן זית",
-        "יוגורט יווני", "ביצים", "אבוקדו",
+        {"name": "חזה עוף", "quantity": 0.6, "unit": "kg"},
+        {"name": "סלמון", "quantity": 0.4, "unit": "kg"},
+        {"name": "קינואה", "quantity": 1, "unit": "unit"},
+        {"name": "תרד", "quantity": 0.3, "unit": "kg"},
+        {"name": "ברוקולי", "quantity": 0.5, "unit": "kg"},
+        {"name": "עגבניה", "quantity": 0.5, "unit": "kg"},
+        {"name": "שמן זית", "quantity": 1, "unit": "unit"},
+        {"name": "יוגורט יווני", "quantity": 4, "unit": "unit"},
+        {"name": "ביצים", "quantity": 1, "unit": "unit"},
+        {"name": "אבוקדו", "quantity": 3, "unit": "unit"},
     ],
     "vegetarian": [
-        "טופו", "גרגירי חומוס", "עדשים", "אורז", "פסטה", "עגבניה", "תרד", "גבינה צהובה",
-        "ביצים", "יוגורט",
+        {"name": "טופו", "quantity": 1, "unit": "unit"},
+        {"name": "גרגירי חומוס", "quantity": 1, "unit": "unit"},
+        {"name": "עדשים", "quantity": 1, "unit": "unit"},
+        {"name": "אורז", "quantity": 1, "unit": "unit"},
+        {"name": "פסטה", "quantity": 1, "unit": "unit"},
+        {"name": "עגבניה", "quantity": 0.5, "unit": "kg"},
+        {"name": "תרד", "quantity": 0.3, "unit": "kg"},
+        {"name": "גבינה צהובה", "quantity": 1, "unit": "unit"},
+        {"name": "ביצים", "quantity": 1, "unit": "unit"},
+        {"name": "יוגורט", "quantity": 4, "unit": "unit"},
     ],
 }
 
@@ -63,21 +129,26 @@ async def resolve_weekly_shop_profile(state: AgentState) -> AgentState:
     })
 
     if answer in STARTER_LISTS:
-        names = STARTER_LISTS[answer]
-    elif answer == "custom":
-        free_text = interrupt({
-            "reason": "weekly_shop_custom_list",
-            "question": "Sure — what would you like on your list? (comma-separated is fine)",
-            "options": [],
-        })
-        names = _split_freeform_list(free_text)
+        # Real quantity/unit per item, sized for this profile's household — see
+        # STARTER_LISTS above.
+        items = [dict(entry) for entry in STARTER_LISTS[answer]]
     else:
-        # The clarification card only ever sends one of the option ids above, but the
-        # chat box stays open the whole time — a user who types their list directly
-        # instead of clicking "I'll provide my own list" gets the same result rather
-        # than an unrecognized-answer error.
-        names = _split_freeform_list(answer)
+        if answer == "custom":
+            free_text = interrupt({
+                "reason": "weekly_shop_custom_list",
+                "question": "Sure — what would you like on your list? (comma-separated is fine)",
+                "options": [],
+            })
+            names = _split_freeform_list(free_text)
+        else:
+            # The clarification card only ever sends one of the option ids above, but
+            # the chat box stays open the whole time — a user who types their list
+            # directly instead of clicking "I'll provide my own list" gets the same
+            # result rather than an unrecognized-answer error.
+            names = _split_freeform_list(answer)
+        # A freeform list has no quantity information at all — unchanged from before.
+        items = [{"name": n, "quantity": None} for n in names]
 
     parsed = dict(state["parsed_request"])
-    parsed["items"] = [{"name": n, "quantity": None} for n in names]
+    parsed["items"] = items
     return {"parsed_request": parsed}

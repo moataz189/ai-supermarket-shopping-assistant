@@ -39,10 +39,47 @@ async def test_choosing_a_profile_resolves_its_deterministic_starter_list_and_ke
     assert "__interrupt__" in final
     carts = final["__interrupt__"][0].value["carts"]
     missing_names = {m["name"] for m in carts["shufersal"]["missing_items"]}
-    assert missing_names == set(STARTER_LISTS["family"])
+    assert missing_names == {entry["name"] for entry in STARTER_LISTS["family"]}
     assert carts["shufersal"]["budget"] == 250
     assert carts["shufersal"]["total"] == 0
     assert carts["shufersal"]["over_budget_by"] is None
+
+
+async def test_starter_list_quantities_scale_by_household_size():
+    """Real user report: every profile silently sent the same quantity=1 for every item
+    regardless of household size (e.g. tomatoes for one person vs. a family). Each
+    STARTER_LISTS entry now carries a real quantity/unit sized for that profile."""
+    llm = FakeLLM(ParsedRequestSchema(items=[], budget=250))
+    client = FakeSupermarketDataClient({}, {})
+    app = build_graph(client, llm, MemorySaver())
+    config = {"configurable": {"thread_id": "t2b"}}
+
+    await app.ainvoke({"raw_message": "Weekly shopping under ₪250"}, config=config)
+    result = await app.ainvoke(Command(resume="one_person"), config=config)
+    items = {i["name"]: i for i in result["parsed_request"]["items"]}
+    assert items["עגבניה"]["quantity"] == 0.5
+    assert items["עגבניה"]["unit"] == "kg"
+
+    config2 = {"configurable": {"thread_id": "t2c"}}
+    await app.ainvoke({"raw_message": "Weekly shopping under ₪250"}, config=config2)
+    result2 = await app.ainvoke(Command(resume="family"), config=config2)
+    items2 = {i["name"]: i for i in result2["parsed_request"]["items"]}
+    assert items2["עגבניה"]["quantity"] == 1
+    assert items2["עגבניה"]["unit"] == "kg"
+
+
+async def test_custom_freeform_list_still_has_no_quantity_no_regression():
+    llm = FakeLLM(ParsedRequestSchema(items=[], budget=250))
+    client = FakeSupermarketDataClient({}, {})
+    app = build_graph(client, llm, MemorySaver())
+    config = {"configurable": {"thread_id": "t2d"}}
+
+    await app.ainvoke({"raw_message": "Weekly shopping under ₪250"}, config=config)
+    await app.ainvoke(Command(resume="custom"), config=config)
+    result = await app.ainvoke(Command(resume="milk, bread"), config=config)
+
+    for item in result["parsed_request"]["items"]:
+        assert item["quantity"] is None
 
 
 async def test_choosing_custom_asks_for_a_freeform_list_then_builds_carts_from_it():
