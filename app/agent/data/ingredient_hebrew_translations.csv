@@ -765,6 +765,7 @@ chocolate eggs;ביצים שוקולד;99112;g,oz
 table syrup;סירופ שולחן;19113;milliliter,g,oz,teaspoon,cup,serving,tablespoon
 ladyfingers;אצבעות גבירה;18423;package,piece,g,ladyfinger,ounce,box,anisette sponge,oz,breakfast treat
 salt and pepper;פלפל מלח;1102047;pinch,g,oz,dash,teaspoon,cup,serving,tablespoon
+sea salt and pepper;מלח ים ופלפל שחור;;pinch,g,oz,dash,teaspoon,cup,serving,tablespoon
 cauliflower florets;פרחים כרובית;10011135;piece,g,oz,cup
 chili powder;אבקה צ'ילי;2009;pinch,piece,g,oz,teaspoon,serving,tablespoon
 cocoa krispies cereal;דגני בוקר קריספיז קקאו;8014;g,oz,cup,serving
@@ -2928,6 +2929,7 @@ nonpareils;נונפריל;93645;g,oz,teaspoon,cup,serving,tablespoon
 tea bag;שקית תה;10111111;piece,g,oz
 black bass;לברק שחורה;15003;g,ounce,fillet,oz
 artichoke;ארטישוק;11007;can,piece,g,tin,artichoke,box,jar,oz
+artichokes;ארטישוק;;can,piece,g,tin,artichoke,box,jar,oz
 plum sauce;רוטב שזיף;6151;g,oz,cup,tablespoon
 spare ribs;צלעות אמצעי;10088;rack,piece,g,ounce,oz,serving
 hummus;חומוס;16158;g,oz,cup,serving,tablespoon
