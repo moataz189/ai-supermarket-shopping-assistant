@@ -4,6 +4,7 @@ from langgraph.types import Command
 from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
 from tests.agent.fakes import (
+    TEST_INGREDIENT_DICTIONARY,
     FakeLLM,
     FakeRecipeClient,
     FakeSupermarketDataClient,
@@ -65,6 +66,7 @@ async def test_recipe_request_resolves_to_scaled_ingredients_and_builds_both_car
     client = _grocery_client_for_scaled_ingredients()
     app = build_graph(
         client, llm, MemorySaver(), recipe_client=recipe_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t1"}}
 
@@ -102,6 +104,7 @@ async def test_recipe_display_fields_localized_while_canonical_names_stay_englis
     client = _grocery_client_for_scaled_ingredients()
     app = build_graph(
         client, llm, MemorySaver(), recipe_client=recipe_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t2"}}
 
@@ -151,6 +154,7 @@ async def test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_
     client = FakeSupermarketDataClient(candidates, prices)
     app = build_graph(
         client, llm, MemorySaver(), recipe_client=recipe_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t1b"}}
 
@@ -190,6 +194,7 @@ async def test_english_recipe_request_still_searches_the_catalog_by_hebrew_name(
     client = FakeSupermarketDataClient(candidates, prices)
     app = build_graph(
         client, llm, MemorySaver(), recipe_client=recipe_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t1c"}}
 

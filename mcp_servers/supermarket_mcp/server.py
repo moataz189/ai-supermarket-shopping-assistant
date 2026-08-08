@@ -4,16 +4,9 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from app.db.models import RetailerFeedStatus
-from app.db.repositories import (
-    IngredientTranslationRepository,
-    ProductRepository,
-    canonicalize_ingredient_name,
-    unit_price,
-)
+from app.db.repositories import ProductRepository, unit_price
 from app.db.session import SessionLocal
 from mcp_servers.supermarket_mcp.schemas import (
-    GetIngredientTranslationsResponse,
-    IngredientTranslationEntry,
     ProductCandidate,
     ProductPriceResponse,
     SearchProductResponse,
@@ -72,66 +65,17 @@ def get_product_price(retailer: str, item_code: str) -> ProductPriceResponse | N
         )
 
 
-@mcp.tool()
-def get_ingredient_translations(names: list[str]) -> GetIngredientTranslationsResponse:
-    """Persistent English-ingredient-name -> Hebrew-catalog-search-term cache (CP9
-    follow-up, 2026-08-08) — lives here, not in the backend/agent, since this is the one
-    service with direct SQLite access (app/api/Dockerfile deliberately excludes app/db
-    from the backend image; the agent only ever reaches product/catalog data over MCP).
-    Only names actually found in the cache appear in the response — a cache miss is
-    simply absent, not an error, so the caller (get_recipe_ingredients.py) knows to fall
-    back to the LLM for exactly those."""
-    with SessionLocal() as session:
-        repo = IngredientTranslationRepository(session)
-        canonical_by_name = {name: canonicalize_ingredient_name(name) for name in names}
-        cached = repo.get_many(list(set(canonical_by_name.values())))
-        translations = {
-            name: cached[canonical].search_name_he
-            for name, canonical in canonical_by_name.items()
-            if canonical in cached
-        }
-        return GetIngredientTranslationsResponse(translations=translations)
-
-
-@mcp.tool()
-def save_ingredient_translations(entries: list[IngredientTranslationEntry]) -> None:
-    """Writes newly-LLM-translated ingredient names back to the persistent cache, so the
-    LLM is never asked to translate the same ingredient twice (see
-    get_ingredient_translations above). Safe to call with names already cached — checks
-    for existing rows first (a concurrent request could have cached the same ingredient
-    between this caller's own get_ingredient_translations call and this save), since
-    IngredientTranslationRepository.save_many itself always inserts rather than
-    upserting."""
-    with SessionLocal() as session:
-        repo = IngredientTranslationRepository(session)
-        # First occurrence wins on a duplicate (canonicalized) name within the same
-        # batch — `dict()` would silently keep the *last* one instead.
-        canonical_by_entry: dict[str, IngredientTranslationEntry] = {}
-        for entry in entries:
-            canonical_by_entry.setdefault(canonicalize_ingredient_name(entry.name), entry)
-        existing = repo.get_many(list(canonical_by_entry))
-        new_entries = [
-            (canonical, entry.name, entry.search_name_he)
-            for canonical, entry in canonical_by_entry.items()
-            if canonical not in existing
-        ]
-        repo.save_many(new_entries)
-
-
 if __name__ == "__main__":
     import os
 
-    from app.db.repositories import seed_ingredient_translations
     from app.db.session import init_db
 
-    # This is the one service with direct SQLite access, so ingredient_translations'
-    # table creation and seed data are ensured here, not in the backend. Idempotent —
-    # safe on every startup regardless of whether the ingestion job's own init_db() has
-    # run yet. Deliberately not run at module import time (only under __main__), so
-    # importing this module in tests never touches a real DB file as a side effect.
+    # This is the one service with direct SQLite access, so table creation is ensured
+    # here, not in the backend. Idempotent — safe on every startup regardless of whether
+    # the ingestion job's own init_db() has run yet. Deliberately not run at module
+    # import time (only under __main__), so importing this module in tests never touches
+    # a real DB file as a side effect.
     init_db()
-    with SessionLocal() as _startup_session:
-        seed_ingredient_translations(_startup_session)
 
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.environ.get("PORT", "8001"))
