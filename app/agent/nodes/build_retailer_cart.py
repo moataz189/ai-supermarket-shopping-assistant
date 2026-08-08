@@ -29,13 +29,20 @@ def make_build_retailer_cart(retailer: str, client):
 
         for item in parsed["items"]:
             name = item["name"]
-            # Same fallback as resolve_items.py: prefer the actual matched catalog
-            # product name (resolved_choices) when resolve_items already found one;
-            # otherwise fall back to search_name — always tried in Hebrew when a
-            # translation exists, regardless of this conversation's own language, since
+            # Prefer THIS retailer's own resolved catalog product name (resolved_choices
+            # is now per-retailer, CP9 follow-up 2026-08-08 — resolving one retailer's
+            # ambiguity must never borrow another retailer's chosen label, since the two
+            # retailers' real product names for "the same" item are frequently different
+            # strings); otherwise fall back to search_name — always tried in Hebrew when
+            # a translation exists, regardless of this conversation's own language, since
             # the real catalog is Hebrew-only — so this independent re-search still has
             # a real chance of matching. See resolve_items.py's own comment.
-            label = state["resolved_choices"].get(name) or item.get("search_name") or item.get("display_name") or name
+            label = (
+                state["resolved_choices"].get(name, {}).get(retailer)
+                or item.get("search_name")
+                or item.get("display_name")
+                or name
+            )
             candidates = await client.search_product(label, retailer)
             if forbidden:
                 compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]

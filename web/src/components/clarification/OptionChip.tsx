@@ -2,12 +2,13 @@ import { Check } from 'lucide-react'
 
 interface OptionChipProps {
   label: string
+  price?: number | null
   selected?: boolean
   disabled?: boolean
   onClick?: () => void
 }
 
-export function OptionChip({ label, selected, disabled, onClick }: OptionChipProps) {
+export function OptionChip({ label, price, selected, disabled, onClick }: OptionChipProps) {
   return (
     <button
       type="button"
@@ -21,6 +22,7 @@ export function OptionChip({ label, selected, disabled, onClick }: OptionChipPro
     >
       <Check className="h-3.5 w-3.5" />
       {label}
+      {price != null && <span className="text-zinc-400">₪{price.toFixed(2)}</span>}
     </button>
   )
 }

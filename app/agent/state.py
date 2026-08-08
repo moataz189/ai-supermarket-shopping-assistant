@@ -48,7 +48,11 @@ class AgentState(TypedDict, total=False):
     chosen_recipe: ChosenRecipe | None
     dietary_conflicts: list[str]              # item names with no dietary-compliant option
     item_candidates: dict[str, dict[str, list[dict]]]  # item name -> retailer -> candidates
-    resolved_choices: dict[str, str]          # item name -> resolved label
+    resolved_choices: dict[str, dict[str, str]]  # item name -> retailer -> resolved label
+    # (CP9 follow-up, 2026-08-08 — previously item name -> a single label shared across
+    # every retailer; a retailer's own product name can genuinely differ from another
+    # retailer's for "the same" grocery item, so each retailer's own resolution is kept
+    # independent — see resolve_items.py/resolve_ambiguity.py/build_retailer_cart.py)
     pending_clarification_item: str | None
     retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
     chosen_retailer: str | None

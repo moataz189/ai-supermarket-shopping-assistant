@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -79,14 +81,14 @@ def test_ambiguous_item_then_resumes():
         assert body["status"] == "needs_clarification"
         thread_id = body["thread_id"]
         assert body["clarification"]["reason"] == "ambiguous_product"
-        option_ids = {opt["id"] for opt in body["clarification"]["options"]}
-        assert option_ids == {"Tnuva", "Tara", "President"}
-        assert body["clarification"]["availability_by_retailer"] == {
-            "shufersal": ["Tara", "Tnuva"],
-            "rami_levy": ["President", "Tnuva"],
-        }
+        options_by_retailer = body["clarification"]["options_by_retailer"]
+        assert {o["id"]: o["price"] for o in options_by_retailer["shufersal"]} == {"Tnuva": 5.0, "Tara": 5.5}
+        assert {o["id"]: o["price"] for o in options_by_retailer["rami_levy"]} == {"Tnuva": 4.8, "President": 6.0}
 
-        resume = client.post("/chat", json={"thread_id": thread_id, "message": "Tnuva"})
+        # One independent choice per retailer, sent as a JSON-encoded dict — the
+        # frontend's structured-answer wire format (CP9 follow-up, 2026-08-08).
+        answer = json.dumps({"shufersal": "Tnuva", "rami_levy": "Tnuva"})
+        resume = client.post("/chat", json={"thread_id": thread_id, "message": answer})
         assert resume.status_code == 200
         resume_body = resume.json()
         assert resume_body["thread_id"] == thread_id
