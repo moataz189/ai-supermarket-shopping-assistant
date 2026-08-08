@@ -906,3 +906,52 @@ item_code="7290000000001"`, the real fixture-derived values) directly against
 "status": "not_found"}]` — no product added at all, honestly reported as unmatched.
 Re-confirmed via a fresh authoritative cart-status query that the real account cart still
 has no ravioli and nothing incorrectly added.
+
+## CP9 follow-up #6 — replaced the pasta fixture's fabricated code/name with real, live-verified product data (2026-08-08)
+
+**Follow-up to #5.** Rather than only removing the unsafe fallback, also fixed the actual
+root data problem for this one item: `tests/fixtures/feeds/shufersal_sample.xml`'s pasta
+entry's `ItemCode`/`ItemName` were replaced with a real Shufersal barcode and product
+name, confirmed live by querying the real search endpoint — `7296073011224` /
+`פסטה פוסילי` (Fusilli, not the fixture's original "Penne" — the barcode found is for a
+different pasta shape, so the fixture's name was corrected to match rather than left
+inconsistent with what the code actually resolves to on the real site). Since
+`search_and_match` tries `item_code` first, Shufersal now finds this product by a real,
+unambiguous barcode match (`matched_by: "item_code"`) — the strongest match type there
+is, no name comparison involved at all. `tests/fixtures/feeds/rami_levy_sample.xml`'s
+pasta entry was updated to a real, exact Rami Levy product name for the same reason
+(`פסטה פוזילי 500 גרם מותג רמי לוי`, confirmed live against the real site's search
+results) and its `ManufacturerName`/`ManufactureCountry` corrected to match (a Rami Levy
+private-label product, not Barilla/Italy).
+
+`tests/ingestion/test_feed_parsers.py`'s `test_both_retailers_carry_matching_pasta_and_milk_items`
+previously asserted the two retailers' pasta/milk product *names* were byte-identical —
+never actually required by the app (`app/db/repositories.py`'s `search_candidates` does an
+`ILIKE` substring match, not exact equality; the two retailers' catalogs are searched
+independently). Rewritten to assert each retailer has *some* product name containing the
+shared Hebrew search term (`"פסטה"`, `"חלב"`) instead, which is what the real
+ingredient-search flow actually needs.
+
+**Re-ingested the running database** (`docker compose build ingestion && docker compose
+run --rm ingestion python -m app.ingestion.run --source fixtures` — `PriceFull` ingestion
+fully replaces each retailer's catalog, confirmed the stale fake pasta row was gone, not
+just shadowed) and verified live: Shufersal's `prepare_cart_for_retailer` for this item
+now returns `matched_by: "item_code"`, `status: "added"` — a real, correct add, not a
+`not_found`.
+
+**Rami Levy — data fix alone did not make this item addable, for a different, separate
+reason.** Even with a real, exact product name in the fixture, a live
+`prepare_cart_for_retailer` run for it still returned `not_found`. Root-caused live: this
+adapter's `search_and_match` always searches using the *full* `item_name` as the query
+string (`await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")`) — but
+querying Rami Levy's real search with the product's own full, exact name
+(`"פסטה פוזילי 500 גרם מותג רמי לוי"`) doesn't reliably surface that exact tile among the
+top results at all; confirmed live, reproducibly, that shorter/partial queries
+(`"פסטה פוזילי"`, `"פוזילי רמי לוי"`) *do* surface it (as the first result, even), while
+the full name as a query does not. This is a distinct issue from the one #5 fixed — a
+search-relevance quirk in how the query itself is constructed, not a data or exact-match
+problem — and was left as-is pending an explicit decision on how `search_and_match`
+should choose what to actually search for, rather than silently truncating/guessing a
+shorter query (which would reopen the same "how much do we trust this" question #5 just
+closed). Nothing was added to the real Rami Levy cart during this investigation — every
+attempt correctly reported `not_found`.
