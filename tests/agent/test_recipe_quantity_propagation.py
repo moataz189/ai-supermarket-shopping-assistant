@@ -247,14 +247,18 @@ async def test_grocery_list_items_still_send_quantity_1_unit_none_no_regression(
     assert called_items == [{"name": "milk", "item_code": "S-MILK", "quantity": 1, "unit": None}]
 
 
-async def test_weekly_shop_profile_items_still_send_quantity_1_unit_none_no_regression():
+async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities():
+    # Follow-up user report: weekly-shop-profile items originally always sent quantity=1/
+    # unit=None (the same "silently just 1" bug as recipes, just for a different source) —
+    # each STARTER_LISTS entry now carries a real quantity/unit sized for that profile
+    # (see resolve_weekly_shop_profile.py), and that's what reaches the Retailer-Cart MCP.
+    from app.agent.nodes.resolve_weekly_shop_profile import STARTER_LISTS
+
     llm = FakeLLM(ParsedRequestSchema(request_type="grocery_list", items=[], budget=100))
-    # Matches the "one_person" STARTER_LISTS entry in resolve_weekly_shop_profile.py:
-    # לחם, חלב, ביצים, חזה עוף, אורז, פסטה, עגבניה, בננה.
-    item_names = ["לחם", "חלב", "ביצים", "חזה עוף", "אורז", "פסטה", "עגבניה", "בננה"]
     candidates: dict[tuple[str, str], list[dict]] = {}
     prices: dict[tuple[str, str], dict] = {}
-    for i, name in enumerate(item_names):
+    for i, entry in enumerate(STARTER_LISTS["one_person"]):
+        name = entry["name"]
         for retailer, prefix, price in [("shufersal", "S", 10.0 + i), ("rami_levy", "R", 9.0 + i)]:
             item_code = f"{prefix}-{i}"
             candidates[(name, retailer)] = [{"item_code": item_code, "name": name, "price": price}]
@@ -274,7 +278,9 @@ async def test_weekly_shop_profile_items_still_send_quantity_1_unit_none_no_regr
 
     assert len(retailer_cart_client.calls) == 1
     _, called_items = retailer_cart_client.calls[0]
-    assert called_items
-    for item in called_items:
-        assert item["quantity"] == 1
-        assert item["unit"] is None
+    by_name = {i["name"]: i for i in called_items}
+    for entry in STARTER_LISTS["one_person"]:
+        assert by_name[entry["name"]]["quantity"] == entry["quantity"]
+        assert by_name[entry["name"]]["unit"] == entry["unit"]
+    # a household-size-scaled example, explicitly: tomatoes for one person is 0.5 kg.
+    assert by_name["עגבניה"] == {"name": "עגבניה", "item_code": "S-6", "quantity": 0.5, "unit": "kg"}
