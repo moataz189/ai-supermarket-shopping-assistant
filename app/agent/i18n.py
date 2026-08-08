@@ -17,7 +17,11 @@ INGREDIENT_TRANSLATIONS: dict[str, dict[str, str]] = {
     "milk": {"he": "חלב"},
     "oat milk": {"he": "חלב שיבולת שועל"},
     "eggs": {"he": "ביצים"},
-    "tomatoes": {"he": "עגבניות"},
+    # Singular, not plural — confirmed live (see resolve_weekly_shop_profile.py's
+    # docstring): Israeli retail feeds list fresh produce in singular generic form
+    # ("עגבניה"), and the catalog search is substring-based, so a plural query ("עגבניות")
+    # is a different string that silently misses even when the product exists.
+    "tomatoes": {"he": "עגבניה"},
     "onion": {"he": "בצל"},
     "olive oil": {"he": "שמן זית"},
 }
