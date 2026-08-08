@@ -994,3 +994,97 @@ this adapter's established boundary (see this file's own module docstring and
 `tests/mcp/test_rami_levy_adapter.py`'s: only `add_to_cart`'s decision logic is
 unit-tested against a fake locator tree; `search_and_match`'s real-DOM/site behavior is
 verified live by hand, same as the rest of this adapter's history).
+
+## CP9 follow-up #8 — product-ambiguity resolution redesigned to be per-retailer, not shared (2026-08-08)
+
+**The bug (a UX report from a real screenshot).** After #6/#7's fixes gave each retailer
+its own real, correctly-spelled product name for the same grocery item, a "pasta for 4
+people" request started showing an unexpected clarification screen: "I found a few
+options for 'pasta'" with one option under "Shufersal" and a different one under "Rami
+Levy". Picking either option only worked for that one retailer — the other retailer's own
+cart still couldn't find its product, since the two retailers' real names for the same
+item are legitimately different strings (see #6).
+
+**Root cause — CP4/CP7-era design, from `app/agent/nodes/resolve_items.py`/
+`resolve_ambiguity.py`/`build_retailer_cart.py`.** `_unique_labels` deduped candidates *by
+name across both retailers* into one flat "which product did you mean" list, and
+whichever single label got resolved (auto-resolved or user-picked) was reused as the
+search query for *both* retailers' carts (`build_retailer_cart.py`: `state
+["resolved_choices"].get(name)`, one flat string per item). This only ever worked because
+the original fixture data happened to give shared items byte-identical names at both
+retailers — an artifact of unrealistic test data, not a real design decision. A real
+catalog routinely names "the same" grocery item differently per retailer (different
+phrasing, spelling, private-label branding — exactly what #6 introduced), which this
+flat, shared-label model was never built to handle: picking one retailer's exact text
+left the other retailer's own, differently-named product unmatchable.
+
+**The fix — explicit product spec from the user.** Ambiguity is now judged and resolved
+*independently per retailer*:
+- `resolved_choices` changed from `item name -> single label` to `item name -> retailer ->
+  label` (`app/agent/state.py`).
+- `resolve_items.py`'s `_dedupe_by_name` (replacing `_unique_labels`) dedupes *within* one
+  retailer's own candidates only, never merging across retailers. `_resolve_item` (exact
+  search-name match, brand preference, "cheapest" preference, then genuinely-ambiguous)
+  is unchanged in its own logic — it's just now called once per retailer against that
+  retailer's own candidate list, not once against a cross-retailer merged list. A retailer
+  with exactly one real candidate auto-resolves immediately, without ever asking — the
+  user's own explicit rule ("if a retailer has exactly one valid candidate, auto-select it
+  and do not ask unnecessarily").
+- `resolve_ambiguity.py` now builds `options_by_retailer` — only the retailers that are
+  *still* ambiguous after auto-resolution appear at all, each with its own candidate list
+  and *price* on every option (explicitly requested). The interrupt's answer is now a
+  `dict[str, str]` (one choice per retailer shown), merged into that item's per-retailer
+  `resolved_choices` — never a single flat string.
+- `build_retailer_cart.py` now looks up `resolved_choices[name].get(retailer)` — each
+  retailer's own cart-building pass reads only its own resolved label, never another
+  retailer's.
+- Wire format: `app/api/schemas.py`'s `Clarification` gained `options_by_retailer:
+  dict[str, list[ClarificationOption]]` (each option now carries `price`), replacing
+  `availability_by_retailer` (which only ever supported the old flat-list shape).
+  `ChatRequest.message` stays a plain string end-to-end — `app/api/routes/chat.py`'s new
+  `_resume_value` helper JSON-decodes it and passes the result through as the resume
+  value only when it parses to a `dict` specifically (any other valid JSON — a bare
+  number, a quoted string — is vanishingly unlikely as real free text and is passed
+  through unchanged, exactly as before this existed), so every other resume path
+  (retailer choice, recipe choice, free-text answers, brand-new messages) is
+  byte-for-byte unaffected.
+- Frontend (`web/src/components/clarification/ClarificationCard.tsx`): a genuinely new
+  interaction, not just a rendering change — when `options_by_retailer` is present, each
+  retailer's own option group tracks its *own* local pending selection (choosing a
+  Shufersal option never touches Rami Levy's own pending pick), each option shows its
+  price (`OptionChip` gained an optional `price` prop, `₪X.XX`), and a single **Confirm**
+  button — enabled only once every retailer shown has a selection — submits all of them
+  together as one JSON-encoded answer (`App.tsx`'s new `handleSelectMultipleOption`). The
+  old flat single-click-submits-immediately path is untouched and still used for
+  `retailer_choice`/`ambiguous_recipe`, which remain genuinely single-answer choices.
+
+**Tests.** `tests/agent/test_graph_ambiguous_item_interrupt.py` rewritten: asserts
+`options_by_retailer` (with price) instead of the old flat `options`/
+`availability_by_retailer`, resumes with a `dict` answer, and adds two new scenarios —
+choosing genuinely *different* products per retailer and confirming neither selection
+overwrites the other, and a retailer with exactly one candidate never appearing in
+`options_by_retailer` at all (auto-resolved silently, its cart already correct with no
+answer needed for it). `tests/api/test_chat_endpoint.py::test_ambiguous_item_then_resumes`
+updated for the new payload shape and a JSON-string resume answer over the real
+`/chat` HTTP path. `tests/agent/test_resolve_item_rules.py` (testing `_resolve_item`
+itself, already single-retailer-shaped) needed no changes at all. Full suite (260 tests)
+and `ruff check` pass. Frontend: `tsc -b` and `oxlint` both pass with no new issues.
+
+**Live verification.** Rebuilt and restarted `backend` and `web`. Since this session's
+small fixture catalogs have no naturally-occurring intra-retailer ambiguity anymore (every
+product name is now unique per retailer, following #6/#7's real-data fixes), a temporary
+second bread product was inserted directly into the running database for verification
+only (`TEST-BREAD-2`, not committed to any fixture file) to create a genuine
+single-retailer ambiguity, then removed again after. Confirmed end-to-end over the real
+`/chat` API: requesting `"לחם"` (bread) produced `options_by_retailer` containing
+*only* `"shufersal"` (Rami Levy's own single real candidate auto-resolved silently, exactly
+as designed) with both Shufersal options carrying their real price; resuming with
+`{"shufersal": "לחם קל פרוס"}` produced a Shufersal cart using that exact chosen
+product and a Rami Levy cart using its own, independently auto-resolved product — genuine
+per-retailer independence, confirmed via real backend/DB, not fakes. Also verified in an
+actual Chromium browser (Playwright, `http://localhost:3000`) against the real running
+`web` container: the clarification card rendered only the Shufersal group with prices
+next to each option, selecting one highlighted it without affecting anything else, the
+Confirm button was disabled until a selection existed, and confirming produced the
+expected two-retailer comparison — Shufersal showing the chosen product, Rami Levy
+showing its own auto-resolved one, with a correct real price-difference "Save" badge.

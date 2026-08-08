@@ -96,6 +96,22 @@ function App() {
     sendMessage(label, optionId, expectsComparison, threadId)
   }
 
+  // A per-retailer product clarification (CP9 follow-up, 2026-08-08) resolves multiple
+  // independent choices at once (one per retailer shown) — JSON-encoded as the message
+  // string, the wire format app/api/routes/chat.py's resume path recognizes as a
+  // structured answer rather than free text.
+  function handleSelectMultipleOption(turnId: string, answersByRetailer: Record<string, string>, displayLabel: string) {
+    if (isBusy) return
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === turnId && t.role === 'assistant' && t.status === 'done'
+          ? { ...t, answeredByRetailer: answersByRetailer }
+          : t,
+      ),
+    )
+    sendMessage(displayLabel, JSON.stringify(answersByRetailer), false, threadId)
+  }
+
   function handleRetry(turnId: string) {
     if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
@@ -116,7 +132,12 @@ function App() {
       {phase === 'chat' && (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <MessageThread turns={turns} onSelectOption={handleSelectOption} onRetry={handleRetry} />
+            <MessageThread
+              turns={turns}
+              onSelectOption={handleSelectOption}
+              onSelectMultipleOption={handleSelectMultipleOption}
+              onRetry={handleRetry}
+            />
           </div>
           <div className="sticky bottom-0 border-t border-zinc-200 bg-zinc-50/95 px-4 py-4 backdrop-blur">
             <ChatInput variant="bar" onSend={handleSend} disabled={isBusy} />

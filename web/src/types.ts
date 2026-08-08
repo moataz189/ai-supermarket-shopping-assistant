@@ -9,6 +9,9 @@ export type Turn =
       status: 'done'
       response: ChatResponse
       answeredOptionId?: string
+      // Only set after answering an 'ambiguous_product' clarification (CP9 follow-up,
+      // 2026-08-08) — one chosen option id per retailer, e.g. { shufersal: 'Tara' }.
+      answeredByRetailer?: Record<string, string>
     }
   | {
       id: string

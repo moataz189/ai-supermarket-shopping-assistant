@@ -9,6 +9,8 @@ class ChatRequest(BaseModel):
 class ClarificationOption(BaseModel):
     id: str
     label: str
+    price: float | None = None  # only set for reason == "ambiguous_product" options
+    # (options_by_retailer below), so the user can compare candidates before choosing
 
 
 class RecipeIngredient(BaseModel):
@@ -26,12 +28,17 @@ class RecipeInfo(BaseModel):
 class Clarification(BaseModel):
     reason: str
     question: str
-    options: list[ClarificationOption]
+    options: list[ClarificationOption] = []  # used by "retailer_choice"/"ambiguous_recipe"
+    # — a single flat, single-answer choice. Absent/empty for "ambiguous_product", which
+    # uses options_by_retailer below instead (CP9 follow-up, 2026-08-08).
     carts: dict | None = None  # populated only when reason == "retailer_choice"
-    availability_by_retailer: dict[str, list[str]] | None = None  # only when
-    # reason == "ambiguous_product" (CP4/CP7) — e.g. {"shufersal": ["Tara", "Tnuva"],
-    # "rami_levy": ["President", "Tnuva"]}, so the UI can show which retailer carries
-    # which option before the user picks.
+    options_by_retailer: dict[str, list[ClarificationOption]] | None = None  # only when
+    # reason == "ambiguous_product" (CP9 follow-up, 2026-08-08 — replaces the old flat
+    # options + availability_by_retailer pair) — each retailer's own independent set of
+    # candidates (with price), for a retailer that's genuinely ambiguous on its own
+    # candidates; a retailer already auto-resolved (exactly one candidate) or with no
+    # candidates at all is simply absent here, never asked about. The user picks
+    # independently per retailer present — e.g. {"shufersal": [...], "rami_levy": [...]}.
     recipe: RecipeInfo | None = None  # populated only when reason == "retailer_choice"
     # and the original request was a recipe — shown before the user picks so a recipe's
     # requested quantities are visible up front, not just inferable from the final cart.

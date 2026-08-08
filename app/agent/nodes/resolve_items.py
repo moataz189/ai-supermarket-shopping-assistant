@@ -2,6 +2,7 @@ from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 RETAILERS = ["shufersal", "rami_levy"]
+MAX_CANDIDATES_SHOWN = 5
 
 
 async def _candidates_by_retailer(
@@ -20,14 +21,19 @@ async def _candidates_by_retailer(
     return result
 
 
-def _unique_labels(candidates_by_retailer: dict[str, list[dict]]) -> list[dict]:
-    """Dedups by name *across* retailers into the set of distinct 'kinds' the user might
-    mean — used only to decide/present what to resolve, never to build a cart directly."""
+def _dedupe_by_name(candidates: list[dict]) -> list[dict]:
+    """Dedups a single retailer's own candidates by exact name — a retailer's real
+    catalog can have two rows sharing an exact name (different item_codes); presenting
+    duplicate-labeled options to choose from would be confusing and pointless. Scoped to
+    one retailer only (CP9 follow-up, 2026-08-08) — candidates are never merged *across*
+    retailers anymore, since two retailers' own product names for "the same" grocery item
+    are frequently different strings in a real catalog (different phrasing, spelling,
+    private-label branding) and forcing a single shared label across both broke matching
+    for whichever retailer's catalog didn't actually contain that exact text."""
     merged: dict[str, dict] = {}
-    for candidates in candidates_by_retailer.values():
-        for c in candidates:
-            merged.setdefault(c["name"].strip().lower(), c)
-    return list(merged.values())[:5]
+    for c in candidates:
+        merged.setdefault(c["name"].strip().lower(), c)
+    return list(merged.values())[:MAX_CANDIDATES_SHOWN]
 
 
 async def _resolve_item(
@@ -35,10 +41,11 @@ async def _resolve_item(
 ) -> tuple[str | None, bool]:
     """`search_name` is the (possibly localized) query actually used to find `candidates`
     — see `resolve_items`'s own `search_name` for why this isn't always the item's
-    canonical name. `candidates` is the deduped, cross-retailer set from
-    `_unique_labels`. Returns (resolved_label_or_None, still_ambiguous). A resolved label
-    is a product name used as the search query in each retailer's own catalog later — not
-    an item_code."""
+    canonical name. `candidates` is one retailer's own deduped candidate list (CP9
+    follow-up, 2026-08-08 — previously a cross-retailer merged set; ambiguity is now
+    judged independently per retailer, see `make_resolve_items` below). Returns
+    (resolved_label_or_None, still_ambiguous). A resolved label is a product name used as
+    the search query in that same retailer's own catalog later — not an item_code."""
     if not candidates:
         return search_name, False  # nothing matched anywhere; let per-retailer building report it missing
     if len(candidates) == 1:
@@ -63,14 +70,19 @@ def make_resolve_items(client):
     async def resolve_items(state: AgentState) -> AgentState:
         parsed = state["parsed_request"]
         item_candidates = dict(state.get("item_candidates", {}))
-        resolved_choices = dict(state.get("resolved_choices", {}))
+        # item name -> retailer -> resolved product name (CP9 follow-up, 2026-08-08 —
+        # previously item name -> a single label shared across every retailer, which
+        # broke whichever retailer's own catalog didn't happen to contain that exact
+        # text; see resolve_ambiguity.py and build_retailer_cart.py for the other two
+        # places this per-retailer shape now flows through).
+        resolved_choices = {k: dict(v) for k, v in state.get("resolved_choices", {}).items()}
         dietary_conflicts = list(state.get("dietary_conflicts", []))
         ambiguous_item = None
         forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
 
         for item in parsed["items"]:
             name = item["name"]
-            if name in resolved_choices or name in dietary_conflicts:
+            if name in dietary_conflicts:
                 continue
             # Recipe-derived items carry an English canonical `name` (Spoonacular) and a
             # `search_name` that's *always* tried in Hebrew when a translation exists
@@ -86,24 +98,39 @@ def make_resolve_items(client):
             if name not in item_candidates:
                 item_candidates[name] = await _candidates_by_retailer(client, search_name, forbidden)
             by_retailer = item_candidates[name]
-            unique = _unique_labels(by_retailer)
 
-            if not unique and forbidden:
+            if not any(by_retailer.values()) and forbidden:
                 sub_query = find_substitute_query(name, forbidden)
                 if sub_query is None:
                     dietary_conflicts.append(name)
                     continue
                 by_retailer = await _candidates_by_retailer(client, sub_query, forbidden)
                 item_candidates[name] = by_retailer
-                unique = _unique_labels(by_retailer)
 
-            label, still_ambiguous = await _resolve_item(
-                search_name, unique,
-                parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
-            )
-            if label is not None:
-                resolved_choices[name] = label
-            elif still_ambiguous and ambiguous_item is None:
+            # Ambiguity is judged, and resolved, independently per retailer — a retailer
+            # with exactly one candidate auto-resolves immediately without ever asking;
+            # only a retailer that's genuinely ambiguous on its own candidates blocks on
+            # the user, and it doesn't hold up any other retailer that already resolved.
+            item_resolved = dict(resolved_choices.get(name, {}))
+            still_ambiguous_here = False
+            for retailer, candidates in by_retailer.items():
+                if retailer in item_resolved or not candidates:
+                    # Already resolved, or nothing found at all for this retailer — the
+                    # latter isn't ambiguity, just a miss; build_retailer_cart.py's own
+                    # search_name fallback covers it when no entry exists here.
+                    continue
+                label, still_ambiguous = await _resolve_item(
+                    search_name, _dedupe_by_name(candidates),
+                    parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
+                )
+                if label is not None:
+                    item_resolved[retailer] = label
+                elif still_ambiguous:
+                    still_ambiguous_here = True
+
+            if item_resolved:
+                resolved_choices[name] = item_resolved
+            if still_ambiguous_here and ambiguous_item is None:
                 ambiguous_item = name
 
         return {
