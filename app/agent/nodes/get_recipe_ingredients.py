@@ -25,9 +25,20 @@ def make_get_recipe_ingredients(recipe_client, ingredient_dictionary: dict[str, 
         items = []
         for i in raw_ingredients:
             translation = translate_ingredient(ingredient_dictionary, i["name"])
+            display_name = localize_ingredient_name(i["name"], language)
+            # The tiny legacy phrase table above (app/agent/i18n.py, 6 entries) only ever
+            # covered a handful of ingredients — real user report, 2026-08-08: a Hebrew
+            # conversation's ingredient list showed most items in English and a few
+            # (whichever happened to be in that small table) in Hebrew, an inconsistent
+            # half-translated result. For a Hebrew conversation, an ingredient the big
+            # dictionary *did* resolve now falls back to that same Hebrew term for display
+            # too — the identical real-world grocery term already used for search, just
+            # reused here rather than left English for no reason a user could tell.
+            if display_name == i["name"] and language == "he" and translation["resolved"]:
+                display_name = translation["hebrew_search_name"]
             items.append({
                 "name": i["name"],
-                "display_name": localize_ingredient_name(i["name"], language),
+                "display_name": display_name,
                 "search_name": translation["hebrew_search_name"],
                 "english_name": translation["english_name"],
                 "translation_resolved": translation["resolved"],
