@@ -1,6 +1,14 @@
 from types import SimpleNamespace
 
-from app.db.repositories import SEED_INGREDIENT_TRANSLATIONS, canonicalize_ingredient_name
+# A small, test-scoped ingredient dictionary (english_name -> hebrew_search_term) for
+# recipe-flow graph tests that need get_recipe_ingredients' translation to actually
+# resolve — deliberately not the real ~3.4k-entry dictionary
+# (app/agent/data/ingredient_hebrew_translations.csv), so these tests stay self-contained
+# and don't silently change behavior if that file's content changes.
+TEST_INGREDIENT_DICTIONARY: dict[str, str] = {
+    "eggs": "ביצים",
+    "tomatoes": "עגבניה",
+}
 
 
 class FakeRecipeClient:
@@ -48,44 +56,21 @@ class FakeSupermarketDataClient:
 
     `candidates` maps (query, retailer) -> list of candidate dicts.
     `prices` maps (retailer, item_code) -> price dict.
-
-    Also backs get_recipe_ingredients' persistent ingredient-translation cache (CP9
-    follow-up) — seeded with the same small known-good set the real Supermarket-Data MCP
-    seeds at startup (SEED_INGREDIENT_TRANSLATIONS), so recipe tests get realistic
-    cache-hit behavior for common ingredients (tomatoes, milk, onion...) without needing
-    a real DB or LLM call. Pass `seed_translations=False` for a test that specifically
-    wants every ingredient to miss the cache (e.g. to exercise the LLM-fallback path).
     """
 
     def __init__(
         self,
         candidates: dict[tuple[str, str], list[dict]],
         prices: dict[tuple[str, str], dict],
-        seed_translations: bool = True,
     ):
         self._candidates = candidates
         self._prices = prices
-        self._translations: dict[str, str] = (
-            dict(SEED_INGREDIENT_TRANSLATIONS) if seed_translations else {}
-        )
 
     async def search_product(self, query: str, retailer: str) -> list[dict]:
         return self._candidates.get((query, retailer), [])
 
     async def get_product_price(self, retailer: str, item_code: str) -> dict | None:
         return self._prices.get((retailer, item_code))
-
-    async def get_ingredient_translations(self, names: list[str]) -> dict[str, str]:
-        canonical_by_name = {name: canonicalize_ingredient_name(name) for name in names}
-        return {
-            name: self._translations[canonical]
-            for name, canonical in canonical_by_name.items()
-            if canonical in self._translations
-        }
-
-    async def save_ingredient_translations(self, entries: list[dict]) -> None:
-        for entry in entries:
-            self._translations[canonicalize_ingredient_name(entry["name"])] = entry["search_name_he"]
 
 
 class FakeRetailerCartClient:
@@ -106,36 +91,23 @@ class FakeLLM:
     """Stand-in for ChatBedrockConverse. Mimics `.with_structured_output(schema,
     include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape.
 
-    By default returns a canned `parsed` value (typically a ParsedRequestSchema)
-    regardless of which schema was requested. Pass `parsed=None` with `raw_content` set
-    (a string, or a Bedrock content-block list) to simulate the
+    Returns a canned `parsed` value (typically a ParsedRequestSchema). Pass `parsed=None`
+    with `raw_content` set (a string, or a Bedrock content-block list) to simulate the
     openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with plain JSON text
     instead of a real tool call — `with_structured_output` then has nothing to parse and
-    returns `parsed=None`, which the caller (parse_request.py, ingredient_translation.py)
-    must fall back on.
-
-    `build_graph`'s single `llm` is shared by more than one structured-output call now
-    (parse_request's ParsedRequestSchema, and get_recipe_ingredients' own
-    IngredientTranslationSchema for never-before-seen ingredients) — pass
-    `parsed_by_schema={SomeSchema: some_instance, ...}` when a graph-level test needs the
-    fake to answer correctly for more than one schema in the same run; falls back to the
-    single `parsed` value for any schema not in that mapping.
+    returns `parsed=None`, which the caller (parse_request.py) must fall back on.
     """
 
-    def __init__(self, parsed=None, raw_content=None, parsed_by_schema: dict | None = None):
+    def __init__(self, parsed=None, raw_content=None):
         self._parsed = parsed
         self._raw_content = raw_content
-        self._parsed_by_schema = parsed_by_schema or {}
-        self._last_schema = None
 
     def with_structured_output(self, schema, include_raw=False):
-        self._last_schema = schema
         return self
 
     async def ainvoke(self, messages) -> dict:
-        parsed = self._parsed_by_schema.get(self._last_schema, self._parsed)
         return {
             "raw": SimpleNamespace(content=self._raw_content),
-            "parsed": parsed,
+            "parsed": self._parsed,
             "parsing_error": None,
         }

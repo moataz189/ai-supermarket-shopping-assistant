@@ -1088,3 +1088,78 @@ next to each option, selecting one highlighted it without affecting anything els
 Confirm button was disabled until a selection existed, and confirming produced the
 expected two-retailer comparison — Shufersal showing the chosen product, Rami Levy
 showing its own auto-resolved one, with a correct real price-difference "Save" badge.
+
+## CP9 follow-up #9 — ingredient translation replaced with a static, human-curated dictionary (2026-08-08)
+
+**The decision.** The LLM-fallback + persistent-DB-cache translation mechanism from
+follow-up #4 was replaced outright with a static, pre-built English → Hebrew ingredient
+dictionary (`app/agent/data/ingredient_hebrew_translations.csv`, ~3.4k Spoonacular
+ingredient names with a human-curated Hebrew supermarket search term each). The LLM is
+never called for this anymore — an ingredient missing from the dictionary keeps its own
+English name, is flagged unresolved, and is logged, rather than falling back to a
+network/model call. This removes an entire class of failure mode (LLM/DB unavailability,
+model hallucinating a wrong Hebrew term) in exchange for a fixed, auditable vocabulary
+that only grows when the dictionary file itself is updated.
+
+**Getting the source data in cleanly — a real, non-obvious blocker.** The dictionary was
+first provided pasted directly into the conversation; its Hebrew column turned out to be
+irreversibly corrupted (double-layer mojibake with genuine byte loss — `\xd7\xd7` where
+distinct Hebrew letters should be — confirmed by attempting the standard
+UTF-8-decoded-as-Latin-1 reversal and finding it didn't round-trip cleanly). Rather than
+guess-repair ~3,400 Hebrew grocery terms (exactly the class of risk follow-ups #5–#8
+existed to eliminate), the user was asked for the original file directly; it existed on
+disk (`~/Downloads/ingredients-hebrew-search-terms.csv`, genuine UTF-8 with BOM,
+semicolon-delimited) and was copied into the repo from there instead of trusted from the
+paste.
+
+**Implementation.**
+- `app/agent/ingredient_dictionary.py` (new) — `load_ingredient_dictionary(path)` parses
+  the CSV once into an `english_name -> hebrew_search_term` dict (keyed
+  lowercased/stripped); `translate_ingredient(dictionary, english_name)` looks a name up
+  and returns a normalized `{english_name, hebrew_search_name, resolved}` object —
+  `resolved: False` (with a logged warning) when nothing matches, never a raised
+  exception, never an LLM call.
+- `app/agent/nodes/get_recipe_ingredients.py` rewritten to call `translate_ingredient`
+  directly instead of the old cache-then-LLM flow; each item now also carries
+  `english_name`/`translation_resolved` alongside the existing `name`/`display_name`/
+  `search_name` fields (`ParsedItem` in `app/agent/state.py` gained both), so the
+  original English name and resolution status survive into every downstream node for
+  debugging, not just the Hebrew search term.
+- `app/api/dependencies.py` loads the dictionary once via `load_ingredient_dictionary()`
+  inside `get_agent_app()`, which is itself `@lru_cache`'d — the ~3.4k-row CSV is parsed
+  exactly once per process, at effective application startup, and passed into
+  `build_graph`'s new `ingredient_dictionary` parameter (defaults to `{}` for callers,
+  e.g. grocery-list-only tests, that have no reason to supply one).
+- **Fully removed, not just bypassed:** `app/agent/ingredient_translation.py` (the LLM
+  module), the `IngredientTranslation` DB model/repository/seed data
+  (`app/db/models.py`/`app/db/repositories.py`), and the
+  `get_ingredient_translations`/`save_ingredient_translations` MCP tools
+  (`mcp_servers/supermarket_mcp/`) and client methods (`app/agent/mcp_clients.py`) —
+  this entire apparatus existed only to serve the now-removed LLM-fallback path, so
+  keeping it around unused would just be dead code.
+
+**Tests.** `tests/agent/test_ingredient_dictionary.py` (new): a found ingredient resolves
+to its dictionary term; a missing one keeps its English name, is flagged unresolved, and
+logs a warning (via `caplog`) rather than raising; case/whitespace normalization; CSV
+parsing from a small fixture file; and a real-file smoke test (`> 1000` entries, spot
+checks `tomato`/`milk`/`pasta`). `tests/agent/test_get_recipe_ingredients.py` rewritten
+for the node-level behavior: found vs. unresolved ingredients, `english_name` always
+preserved regardless of resolution, and an empty dictionary leaving everything unresolved
+without crashing. All DB/MCP-contract tests for the removed cache were deleted rather
+than adapted. Recipe-flow graph tests (`test_graph_recipe_happy_path.py`,
+`test_recipe_quantity_propagation.py`) that depend on "eggs"/"tomatoes" resolving to
+Hebrew now pass an explicit, small `TEST_INGREDIENT_DICTIONARY`
+(`tests/agent/fakes.py`) rather than depending on the real ~3.4k-entry file's exact
+contents — keeps those tests self-contained and stable if the real dictionary changes.
+
+**Live verification.** Rebuilt and restarted `backend`/`supermarket-mcp`. A real "Miso
+Cream Pasta" request end-to-end: `garlic`→`שום`, `olive oil`→`שמן זית`, `onion`→`בצל`,
+`shiso leaves`→`עלים שיסו`, and `pasta`→`פסטה` all resolved correctly (pasta matched a
+real catalog product by item_code exactly as in follow-up #6); `miso paste` and
+`mushroom` have no dictionary entry for those exact phrases and correctly fell back to
+their English names with a logged warning (`docker compose logs backend`), never an LLM
+call — confirmed directly inside the running container that `translate_ingredient`
+reproduces the same resolved/unresolved split. The remaining "missing" ingredients in the
+cart comparison are this local dev catalog simply not stocking matching products — a
+catalog-completeness gap, not a translation problem, same distinction already established
+in follow-up #4.

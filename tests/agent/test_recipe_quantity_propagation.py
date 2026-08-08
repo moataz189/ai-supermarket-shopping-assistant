@@ -16,6 +16,7 @@ from langgraph.types import Command
 from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
 from tests.agent.fakes import (
+    TEST_INGREDIENT_DICTIONARY,
     FakeLLM,
     FakeRecipeClient,
     FakeRetailerCartClient,
@@ -75,6 +76,7 @@ async def test_recipe_ingredient_quantity_survives_into_graph_state():
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=4, items=[]))
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t1"}}
 
@@ -93,6 +95,7 @@ async def test_recipe_scaling_survives_downstream_into_the_cart_line():
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t2"}}
 
@@ -114,6 +117,7 @@ async def test_build_retailer_cart_no_longer_hardcodes_qty_1_quantity_for_recipe
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(),
         recipe_client=_shakshuka_recipe_client(), retailer_cart_client=retailer_cart_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t3"}}
 
@@ -146,6 +150,7 @@ async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_resul
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(),
         recipe_client=_shakshuka_recipe_client(), retailer_cart_client=retailer_cart_client,
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t4"}}
 
@@ -166,6 +171,7 @@ async def test_recipe_info_is_shown_on_the_retailer_choice_interrupt_before_a_ch
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t5b"}}
 
@@ -184,6 +190,7 @@ async def test_finalize_exposes_the_scaled_recipe_ingredient_list():
     llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=8, items=[]))
     app = build_graph(
         _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
     )
     config = {"configurable": {"thread_id": "t5"}}
 

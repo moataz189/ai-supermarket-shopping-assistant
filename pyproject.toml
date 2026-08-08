@@ -10,11 +10,6 @@ extend-immutable-calls = ["fastapi.Depends"]
 # Adapters call into third-party Playwright/site code that can raise almost anything, so the
 # catch here is deliberately unnarrowed.
 "mcp_servers/retailer_cart_mcp/automation.py" = ["BLE001"]
-# A recipe-ingredient translation (DB cache lookup, LLM call/parsing) that fails must
-# degrade to an ordinary missing_items result, never a broken recipe flow — same
-# deliberately-unnarrowed-catch reasoning as automation.py above.
-"app/agent/ingredient_translation.py" = ["BLE001"]
-"app/agent/nodes/get_recipe_ingredients.py" = ["BLE001"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

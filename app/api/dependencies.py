@@ -3,6 +3,7 @@ from functools import lru_cache
 
 from app.agent.checkpointer import get_checkpointer
 from app.agent.graph import build_graph
+from app.agent.ingredient_dictionary import load_ingredient_dictionary
 from app.agent.llm import get_llm
 from app.agent.mcp_clients import McpRecipeClient, McpRetailerCartClient, McpSupermarketDataClient
 
@@ -18,10 +19,14 @@ def get_agent_app():
     retailer_cart_client = McpRetailerCartClient(
         base_url=os.environ.get("RETAILER_CART_MCP_URL", "http://localhost:8003/mcp")
     )
+    # Loaded once here — this function is @lru_cache'd, so the ~3.4k-entry CSV is parsed
+    # exactly once per process, at (effectively) application startup, not per request.
+    ingredient_dictionary = load_ingredient_dictionary()
     return build_graph(
         client,
         get_llm(),
         get_checkpointer(),
         recipe_client=recipe_client,
         retailer_cart_client=retailer_cart_client,
+        ingredient_dictionary=ingredient_dictionary,
     )

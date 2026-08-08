@@ -79,7 +79,8 @@ def test_both_retailers_carry_matching_pasta_and_milk_items():
     2026-08-08: each retailer's own real product naming is used instead — see
     tests/fixtures/feeds/{shufersal,rami_levy}_sample.xml's item_code/name comments), only
     that the shared search term (app/db/repositories.py's ILIKE substring match, driven by
-    IngredientTranslation's search_name_he) appears in a product name at each retailer.
+    the ingredient dictionary's hebrew_search_name) appears in a product name at each
+    retailer.
     """
     shufersal_products = shufersal.parse((FIXTURES / "shufersal_sample.xml").read_bytes())
     rami_levy_products = rami_levy.parse((FIXTURES / "rami_levy_sample.xml").read_bytes())

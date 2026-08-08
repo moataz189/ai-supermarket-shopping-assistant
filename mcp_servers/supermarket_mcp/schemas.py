@@ -21,14 +21,3 @@ class ProductPriceResponse(BaseModel):
     listed_in_feed: bool
     last_updated_at: str
     stale: bool
-
-
-class GetIngredientTranslationsResponse(BaseModel):
-    # Requested name -> Hebrew catalog search term; only names actually found in the
-    # cache appear here (a miss is simply absent, not an error).
-    translations: dict[str, str]
-
-
-class IngredientTranslationEntry(BaseModel):
-    name: str
-    search_name_he: str

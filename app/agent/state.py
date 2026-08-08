@@ -8,6 +8,12 @@ class ParsedItem(TypedDict, total=False):
     search_name: str  # catalog search query — always tried in Hebrew when a translation
     # exists, independent of the conversation's language (the real catalog is Hebrew-only
     # regardless); only set for recipe-derived items (CP9 follow-up)
+    english_name: str  # the canonical English ingredient name as returned by Spoonacular
+    # — preserved alongside search_name for debugging/future improvements (CP9 follow-up,
+    # 2026-08-08: static-dictionary translation); only set for recipe-derived items
+    translation_resolved: bool  # whether english_name was found in the static Hebrew
+    # ingredient dictionary (app/agent/ingredient_dictionary.py) — False means
+    # search_name fell back to english_name unresolved; only set for recipe-derived items
     quantity: float | None
     unit: str  # only set for recipe-derived items (CP7) — grocery-list items have none
 
