@@ -1,6 +1,19 @@
 export interface ClarificationOption {
   id: string
   label: string
+  price?: number | null
+}
+
+export interface RecipeIngredient {
+  name: string
+  quantity?: number | null
+  unit?: string | null
+}
+
+export interface RecipeInfo {
+  title?: string | null
+  servings?: number | null
+  ingredients: RecipeIngredient[]
 }
 
 export interface Clarification {
@@ -8,7 +21,12 @@ export interface Clarification {
   question: string
   options: ClarificationOption[]
   carts?: Record<string, RetailerCart> | null
-  availability_by_retailer?: Record<string, string[]> | null
+  // Only set for reason === 'ambiguous_product' (CP9 follow-up, 2026-08-08) — each
+  // retailer's own independent candidate set (with price), for a retailer that's
+  // genuinely ambiguous on its own candidates. A retailer already auto-resolved (or with
+  // no candidates at all) is simply absent — never asked about.
+  options_by_retailer?: Record<string, ClarificationOption[]> | null
+  recipe?: RecipeInfo | null
 }
 
 export interface CartLine {
@@ -19,6 +37,8 @@ export interface CartLine {
   qty: number
   subtotal: number
   link?: string | null
+  requested_quantity?: number | null
+  requested_unit?: string | null
 }
 
 export interface RetailerCart {
@@ -39,6 +59,10 @@ export interface RetailerCartItemResult {
   reason?: string | null
   matched_by?: string | null
   quantity_confirmed?: number | null
+  requested_quantity?: number | null
+  requested_unit?: string | null
+  cart_quantity?: number | null
+  cart_unit?: string | null
 }
 
 export interface RetailerCartResult {
@@ -59,6 +83,7 @@ export interface ChatResponse {
   retailer_cart_result?: RetailerCartResult | null
   warnings: Record<string, unknown>[]
   message?: string | null
+  recipe?: RecipeInfo | null
 }
 
 export async function postChat(threadId: string | null, message: string): Promise<ChatResponse> {

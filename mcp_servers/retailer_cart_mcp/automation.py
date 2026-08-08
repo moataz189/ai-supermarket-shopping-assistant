@@ -3,6 +3,19 @@ from typing import Any, Protocol
 
 from playwright.async_api import Page, async_playwright
 
+from mcp_servers.retailer_cart_mcp.quantity import AddToCartResult, QuantityConversionRequiredError
+
+__all__ = [
+    "AddToCartResult",
+    "MatchResult",
+    "QuantityConversionRequiredError",
+    "QuantityNotConfirmedError",
+    "RetailerAdapter",
+    "UnsupportedQuantityError",
+    "UnsupportedSiteFlowError",
+    "prepare_cart_for_retailer",
+]
+
 
 class UnsupportedQuantityError(Exception):
     """Raised by an adapter when the requested quantity can't be represented on the site
@@ -29,7 +42,7 @@ class UnsupportedSiteFlowError(Exception):
 class MatchResult:
     item_code: str
     locator: Any
-    matched_by: str  # "item_code" | "exact_name" | "name_fallback"
+    matched_by: str  # "item_code" | "exact_name"
 
 
 class RetailerAdapter(Protocol):
@@ -46,11 +59,18 @@ class RetailerAdapter(Protocol):
         match only if nothing else matched. Returns None if nothing matched at all."""
         ...
 
-    async def add_to_cart(self, page: Page, match: MatchResult, quantity: float) -> float:
-        """Adds the matched product to the cart, sets its quantity to `quantity`, and
-        returns the quantity actually confirmed on the site. Raises UnsupportedQuantityError
-        or QuantityNotConfirmedError (or lets any other exception propagate) if the
-        requested quantity can't be confirmed."""
+    async def add_to_cart(
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+    ) -> AddToCartResult:
+        """Adds the matched product to the cart and returns what actually ended up
+        there. `unit=None` (the default) means a legacy whole-unit request — behavior
+        must be unchanged from before `unit` existed. Any other `unit` (e.g. "g", "kg",
+        "large") means `quantity` is a recipe's real requested amount in that unit;
+        adapters run it through mcp_servers/retailer_cart_mcp/quantity.py's conversion
+        helpers to decide what to actually add. Raises UnsupportedQuantityError or
+        QuantityNotConfirmedError for the legacy failure cases, or
+        QuantityConversionRequiredError when `unit` and the matched product's retailer
+        selling method are incompatible with no deterministic conversion between them."""
         ...
 
     async def get_cart_url(self, page: Page) -> str | None: ...
@@ -101,6 +121,7 @@ async def prepare_cart_for_retailer(
             if blocked_reason is None:
                 for item in items:
                     name, item_code, quantity = item["name"], item["item_code"], item["quantity"]
+                    unit = item.get("unit")  # None => legacy request, unchanged behavior below
 
                     # A fresh context per item — not the shared `page` used for
                     # open_site()/get_cart_url() above — reloading the same
@@ -132,18 +153,37 @@ async def prepare_cart_for_retailer(
                             continue
 
                         try:
-                            confirmed_qty = await adapter.add_to_cart(item_page, match, quantity)
+                            result = await adapter.add_to_cart(item_page, match, quantity, unit)
+                        except QuantityConversionRequiredError as exc:
+                            failed.append({
+                                "name": name,
+                                "item_code": item_code,
+                                "status": "quantity_conversion_required",
+                                "reason": str(exc),
+                                "requested_quantity": exc.requested_quantity,
+                                "requested_unit": exc.requested_unit,
+                            })
+                            continue
                         except Exception as exc:
                             failed.append({"name": name, "item_code": item_code, "status": "error", "reason": str(exc)})
                             continue
 
-                        added.append({
+                        added_entry = {
                             "name": name,
                             "item_code": item_code,
                             "status": "added",
                             "matched_by": match.matched_by,
-                            "quantity_confirmed": confirmed_qty,
-                        })
+                            "quantity_confirmed": result.quantity,
+                        }
+                        # Only present for recipe-derived items (unit was given) — kept
+                        # entirely absent otherwise so a plain grocery-list/weekly-shop
+                        # add's result dict is byte-identical to before this field existed.
+                        if unit is not None:
+                            added_entry["requested_quantity"] = quantity
+                            added_entry["requested_unit"] = unit
+                            added_entry["cart_quantity"] = result.quantity
+                            added_entry["cart_unit"] = result.unit
+                        added.append(added_entry)
 
                         blocked_reason = await _safe_detect_block(adapter, item_page)
                         if blocked_reason:

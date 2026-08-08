@@ -69,6 +69,20 @@ what looked like a failure.
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
 always reported and the run stops gracefully; it is never worked around.
+
+**Recipe-quantity-aware add_to_cart (CP9 follow-up, 2026-08-08).** `unit=None` (the
+default) is the legacy path — behavior byte-identical to before this parameter existed.
+When a recipe supplies a real `unit`: a `BY_WEIGHT` product gets the recipe's weight
+normalized straight to kg and sent as-is — confirmed live that this site's `/cart/add`
+takes an exact kg float with no minimum-increment rounding at all (a request for 0.4 kg
+came back confirmed as exactly 0.4), unlike Rami Levy's DOM stepper, which only moves in
+fixed steps. A count-like unit (e.g. "large", "unit") against a `BY_UNIT`/`BY_PACKAGE`
+product uses the recipe's count directly. A weight/volume unit against a `BY_UNIT`/
+`BY_PACKAGE` product (e.g. "250 g pasta") buys one whole package, the ordinary way people
+shop for packaged goods, rather than inventing a package count from an amount with no
+known per-product size. Only the genuinely incompatible case — a non-weight unit (a bare
+count, or a volume with no density source) against a `BY_WEIGHT` product — raises
+`QuantityConversionRequiredError` instead of guessing.
 """
 
 from urllib.parse import quote
@@ -79,6 +93,12 @@ from mcp_servers.retailer_cart_mcp.automation import (
     MatchResult,
     QuantityNotConfirmedError,
     UnsupportedSiteFlowError,
+)
+from mcp_servers.retailer_cart_mcp.quantity import (
+    AddToCartResult,
+    QuantityConversionRequiredError,
+    is_count_unit,
+    normalize_weight_to_kg,
 )
 
 BASE_URL = "https://www.shufersal.co.il"
@@ -145,8 +165,17 @@ class ShufersalAdapter:
         # catalog). This isn't just an optimization: a name search for "לחם אחיד פרוס" (a
         # generic bread name) returned 10 *different* products sharing that exact name —
         # exact-name matching is ambiguous in real product catalogs in a way code matching
-        # never is. Only falls back to a name search if code search finds nothing, or there
-        # is no item_code to search by at all.
+        # never is. Falls back to a name search if code search finds nothing, or there is
+        # no item_code to search by at all — but only an *exact* name match is accepted.
+        #
+        # No "just take the first search result" fallback beyond that (removed CP9
+        # follow-up, 2026-08-08) — confirmed live to cause a real wrong-product add: our
+        # local catalog's item_code/name come from a fixture-derived dataset, not the
+        # live site's own data, so a genuinely unmatched item can legitimately have no
+        # code or exact-name hit at all. Guessing the top (non-deterministically ranked)
+        # search result for a real product name added cheese ravioli to a real cart for a
+        # "pasta" request. Reporting an honest `not_found` (see automation.py) is always
+        # safer than a real, wrong purchase.
         #
         # One navigation per fresh context (automation.py gives each item its own), then
         # the rest of this adapter talks to the site entirely through same-origin fetch
@@ -174,8 +203,7 @@ class ShufersalAdapter:
             if name is not None and name.strip().lower() == item_name.strip().lower():
                 return MatchResult(item_code=item["code"], locator=item, matched_by="exact_name")
 
-        first = results[0]
-        return MatchResult(item_code=first["code"], locator=first, matched_by="name_fallback")
+        return None
 
     async def _confirm_quantity(self, page: Page, item_name: str, item_code: str) -> float:
         # A fresh server round trip, not a locally-held value — re-runs the same search
@@ -189,9 +217,39 @@ class ShufersalAdapter:
                 return float(qty) if qty is not None else 0.0
         return 0.0
 
-    async def add_to_cart(self, page: Page, match: MatchResult, quantity: float) -> float:
+    async def add_to_cart(
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+    ) -> AddToCartResult:
         item = match.locator
         selling_method = (item.get("sellingMethod") or {}).get("code", "BY_UNIT")
+        is_weighed = selling_method == "BY_WEIGHT"
+
+        if unit is None:
+            # Legacy request (no recipe unit) — unchanged from before `unit` existed.
+            send_qty, result_unit = quantity, ("kg" if is_weighed else "unit")
+        elif is_weighed:
+            target_kg = normalize_weight_to_kg(quantity, unit)
+            if target_kg is None:
+                raise QuantityConversionRequiredError(
+                    f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
+                    "deterministic weight conversion",
+                    requested_quantity=quantity,
+                    requested_unit=unit,
+                    retailer_selling_method=selling_method,
+                )
+            # Confirmed live (CP9 2026-08-08): this site's /cart/add takes an exact kg
+            # float with no minimum-increment rounding at all — a request for 0.4 was
+            # confirmed back as exactly 0.4, unlike Rami Levy's DOM stepper (0.5kg steps),
+            # so there is nothing to round up to here; the recipe's own weight is used as-is.
+            send_qty, result_unit = target_kg, "kg"
+        elif is_count_unit(unit):
+            send_qty, result_unit = quantity, "unit"
+        else:
+            # Recipe gave a weight/volume for a product this retailer sells as a whole
+            # package/unit (e.g. "250 g pasta" -> one box of pasta) — buy one of it, same
+            # as ordinary packaged-goods shopping, rather than inventing a package count
+            # from an amount with no per-product package size available to convert with.
+            send_qty, result_unit = 1, "unit"
 
         has_ajax_call = await page.evaluate("() => typeof window.ajaxCall === 'function'")
         if not has_ajax_call:
@@ -212,17 +270,17 @@ class ShufersalAdapter:
                     }), () => {}, null, {openFrom: 'SEARCH', recommendationType: 'AUTOCOMPLETE_LIST'});
                 }
                 """,
-                {"productCode": match.item_code, "sellingMethod": selling_method, "qty": quantity},
+                {"productCode": match.item_code, "sellingMethod": selling_method, "qty": send_qty},
             )
         except Exception as exc:
             raise UnsupportedSiteFlowError(f"/cart/add call failed: {exc}") from exc
 
         confirmed = await self._confirm_quantity(page, item.get("name", ""), match.item_code)
-        if confirmed != quantity:
+        if confirmed != send_qty:
             raise QuantityNotConfirmedError(
-                f"requested {quantity} for {match.item_code}, site cart shows {confirmed}"
+                f"requested {send_qty} for {match.item_code}, site cart shows {confirmed}"
             )
-        return confirmed
+        return AddToCartResult(confirmed, result_unit)
 
     async def get_cart_url(self, page: Page) -> str | None:
         # `/online/he/cart` is NOT a real route on this site — confirmed live, CP9

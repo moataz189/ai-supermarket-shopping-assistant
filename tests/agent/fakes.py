@@ -1,6 +1,14 @@
 from types import SimpleNamespace
 
-from app.agent.nodes.parse_request import ParsedRequestSchema
+# A small, test-scoped ingredient dictionary (english_name -> hebrew_search_term) for
+# recipe-flow graph tests that need get_recipe_ingredients' translation to actually
+# resolve — deliberately not the real ~3.4k-entry dictionary
+# (app/agent/data/ingredient_hebrew_translations.csv), so these tests stay self-contained
+# and don't silently change behavior if that file's content changes.
+TEST_INGREDIENT_DICTIONARY: dict[str, str] = {
+    "eggs": "ביצים",
+    "tomatoes": "עגבניה",
+}
 
 
 class FakeRecipeClient:
@@ -50,7 +58,11 @@ class FakeSupermarketDataClient:
     `prices` maps (retailer, item_code) -> price dict.
     """
 
-    def __init__(self, candidates: dict[tuple[str, str], list[dict]], prices: dict[tuple[str, str], dict]):
+    def __init__(
+        self,
+        candidates: dict[tuple[str, str], list[dict]],
+        prices: dict[tuple[str, str], dict],
+    ):
         self._candidates = candidates
         self._prices = prices
 
@@ -79,14 +91,14 @@ class FakeLLM:
     """Stand-in for ChatBedrockConverse. Mimics `.with_structured_output(schema,
     include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape.
 
-    By default returns a canned `parsed` ParsedRequestSchema regardless of input. Pass
-    `parsed=None` with `raw_content` set (a string, or a Bedrock content-block list) to
-    simulate the openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with
-    plain JSON text instead of a real tool call — `with_structured_output` then has
-    nothing to parse and returns `parsed=None`, which parse_request.py must fall back on.
+    Returns a canned `parsed` value (typically a ParsedRequestSchema). Pass `parsed=None`
+    with `raw_content` set (a string, or a Bedrock content-block list) to simulate the
+    openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with plain JSON text
+    instead of a real tool call — `with_structured_output` then has nothing to parse and
+    returns `parsed=None`, which the caller (parse_request.py) must fall back on.
     """
 
-    def __init__(self, parsed: ParsedRequestSchema | None = None, raw_content=None):
+    def __init__(self, parsed=None, raw_content=None):
         self._parsed = parsed
         self._raw_content = raw_content
 

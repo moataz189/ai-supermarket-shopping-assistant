@@ -32,18 +32,28 @@ def route_after_choice(state: AgentState) -> str:
     return "prepare_retailer_cart" if state.get("chosen_retailer") else "finalize"
 
 
-def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_client=None):
+def build_graph(
+    client, llm, checkpointer, recipe_client=None, retailer_cart_client=None, ingredient_dictionary=None,
+):
     """`recipe_client` is optional so grocery-list-only callers (including CP4's existing
     tests) don't need to supply one — it's only ever used on the recipe branch, reached
     solely when `request_type == "recipe"`. `retailer_cart_client` is optional the same
-    way — it's only ever used once the user has actually chosen a retailer (CP4)."""
+    way — it's only ever used once the user has actually chosen a retailer (CP4).
+    `ingredient_dictionary` (english_name -> hebrew_search_term) is get_recipe_ingredients'
+    static Hebrew translation table (CP9 follow-up, 2026-08-08 — app/api/dependencies.py
+    loads the real one once via app/agent/ingredient_dictionary.py); defaults to an empty
+    dict so every ingredient is simply reported unresolved rather than crashing when a
+    caller (e.g. a grocery-list-only test) has no reason to supply one."""
     graph = StateGraph(AgentState)
     graph.add_node("parse_request", make_parse_request(llm))
     graph.add_node("general_chat", general_chat)
     graph.add_node("search_recipes", make_search_recipes(recipe_client))
     graph.add_node("recipe_not_found", recipe_not_found)
     graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
-    graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
+    graph.add_node(
+        "get_recipe_ingredients",
+        make_get_recipe_ingredients(recipe_client, ingredient_dictionary or {}),
+    )
     graph.add_node("resolve_weekly_shop_profile", resolve_weekly_shop_profile)
     graph.add_node("resolve_items", make_resolve_items(client))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)

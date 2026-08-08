@@ -68,6 +68,15 @@ def get_product_price(retailer: str, item_code: str) -> ProductPriceResponse | N
 if __name__ == "__main__":
     import os
 
+    from app.db.session import init_db
+
+    # This is the one service with direct SQLite access, so table creation is ensured
+    # here, not in the backend. Idempotent — safe on every startup regardless of whether
+    # the ingestion job's own init_db() has run yet. Deliberately not run at module
+    # import time (only under __main__), so importing this module in tests never touches
+    # a real DB file as a side effect.
+    init_db()
+
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.environ.get("PORT", "8001"))
     mcp.run(transport="streamable-http")

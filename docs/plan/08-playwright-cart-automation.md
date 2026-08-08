@@ -541,3 +541,625 @@ part of the automated request-handling flow, and never run in CI or in a contain
 - [ ] All listed tests pass; `ruff check` clean.
 - [ ] Web UI shows the real-cart result once a retailer is chosen.
 - [ ] Committed with message referencing CP8. **M3 milestone complete at this point.**
+
+## CP9 follow-up — Recipe-quantity-aware carts (2026-08-08)
+
+**The bug.** Recipe MCP (CP6) always returned real, scaled ingredient amounts (e.g.
+"400 g" tomatoes, "8 ounces" spaghetti — scaled correctly for the requested servings),
+and this survived correctly as far as `parsed_request["items"]`
+(`get_recipe_ingredients.py` already set `quantity`/`unit` per item, confirmed by
+`tests/agent/test_graph_recipe_happy_path.py`). But `build_retailer_cart.py` never read
+those fields — it hardcoded `"qty": 1` for every cart line — so `prepare_retailer_cart.py`
+always sent `quantity: 1` to the Retailer-Cart MCP regardless of what the recipe actually
+asked for. Recipe scaling never reached the real cart at all.
+
+**Propagation, end to end.** `build_retailer_cart.py` now also carries
+`requested_quantity`/`requested_unit` (the item's real recipe amount, or `None` for an
+ordinary grocery-list/weekly-shop item — those still default to the pre-existing
+behavior, unchanged). `prepare_retailer_cart.py` sends this as-is to the Retailer-Cart
+MCP (`CartItemRequest.quantity`/`unit`) rather than the fixed `qty`. The *retailer-specific*
+conversion — normalizing a weight, rounding up to what that site actually supports,
+falling back to "buy one whole package" for a weight/volume unit against a whole-unit
+product — happens one layer further in, inside each adapter, using the new shared,
+retailer-agnostic helpers in `mcp_servers/retailer_cart_mcp/quantity.py`
+(`normalize_weight_to_kg`, `is_count_unit`, `round_up_to_increment`). `unit=None` is the
+explicit signal for "no recipe data — run the exact legacy whole-unit path," so ordinary
+grocery-list/weekly-shop behavior is byte-identical to before this feature existed.
+
+**Requested quantity vs. cart quantity — kept separate, never collapsed.**
+`CartItemResult`/`RetailerCartItemResult` carry `requested_quantity`/`requested_unit` (what
+the recipe asked for) *and* `cart_quantity`/`cart_unit` (what the retailer's own selling
+rules actually resulted in) as distinct fields — both flow unchanged through
+`finalize.py`/`ChatResponse` to the frontend. `quantity_confirmed` (pre-existing field) is
+kept too, for backward compatibility with the pre-existing UI code path.
+
+**Weight normalization/rounding.** For a product sold by weight, the recipe's amount is
+normalized to kg (`normalize_weight_to_kg`) and rounded *up* to the smallest retailer-
+supported increment — `round_up_to_increment(requested_kg, increment_kg)` =
+`ceil(requested/increment) * increment`, guarded against float precision artifacts.
+Shufersal's `/cart/add` accepts an exact kg float with no rounding at all (confirmed live:
+0.4 requested → 0.4 confirmed) — the increment there is effectively infinitesimal, so the
+recipe's own weight is used as-is. Rami Levy's DOM stepper only moves in a fixed
+per-product step with no way to represent an arbitrary weight — the adapter discovers that
+step empirically from the very first click's own delta (never hardcoded to 0.5, so this
+works for any weighed product, not just tomatoes) and clicks until the rounded-up target is
+reached.
+
+**Unsupported unit-to-weight conversion.** When the recipe's unit and the matched
+product's retailer selling method are genuinely incompatible with no deterministic
+conversion between them (a bare count against a weight-only product — e.g. "2 units" of
+something sold only by kg), the adapter raises `QuantityConversionRequiredError` instead
+of guessing a conversion. This surfaces as `status: "quantity_conversion_required"` with
+`requested_quantity`/`requested_unit` still attached, so the failure is structured and
+explainable, not a silent wrong add. The reverse case — a weight/volume unit against a
+whole-unit product, e.g. "250 g pasta" — is *not* treated as an error: it buys one whole
+package, the same way a person shops for packaged goods, since that's the overwhelmingly
+common real case and there's no reasonable per-product package-size source to compute an
+exact count from anyway.
+
+**A second, unrelated bug found and fixed along the way**: Rami Levy's one-time
+"delivery area" modal (`#delivery-modal`/`#close-popup`), which appears after a session's
+very first add-to-cart click of *any* kind, was originally handled only on the weighed-item
+click path. A live multi-click whole-unit add (3 clicks) hung on its 2nd click the exact
+same way — the modal isn't weight-specific, so the dismiss logic
+(`_click_plus_and_dismiss_first_click_modal`) is now shared by both click paths.
+
+**Frontend.** A new `RecipeIngredientsView` component renders the scaled ingredient list
+(name/quantity/unit) and is shown *before* the retailer comparison — both on the
+`retailer_choice` interrupt (`choose_retailer.py` now includes `recipe` in the interrupt
+payload, via a small shared `app/agent/recipe_info.py` helper also used by `finalize.py`)
+and on a declined comparison view — so the user sees what a recipe actually requires
+before picking a retailer, not only after. `RetailerCard` shows a recipe item's real
+requested amount instead of the always-`1` comparison `qty`. `RetailerCartResultView`
+shows "Recipe needs: X / Added to cart: Y" for a recipe item (both lines shown even when
+they match, e.g. eggs), and a `quantity_conversion_required` failure renders as a neutral
+amber "needs manual check" badge rather than a red error, since nothing was guessed wrong.
+
+**Tests.** `tests/mcp/test_quantity.py` (pure conversion-math unit tests: weight
+normalization, count-unit classification, the rounding formula, including the exact-
+multiple/float-precision edge case). `tests/mcp/test_shufersal_adapter.py` and the new
+`tests/mcp/test_rami_levy_adapter.py` (a minimal fake-locator harness, since this adapter
+had no automated tests before — real DOM mechanics stay live-verified by hand, as before;
+only the new *decision* logic is unit-tested) cover both adapters' weight/count/
+incompatible-unit branches. `tests/mcp/test_retailer_cart_automation.py` covers the
+orchestration-level routing (`unit=None` byte-identical to legacy, `requested_*`/`cart_*`
+fields only present for recipe items, `QuantityConversionRequiredError` → structured
+failure). `tests/agent/test_recipe_quantity_propagation.py` covers the full graph path
+(Recipe MCP → state → cart line → Retailer-Cart MCP call → final result), scaling (4→8
+servings doubling 400 g → 800 g), the interrupt-time `recipe` payload, and an explicit
+no-regression check for a plain grocery-list item (`quantity: 1, unit: None`, unaffected).
+
+**Manual verification (2026-08-08, live, via `docker compose up -d --build`).** "pasta for
+4 people" → "Ratatouille Pasta" through the real web UI: the ingredient list rendered
+correctly with real mixed Spoonacular units (large, servings, cloves, cups, teaspoon,
+ounces) before the retailer comparison. Catalog matching for recipe items against the
+Hebrew-only real product DB is a separate, pre-existing gap (recipe items search by their
+English canonical name, not the localized `display_name` — same root cause as documented
+in `resolve_weekly_shop_profile.py`) unrelated to this fix and out of scope here, so the
+full add-to-cart round trip for a *matched* recipe item was verified directly against the
+running `retailer-cart-mcp` container (real MCP call, real Hebrew item names, real sites):
+Rami Levy correctly rounded a 400 g request up to a supported weight (never down) and
+reported `requested_quantity=400/g` alongside a distinct `cart_quantity`/`cart_unit`;
+Shufersal added the exact 0.4 kg requested with no rounding. No checkout/login/payment path
+was touched, as before.
+
+## CP9 follow-up #2 — Weekly-shop-profile quantities (2026-08-08)
+
+**The same bug, a second source.** Following user feedback: the weekly-shop-profile
+starter lists (`resolve_weekly_shop_profile.py`) had the identical "always quantity=1"
+gap as recipes, just from a different origin — a single person's list and a family's list
+sent the same generic amount for every item regardless of household size (e.g. tomatoes:
+0.5 kg for one person is realistic, but a family needs closer to 1 kg).
+
+Since the requested-quantity pipeline built for recipes (this same document, CP9 follow-up
+#1) is entirely generic — driven by whatever `quantity`/`unit` a `parsed_request["items"]`
+entry carries, regardless of source — no new plumbing was needed. `STARTER_LISTS` changed
+from `dict[str, list[str]]` to `dict[str, list[dict]]`: each entry now carries a real
+`quantity`/`unit` sized for that profile's household (e.g. `{"name": "עגבניה", "quantity":
+0.5, "unit": "kg"}` for `one_person`, `1`/`kg` for `family`), hand-authored per profile
+(kept independent per list, same as the item sets themselves — not derived via a shared
+per-person multiplier). Weight/volume items (produce, meat, fish) use kg; items normally
+sold as one fixed retail package (bread, milk, rice, pasta, cheese...) use a plain unit
+count instead of an invented weight, for the same reason as the recipe flow's "buy one
+whole package" default. A freeform/custom list (the user types their own items) is
+unaffected — those still carry no quantity information at all, exactly as before.
+
+**Tests.** `tests/agent/test_graph_weekly_shop_profile.py` gained
+`test_starter_list_quantities_scale_by_household_size` (tomatoes: 0.5 kg for one_person,
+1 kg for family — the user's own example) and
+`test_custom_freeform_list_still_has_no_quantity_no_regression`.
+`tests/agent/test_recipe_quantity_propagation.py`'s weekly-shop test was rewritten from
+asserting the old "always 1/None" shape to asserting each item's real per-profile
+quantity/unit reaches the Retailer-Cart MCP call.
+
+**Manual verification (live, via rebuilt `backend`/`web` containers).** "Weekly shopping
+under 250" → "Weekly family shop" through the real web UI and API: bread/milk/pasta
+correctly showed "2×"/"3×"/"3× unit" (matching the authored family quantities) in both
+retailers' comparison carts, and Rami Levy's cart showed "1 × kg" for tomatoes — exactly
+the family quantity authored. Choosing Shufersal and running the real add-to-cart
+confirmed bread/milk/pasta added at the requested counts; yellow cheese (authored as a
+whole-package unit) turned out to be sold by weight on the real site and was correctly
+reported as `quantity_conversion_required` instead of silently guessed — a live
+confirmation that the "never guess an incompatible conversion" safety net works
+correctly even when this document's own authored assumption about a product's selling
+method turns out to be wrong.
+
+## CP9 follow-up #3 — Hebrew recipe requests search by localized name (2026-08-08)
+
+**The bug.** A real user report: asking for a recipe in Hebrew whose ingredients include
+tomatoes was told "עגבניה" (tomato) is missing/not found, even though it genuinely exists
+in the real catalog. Root cause: `resolve_items.py` and `build_retailer_cart.py` both
+searched the catalog using an item's *canonical* name — Spoonacular's English ingredient
+name for recipe items (e.g. `"tomatoes"`) — never the localized `display_name`
+(`"עגבניה"`) that `get_recipe_ingredients.py` already computes via
+`localize_ingredient_name` (CP7) purely for UI display. Against the Hebrew-only real
+catalog (see this document's earlier note on `resolve_weekly_shop_profile.py`), an
+English query never matches even when the equivalent Hebrew product genuinely exists — so
+every recipe ingredient with a Hebrew translation was silently mismatched whenever the
+conversation itself was in Hebrew (an English-language conversation's `display_name`
+already equals the canonical name in practice, since `INGREDIENT_TRANSLATIONS` only has
+`"he"` entries, so this bug was invisible there).
+
+**A second bug found alongside it**: `INGREDIENT_TRANSLATIONS["tomatoes"]["he"]` was the
+*plural* `"עגבניות"`, but — exactly like `resolve_weekly_shop_profile.py`'s own
+documented gotcha — the real catalog lists fresh produce in *singular* form (`"עגבניה"`),
+and the search is substring-based, so even a correctly-localized-but-plural query would
+still have silently missed. Fixed to the singular form.
+
+**The fix.** Both `resolve_items.py` (`_candidates_by_retailer` and the exact-name check
+inside `_resolve_item`) and `build_retailer_cart.py`'s own independent re-search now use
+`item.get("display_name") or name` as the search query — the localized term when one
+exists, falling back unchanged to the canonical name otherwise. Grocery-list items (typed
+directly by the user, already in their own language) have no `display_name` at all, so
+this is a no-op for them — confirmed by the full existing suite passing unmodified except
+for the one test asserting the old, buggy plural translation. `missing_items` entries for
+recipe-derived items now also display the localized name, for the same reason.
+
+**Tests.** `tests/agent/test_graph_recipe_happy_path.py` gained
+`test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_english` — a fake
+catalog with candidates registered *only* under the Hebrew term (no `"tomatoes"` key at
+all), so it only passes if the localized name is genuinely what gets searched for.
+
+**Manual verification (live, via a rebuilt `backend` container, real catalog).** A real
+Hebrew recipe request ("מתכון לפסטה ל-4 אנשים" → Ratatouille Pasta) that needs tomatoes:
+the ingredient list already showed "עגבניה" (localized), and — the actual bug being
+fixed — Rami Levy's cart now shows it as a genuinely **matched** line
+(`product_name: "עגבניה"`, `requested_quantity: 14.0`, `requested_unit: "ounces"`)
+instead of appearing in `missing_items` as it did before this fix.
+
+**Follow-up (same day): the fix above wasn't actually enough.** A second live report
+showed the identical symptom for an *English*-language request ("pasta for 4 people" →
+the same Ratatouille Pasta) — every ingredient, including tomatoes, still showed
+`missing`. Root cause: the first fix made the search query `item.get("display_name") or
+name`, but `display_name` follows *this conversation's* own detected language
+(`get_recipe_ingredients.py`'s `language = parsed.get("language", "en")`) — for an
+English conversation it evaluates to the plain English name again, since
+`INGREDIENT_TRANSLATIONS` has no `"en"` entries by design (there's nothing to translate
+English *to* English). The real catalog's language has nothing to do with the
+conversation's language, so the search needs a query that's Hebrew *whenever a
+translation exists*, full stop — independent of `display_name`.
+
+Fixed by adding a distinct `search_name` field (`get_recipe_ingredients.py`), always
+computed as `localize_ingredient_name(name, "he")` regardless of the conversation's
+`language`, and used ahead of `display_name` everywhere the catalog is actually queried
+(`resolve_items.py`, `build_retailer_cart.py`). `display_name` keeps its original,
+purely cosmetic role (what the user sees, in their own language); `search_name` is what
+the catalog is actually queried with, always. `ParsedItem` (`app/agent/state.py`) documents
+both fields' distinct purposes explicitly to head off the same mix-up in the future.
+
+New test `test_english_recipe_request_still_searches_the_catalog_by_hebrew_name` uses the
+same Hebrew-only fake catalog as the earlier Hebrew test, but drives an English-language
+conversation instead — asserting `parsed_request["language"] == "en"` and
+`display_name == "tomatoes"` first, to prove it's genuinely exercising the English path,
+then asserting tomatoes still resolve to the matched `"עגבניה"` line. Re-verified live
+(rebuilt `backend` container): "pasta for 4 people" → Ratatouille Pasta now matches
+tomatoes against the real catalog (`product_name: "עגבניה"`) instead of reporting all
+12 ingredients missing, as it did before this follow-up.
+
+## CP9 follow-up #4 — LLM-based ingredient translation with a persistent cache (2026-08-08)
+
+**The bug.** Even with the Hebrew-search fix above, a real "Miso Cream Pasta" request
+still showed pasta as missing — `INGREDIENT_TRANSLATIONS` (`app/agent/i18n.py`) is a
+**6-entry hardcoded dict** (milk, oat milk, eggs, tomatoes, onion, olive oil). Any
+ingredient outside that tiny list — pasta, garlic, mushroom, heavy cream, miso paste,
+shiso leaves — has no Hebrew translation at all and falls straight back to English,
+regardless of the earlier fixes. A fixed table can never cover every ingredient a recipe
+might call for; this needed a real, scalable translation mechanism.
+
+**The design (explicit product decision).** Not a bigger static table, and not calling
+an LLM to translate every ingredient on every request either. Instead: a **persistent
+cache**, keyed by a normalized ("canonical") English name, storing the original name (for
+debugging) alongside the resolved Hebrew search term; the LLM is used **only** to fill a
+genuine cache miss — a name never seen before — and its result is written back so that
+exact ingredient is never sent to the LLM again, by anyone, ever.
+
+**Where the cache lives — a real architectural correction made mid-implementation.** The
+first attempt put `IngredientTranslationRepository`/`SessionLocal` calls directly in
+`app/agent/nodes/get_recipe_ingredients.py`. This is **wrong** and was caught by actually
+rebuilding and starting the `backend` container: `app/api/Dockerfile` deliberately does
+not copy `app/db` into that image at all —
+```
+# Backend image — only app/agent, app/api, app/dietary. No mcp_servers code (the backend
+# only talks to MCP servers over HTTP, via app/agent/mcp_clients.py), no app/db (the
+# backend never touches SQLite directly — that's supermarket-mcp's job), no app/ingestion.
+```
+— a real, deliberate separation this project already had (the agent talks to product data
+only via the Supermarket-Data MCP over HTTP), and the new code silently violated it,
+something no unit test caught since none of them actually build the Docker image.
+**Corrected**: `get_ingredient_translations`/`save_ingredient_translations` are two new
+tools on the *existing* `supermarket-mcp` server (the one service with direct SQLite
+access), called from `get_recipe_ingredients.py` through the same `client`
+(`McpSupermarketDataClient`) already used for product search elsewhere in the graph —
+`app/agent/` still never touches a database connection directly. `IngredientTranslation`
+(the DB model), `IngredientTranslationRepository`, and `SEED_INGREDIENT_TRANSLATIONS`
+(`app/db/repositories.py`) stay exactly where DB-layer code already lives; only *how they're
+reached* from the agent changed.
+
+**The cache/LLM/write-back flow**, in `get_recipe_ingredients.py`'s `_resolve_search_names`:
+1. Ask `supermarket-mcp`'s `get_ingredient_translations` for every ingredient name at once.
+2. Whatever's missing from the response goes to the LLM in a single batched call
+   (`app/agent/ingredient_translation.py`'s `translate_ingredients_to_hebrew` — same
+   `with_structured_output(..., include_raw=True)` pattern as `parse_request.py`, including
+   the same raw-JSON fallback for the openai.gpt-oss-20b-1:0-on-Bedrock quirk of skipping
+   the tool call).
+3. Successful translations are written back via `save_ingredient_translations` — that
+   specific ingredient never reaches the LLM again, for any future recipe, by any user.
+4. If the whole cache service is unreachable (network error, etc.), falls back to the
+   original small static `INGREDIENT_TRANSLATIONS` table rather than an empty result — an
+   outage degrades to "no worse than before this feature", not "no translation at all".
+
+**Startup/seeding**: `supermarket-mcp` is the one service that runs `init_db()` +
+`seed_ingredient_translations()` (in its own `if __name__ == "__main__":` block —
+deliberately *not* at module import time, so importing the module in tests never touches a
+real DB file as a side effect) — pre-populating the same 6 already-verified terms so they
+never need an LLM call at all. `app/api/main.py`'s lifespan was reverted back to not
+touching any DB (it never should have).
+
+**Tests.** `tests/db/test_repositories.py` (repository CRUD, seeding idempotency, never
+overwriting a corrected entry), `tests/agent/test_ingredient_translation.py` (the LLM batch
+call in isolation — batching, partial responses, the raw-content fallback, never raising),
+`tests/mcp/test_supermarket_mcp_contract.py` (the two new tools directly, including a
+same-batch-duplicate-name test that caught a real dedup bug — a naive `dict()` comprehension
+keeps the *last* duplicate, not the first, silently overwriting a correct translation with a
+wrong one from the same request), and `tests/agent/test_get_recipe_ingredients.py`
+(cache-hit-never-calls-the-LLM, cache-miss-then-cached-for-next-time, mixed hit/miss,
+case/whitespace normalization sharing one entry, and the static-fallback-on-outage path,
+each using `_BoomLLM`/`_BoomClient` fakes that raise if actually invoked, to *prove* a given
+code path never reaches them). `FakeSupermarketDataClient` (`tests/agent/fakes.py`) grew
+matching `get_ingredient_translations`/`save_ingredient_translations` methods, seeded by
+default with the same `SEED_INGREDIENT_TRANSLATIONS` the real service seeds, so existing
+recipe tests get realistic cache-hit behavior without a real DB or LLM call.
+
+**Manual verification (live, via rebuilt `backend` **and** `supermarket-mcp` containers,
+real Bedrock LLM, real catalog).** "Miso Cream Pasta" (garlic, heavy cream, miso paste,
+mushroom, olive oil, pasta, onion, shiso leaves — none but olive oil/onion previously
+translatable at all): every never-before-seen ingredient was translated correctly on the
+first request (garlic→שום, heavy cream→שמנת מתוקה, miso paste→מיסו, mushroom→פטרייה,
+pasta→פסטה, shiso leaves→שיזו) and pasta matched a real catalog product
+(`"פסטה פנה 500 גרם"`) instead of showing missing, as it did before this fix — confirmed
+directly against the DB: all six now sit in `ingredient_translations`, seed rows and
+LLM-translated rows side by side. A repeat request for the same recipe completed in 0.52s
+versus the first request's 2.86s — confirming the cache, not a fresh LLM call, served the
+second request. (The remaining "missing" ingredients on that recipe are a separate, this
+local dev catalog simply not carrying matching products for garlic/mushroom/etc. — a
+catalog-completeness gap, not a translation problem; onion/olive oil translate correctly
+via the seed but likewise aren't in this specific local catalog.)
+
+## CP9 follow-up #5 — removed the `name_fallback` "guess the first result" match, after it added a real wrong item to a real cart (2026-08-08)
+
+**The incident.** With the ingredient-translation fix above live, a real "Miso Cream
+Pasta" request via the actual chat UI reported `pasta` matched to `"פסטה פנה 500 גרם"`
+and added to the Shufersal cart. The user checked their real cart and found
+`רביولי גבינות` (cheese ravioli) instead — not pasta at all. Verified live (fresh,
+authoritative `cartStatus` read from the real search endpoint, not a possibly-stale
+browser tab — the already-known [[shufersal_stale_tab_gotcha]] was ruled out first): the
+ravioli really was in the account cart, qty 4, with nothing pasta-related in it.
+
+**Root cause.** This local environment's entire product catalog is seeded from
+`tests/fixtures/feeds/{shufersal,rami_levy}_sample.xml` — small, hand-made test fixtures
+(`app/ingestion/run.py`'s `load_fixtures`), not a real retailer price feed. Their item
+codes are fabricated (e.g. `7290000000001` for "pasta penne", not a real Shufersal
+barcode) and their `ItemName` strings don't necessarily match the live site's own product
+names exactly. `ShufersalAdapter.search_and_match` (and `RamiLevyAdapter`'s equivalent)
+already searched by item_code first, then by exact name — both already known-safe paths
+— but had a third fallback, present since CP8 and already flagged as an open,
+undecided risk in `docs/plan/09-containerization.md`'s Risks section after a first,
+hypothetical-looking incident during CP9 testing: when neither matched, **just take the
+first search result**. Confirmed live (re-querying the real Shufersal search endpoint
+with the exact fixture code/name from this incident): the fake code returns zero
+results, and the fixture name returns real, on-topic pasta products but none with an
+exactly matching name — so the adapter fell through to "first result", and whatever the
+site's (not necessarily stable) search ranking put first that time was cheese ravioli.
+
+**The fix — explicit product decision, not a silent code change.** Given the choice
+between two options (stop the fallback entirely and report unmatched items honestly, vs.
+keep it and just discuss further), the decision was to **remove the fallback outright**
+in both `shufersal.py` and `rami_levy.py` (and the mirroring `mock_retailer_adapter.py`
+used by the test suite) — `search_and_match` now returns `None` when item_code and exact
+name matching both fail, which `automation.py`'s `prepare_cart_for_retailer` already
+turns into a clean `status: "not_found"` failed-item entry (no changes needed there — this
+path already existed and was already tested). The trade-off is explicit: more items may
+now show as "missing" instead of being auto-added, in exchange for never again silently
+adding a real, wrong product to a real cart. `MatchResult.matched_by` and
+`CartItemResult.matched_by`'s type narrowed from `"item_code" | "exact_name" |
+"name_fallback"` to just the first two.
+
+**Recovery.** The wrong item was removed from the real cart before the code fix, using
+the same `window.ajaxCall('/cart/add', ...)` mechanism the adapter itself uses, with
+`qty: 0` for the confirmed product code — verified via a fresh follow-up search that
+`cartStatus.inCart` became `false`.
+
+**Tests.** `tests/mcp/test_shufersal_adapter.py`'s
+`test_search_and_match_falls_back_to_first_result` became
+`test_search_and_match_returns_none_when_no_exact_name_match` (asserts `None`, not a
+guessed match). `tests/mcp/test_retailer_cart_automation.py`'s
+`test_matched_by_name_fallback_when_no_exact_match` became
+`test_no_exact_match_is_reported_as_not_found` (asserts `added == []` and
+`failed[0]["status"] == "not_found"`). No test exercised Rami Levy's equivalent fallback
+directly, so none needed updating there beyond the adapter code itself. Full suite (258
+tests) and `ruff check` both pass after the change.
+
+**Live verification.** Rebuilt and restarted the `retailer-cart-mcp` container. Re-ran the
+exact request that previously produced the wrong add (`name="פסטה פנה 500 גרם",
+item_code="7290000000001"`, the real fixture-derived values) directly against
+`prepare_cart_for_retailer` with the real Shufersal session: `added: []`, `failed: [{...,
+"status": "not_found"}]` — no product added at all, honestly reported as unmatched.
+Re-confirmed via a fresh authoritative cart-status query that the real account cart still
+has no ravioli and nothing incorrectly added.
+
+## CP9 follow-up #6 — replaced the pasta fixture's fabricated code/name with real, live-verified product data (2026-08-08)
+
+**Follow-up to #5.** Rather than only removing the unsafe fallback, also fixed the actual
+root data problem for this one item: `tests/fixtures/feeds/shufersal_sample.xml`'s pasta
+entry's `ItemCode`/`ItemName` were replaced with a real Shufersal barcode and product
+name, confirmed live by querying the real search endpoint — `7296073011224` /
+`פסטה פוסילי` (Fusilli, not the fixture's original "Penne" — the barcode found is for a
+different pasta shape, so the fixture's name was corrected to match rather than left
+inconsistent with what the code actually resolves to on the real site). Since
+`search_and_match` tries `item_code` first, Shufersal now finds this product by a real,
+unambiguous barcode match (`matched_by: "item_code"`) — the strongest match type there
+is, no name comparison involved at all. `tests/fixtures/feeds/rami_levy_sample.xml`'s
+pasta entry was updated to a real, exact Rami Levy product name for the same reason
+(`פסטה פוזילי 500 גרם מותג רמי לוי`, confirmed live against the real site's search
+results) and its `ManufacturerName`/`ManufactureCountry` corrected to match (a Rami Levy
+private-label product, not Barilla/Italy).
+
+`tests/ingestion/test_feed_parsers.py`'s `test_both_retailers_carry_matching_pasta_and_milk_items`
+previously asserted the two retailers' pasta/milk product *names* were byte-identical —
+never actually required by the app (`app/db/repositories.py`'s `search_candidates` does an
+`ILIKE` substring match, not exact equality; the two retailers' catalogs are searched
+independently). Rewritten to assert each retailer has *some* product name containing the
+shared Hebrew search term (`"פסטה"`, `"חלב"`) instead, which is what the real
+ingredient-search flow actually needs.
+
+**Re-ingested the running database** (`docker compose build ingestion && docker compose
+run --rm ingestion python -m app.ingestion.run --source fixtures` — `PriceFull` ingestion
+fully replaces each retailer's catalog, confirmed the stale fake pasta row was gone, not
+just shadowed) and verified live: Shufersal's `prepare_cart_for_retailer` for this item
+now returns `matched_by: "item_code"`, `status: "added"` — a real, correct add, not a
+`not_found`.
+
+**Rami Levy — data fix alone did not make this item addable, for a different, separate
+reason.** Even with a real, exact product name in the fixture, a live
+`prepare_cart_for_retailer` run for it still returned `not_found`. Root-caused live: this
+adapter's `search_and_match` always searches using the *full* `item_name` as the query
+string (`await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")`) — but
+querying Rami Levy's real search with the product's own full, exact name
+(`"פסטה פוזילי 500 גרם מותג רמי לוי"`) doesn't reliably surface that exact tile among the
+top results at all; confirmed live, reproducibly, that shorter/partial queries
+(`"פסטה פוזילי"`, `"פוזילי רמי לוי"`) *do* surface it (as the first result, even), while
+the full name as a query does not. This is a distinct issue from the one #5 fixed — a
+search-relevance quirk in how the query itself is constructed, not a data or exact-match
+problem — and was left as-is pending an explicit decision on how `search_and_match`
+should choose what to actually search for, rather than silently truncating/guessing a
+shorter query (which would reopen the same "how much do we trust this" question #5 just
+closed). Nothing was added to the real Rami Levy cart during this investigation — every
+attempt correctly reported `not_found`.
+
+## CP9 follow-up #7 — Rami Levy now searches by item_code too, resolving #6's open question (2026-08-08)
+
+**Resolved, not by shortening the query — by not needing the full-name query at all.**
+The user supplied a real barcode for the pasta product (`7290117769690`, found via the
+product's own image URL, as this adapter's docstring already noted is the only place a
+barcode is reachable on this site) and asked why `search_and_match` doesn't search by
+`item_code` the way Shufersal's does. The adapter's existing comment claimed "the real
+site doesn't expose our fixture-style item_code on search tiles" — true of the fixture's
+*fake* codes, but that claim had never actually been tested against a *real* barcode.
+Confirmed live: querying Rami Levy's real search with the real barcode returned only that
+product's tile(s) (5 identical tiles — likely the same product surfaced in multiple page
+sections); querying with two different nonexistent/fake barcodes both returned zero
+results. This is exactly the same trustworthy, disambiguating signal Shufersal's adapter
+already relies on for code search.
+
+`RamiLevyAdapter.search_and_match` now tries `item_code` first (mirroring Shufersal): a
+non-empty result for a barcode query is trusted directly, no further name comparison
+needed, since the site itself already disambiguated by an exact code. Falls back to the
+existing exact-name-only path (see #5/#6) only when there's no item_code or the code
+search finds nothing — unchanged otherwise. This sidesteps #6's full-name-query problem
+entirely for anything with a real code, rather than attempting to fix the query length
+itself (which would have reopened the "how much do we trust a partial-query result"
+question #5 deliberately closed).
+
+Also updated `tests/fixtures/feeds/rami_levy_sample.xml`'s pasta entry's `ItemCode` to
+this same real barcode (previously the fixture-style `300001`) and re-ingested.
+
+**Live verification.** Rebuilt and restarted `retailer-cart-mcp`. Re-ran
+`prepare_cart_for_retailer` for Rami Levy with the real barcode: `matched_by:
+"item_code"`, `status: "added"`, `quantity_confirmed: 1.0` — a real, correct add,
+resolving the `not_found` from #6. Left in the real cart (a correct, intentional add, not
+a mismatch to clean up this time).
+
+No unit test was added for `search_and_match`'s new code-first path — consistent with
+this adapter's established boundary (see this file's own module docstring and
+`tests/mcp/test_rami_levy_adapter.py`'s: only `add_to_cart`'s decision logic is
+unit-tested against a fake locator tree; `search_and_match`'s real-DOM/site behavior is
+verified live by hand, same as the rest of this adapter's history).
+
+## CP9 follow-up #8 — product-ambiguity resolution redesigned to be per-retailer, not shared (2026-08-08)
+
+**The bug (a UX report from a real screenshot).** After #6/#7's fixes gave each retailer
+its own real, correctly-spelled product name for the same grocery item, a "pasta for 4
+people" request started showing an unexpected clarification screen: "I found a few
+options for 'pasta'" with one option under "Shufersal" and a different one under "Rami
+Levy". Picking either option only worked for that one retailer — the other retailer's own
+cart still couldn't find its product, since the two retailers' real names for the same
+item are legitimately different strings (see #6).
+
+**Root cause — CP4/CP7-era design, from `app/agent/nodes/resolve_items.py`/
+`resolve_ambiguity.py`/`build_retailer_cart.py`.** `_unique_labels` deduped candidates *by
+name across both retailers* into one flat "which product did you mean" list, and
+whichever single label got resolved (auto-resolved or user-picked) was reused as the
+search query for *both* retailers' carts (`build_retailer_cart.py`: `state
+["resolved_choices"].get(name)`, one flat string per item). This only ever worked because
+the original fixture data happened to give shared items byte-identical names at both
+retailers — an artifact of unrealistic test data, not a real design decision. A real
+catalog routinely names "the same" grocery item differently per retailer (different
+phrasing, spelling, private-label branding — exactly what #6 introduced), which this
+flat, shared-label model was never built to handle: picking one retailer's exact text
+left the other retailer's own, differently-named product unmatchable.
+
+**The fix — explicit product spec from the user.** Ambiguity is now judged and resolved
+*independently per retailer*:
+- `resolved_choices` changed from `item name -> single label` to `item name -> retailer ->
+  label` (`app/agent/state.py`).
+- `resolve_items.py`'s `_dedupe_by_name` (replacing `_unique_labels`) dedupes *within* one
+  retailer's own candidates only, never merging across retailers. `_resolve_item` (exact
+  search-name match, brand preference, "cheapest" preference, then genuinely-ambiguous)
+  is unchanged in its own logic — it's just now called once per retailer against that
+  retailer's own candidate list, not once against a cross-retailer merged list. A retailer
+  with exactly one real candidate auto-resolves immediately, without ever asking — the
+  user's own explicit rule ("if a retailer has exactly one valid candidate, auto-select it
+  and do not ask unnecessarily").
+- `resolve_ambiguity.py` now builds `options_by_retailer` — only the retailers that are
+  *still* ambiguous after auto-resolution appear at all, each with its own candidate list
+  and *price* on every option (explicitly requested). The interrupt's answer is now a
+  `dict[str, str]` (one choice per retailer shown), merged into that item's per-retailer
+  `resolved_choices` — never a single flat string.
+- `build_retailer_cart.py` now looks up `resolved_choices[name].get(retailer)` — each
+  retailer's own cart-building pass reads only its own resolved label, never another
+  retailer's.
+- Wire format: `app/api/schemas.py`'s `Clarification` gained `options_by_retailer:
+  dict[str, list[ClarificationOption]]` (each option now carries `price`), replacing
+  `availability_by_retailer` (which only ever supported the old flat-list shape).
+  `ChatRequest.message` stays a plain string end-to-end — `app/api/routes/chat.py`'s new
+  `_resume_value` helper JSON-decodes it and passes the result through as the resume
+  value only when it parses to a `dict` specifically (any other valid JSON — a bare
+  number, a quoted string — is vanishingly unlikely as real free text and is passed
+  through unchanged, exactly as before this existed), so every other resume path
+  (retailer choice, recipe choice, free-text answers, brand-new messages) is
+  byte-for-byte unaffected.
+- Frontend (`web/src/components/clarification/ClarificationCard.tsx`): a genuinely new
+  interaction, not just a rendering change — when `options_by_retailer` is present, each
+  retailer's own option group tracks its *own* local pending selection (choosing a
+  Shufersal option never touches Rami Levy's own pending pick), each option shows its
+  price (`OptionChip` gained an optional `price` prop, `₪X.XX`), and a single **Confirm**
+  button — enabled only once every retailer shown has a selection — submits all of them
+  together as one JSON-encoded answer (`App.tsx`'s new `handleSelectMultipleOption`). The
+  old flat single-click-submits-immediately path is untouched and still used for
+  `retailer_choice`/`ambiguous_recipe`, which remain genuinely single-answer choices.
+
+**Tests.** `tests/agent/test_graph_ambiguous_item_interrupt.py` rewritten: asserts
+`options_by_retailer` (with price) instead of the old flat `options`/
+`availability_by_retailer`, resumes with a `dict` answer, and adds two new scenarios —
+choosing genuinely *different* products per retailer and confirming neither selection
+overwrites the other, and a retailer with exactly one candidate never appearing in
+`options_by_retailer` at all (auto-resolved silently, its cart already correct with no
+answer needed for it). `tests/api/test_chat_endpoint.py::test_ambiguous_item_then_resumes`
+updated for the new payload shape and a JSON-string resume answer over the real
+`/chat` HTTP path. `tests/agent/test_resolve_item_rules.py` (testing `_resolve_item`
+itself, already single-retailer-shaped) needed no changes at all. Full suite (260 tests)
+and `ruff check` pass. Frontend: `tsc -b` and `oxlint` both pass with no new issues.
+
+**Live verification.** Rebuilt and restarted `backend` and `web`. Since this session's
+small fixture catalogs have no naturally-occurring intra-retailer ambiguity anymore (every
+product name is now unique per retailer, following #6/#7's real-data fixes), a temporary
+second bread product was inserted directly into the running database for verification
+only (`TEST-BREAD-2`, not committed to any fixture file) to create a genuine
+single-retailer ambiguity, then removed again after. Confirmed end-to-end over the real
+`/chat` API: requesting `"לחם"` (bread) produced `options_by_retailer` containing
+*only* `"shufersal"` (Rami Levy's own single real candidate auto-resolved silently, exactly
+as designed) with both Shufersal options carrying their real price; resuming with
+`{"shufersal": "לחם קל פרוס"}` produced a Shufersal cart using that exact chosen
+product and a Rami Levy cart using its own, independently auto-resolved product — genuine
+per-retailer independence, confirmed via real backend/DB, not fakes. Also verified in an
+actual Chromium browser (Playwright, `http://localhost:3000`) against the real running
+`web` container: the clarification card rendered only the Shufersal group with prices
+next to each option, selecting one highlighted it without affecting anything else, the
+Confirm button was disabled until a selection existed, and confirming produced the
+expected two-retailer comparison — Shufersal showing the chosen product, Rami Levy
+showing its own auto-resolved one, with a correct real price-difference "Save" badge.
+
+## CP9 follow-up #9 — ingredient translation replaced with a static, human-curated dictionary (2026-08-08)
+
+**The decision.** The LLM-fallback + persistent-DB-cache translation mechanism from
+follow-up #4 was replaced outright with a static, pre-built English → Hebrew ingredient
+dictionary (`app/agent/data/ingredient_hebrew_translations.csv`, ~3.4k Spoonacular
+ingredient names with a human-curated Hebrew supermarket search term each). The LLM is
+never called for this anymore — an ingredient missing from the dictionary keeps its own
+English name, is flagged unresolved, and is logged, rather than falling back to a
+network/model call. This removes an entire class of failure mode (LLM/DB unavailability,
+model hallucinating a wrong Hebrew term) in exchange for a fixed, auditable vocabulary
+that only grows when the dictionary file itself is updated.
+
+**Getting the source data in cleanly — a real, non-obvious blocker.** The dictionary was
+first provided pasted directly into the conversation; its Hebrew column turned out to be
+irreversibly corrupted (double-layer mojibake with genuine byte loss — `\xd7\xd7` where
+distinct Hebrew letters should be — confirmed by attempting the standard
+UTF-8-decoded-as-Latin-1 reversal and finding it didn't round-trip cleanly). Rather than
+guess-repair ~3,400 Hebrew grocery terms (exactly the class of risk follow-ups #5–#8
+existed to eliminate), the user was asked for the original file directly; it existed on
+disk (`~/Downloads/ingredients-hebrew-search-terms.csv`, genuine UTF-8 with BOM,
+semicolon-delimited) and was copied into the repo from there instead of trusted from the
+paste.
+
+**Implementation.**
+- `app/agent/ingredient_dictionary.py` (new) — `load_ingredient_dictionary(path)` parses
+  the CSV once into an `english_name -> hebrew_search_term` dict (keyed
+  lowercased/stripped); `translate_ingredient(dictionary, english_name)` looks a name up
+  and returns a normalized `{english_name, hebrew_search_name, resolved}` object —
+  `resolved: False` (with a logged warning) when nothing matches, never a raised
+  exception, never an LLM call.
+- `app/agent/nodes/get_recipe_ingredients.py` rewritten to call `translate_ingredient`
+  directly instead of the old cache-then-LLM flow; each item now also carries
+  `english_name`/`translation_resolved` alongside the existing `name`/`display_name`/
+  `search_name` fields (`ParsedItem` in `app/agent/state.py` gained both), so the
+  original English name and resolution status survive into every downstream node for
+  debugging, not just the Hebrew search term.
+- `app/api/dependencies.py` loads the dictionary once via `load_ingredient_dictionary()`
+  inside `get_agent_app()`, which is itself `@lru_cache`'d — the ~3.4k-row CSV is parsed
+  exactly once per process, at effective application startup, and passed into
+  `build_graph`'s new `ingredient_dictionary` parameter (defaults to `{}` for callers,
+  e.g. grocery-list-only tests, that have no reason to supply one).
+- **Fully removed, not just bypassed:** `app/agent/ingredient_translation.py` (the LLM
+  module), the `IngredientTranslation` DB model/repository/seed data
+  (`app/db/models.py`/`app/db/repositories.py`), and the
+  `get_ingredient_translations`/`save_ingredient_translations` MCP tools
+  (`mcp_servers/supermarket_mcp/`) and client methods (`app/agent/mcp_clients.py`) —
+  this entire apparatus existed only to serve the now-removed LLM-fallback path, so
+  keeping it around unused would just be dead code.
+
+**Tests.** `tests/agent/test_ingredient_dictionary.py` (new): a found ingredient resolves
+to its dictionary term; a missing one keeps its English name, is flagged unresolved, and
+logs a warning (via `caplog`) rather than raising; case/whitespace normalization; CSV
+parsing from a small fixture file; and a real-file smoke test (`> 1000` entries, spot
+checks `tomato`/`milk`/`pasta`). `tests/agent/test_get_recipe_ingredients.py` rewritten
+for the node-level behavior: found vs. unresolved ingredients, `english_name` always
+preserved regardless of resolution, and an empty dictionary leaving everything unresolved
+without crashing. All DB/MCP-contract tests for the removed cache were deleted rather
+than adapted. Recipe-flow graph tests (`test_graph_recipe_happy_path.py`,
+`test_recipe_quantity_propagation.py`) that depend on "eggs"/"tomatoes" resolving to
+Hebrew now pass an explicit, small `TEST_INGREDIENT_DICTIONARY`
+(`tests/agent/fakes.py`) rather than depending on the real ~3.4k-entry file's exact
+contents — keeps those tests self-contained and stable if the real dictionary changes.
+
+**Live verification.** Rebuilt and restarted `backend`/`supermarket-mcp`. A real "Miso
+Cream Pasta" request end-to-end: `garlic`→`שום`, `olive oil`→`שמן זית`, `onion`→`בצל`,
+`shiso leaves`→`עלים שיסו`, and `pasta`→`פסטה` all resolved correctly (pasta matched a
+real catalog product by item_code exactly as in follow-up #6); `miso paste` and
+`mushroom` have no dictionary entry for those exact phrases and correctly fell back to
+their English names with a logged warning (`docker compose logs backend`), never an LLM
+call — confirmed directly inside the running container that `translate_ingredient`
+reproduces the same resolved/unresolved split. The remaining "missing" ingredients in the
+cart comparison are this local dev catalog simply not stocking matching products — a
+catalog-completeness gap, not a translation problem, same distinction already established
+in follow-up #4.

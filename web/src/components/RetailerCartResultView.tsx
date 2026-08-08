@@ -1,10 +1,67 @@
 import { ShoppingCart, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
-import type { RetailerCartResult } from '@/api'
-import { formatRetailerName } from '@/format'
+import type { RetailerCartItemResult, RetailerCartResult } from '@/api'
+import { formatQuantity, formatRetailerName } from '@/format'
 
 interface RetailerCartResultViewProps {
   result: RetailerCartResult
+}
+
+function AddedItem({ item }: { item: RetailerCartItemResult }) {
+  // requested_quantity is set for any item with a real requested amount — a recipe
+  // ingredient, or a weekly-shop-profile item sized for that profile's household (e.g.
+  // 0.5 kg tomatoes for one person, 1 kg for a family). Shows what was actually asked
+  // for alongside what ended up in the cart — e.g. a retailer's own weight increment can
+  // round "400 g" up to "0.5 kg"; this is a successful, expected adjustment, not an
+  // error, so it's shown as plain detail rather than a warning even when the two differ.
+  if (item.requested_quantity != null) {
+    return (
+      <li className="flex items-center justify-between gap-2">
+        <span className="truncate">{item.name}</span>
+        <span className="shrink-0 text-right text-xs text-zinc-500">
+          <span className="block">Requested: {formatQuantity(item.requested_quantity, item.requested_unit)}</span>
+          <span className="block font-medium text-emerald-700">
+            Added to cart: {formatQuantity(item.cart_quantity ?? item.quantity_confirmed ?? 0, item.cart_unit)}
+          </span>
+        </span>
+      </li>
+    )
+  }
+
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <span className="truncate">{item.name}</span>
+      <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
+        Added × {item.quantity_confirmed ?? '?'}
+      </Badge>
+    </li>
+  )
+}
+
+function FailedItem({ item }: { item: RetailerCartItemResult }) {
+  // A structured "we couldn't determine a safe conversion" result (e.g. recipe asked
+  // for "2 units" of something this retailer only sells by weight) — deliberately not
+  // styled as a hard red error, since nothing was guessed wrong: the system correctly
+  // declined to invent a conversion, and the user may just need to add this one by hand.
+  if (item.status === 'quantity_conversion_required') {
+    return (
+      <li className="flex items-center justify-between gap-2">
+        <span className="truncate">{item.name}</span>
+        <Badge variant="secondary" className="bg-amber-100 text-amber-800 hover:bg-amber-100">
+          Needs manual check — requested {formatQuantity(item.requested_quantity ?? 0, item.requested_unit)}
+        </Badge>
+      </li>
+    )
+  }
+
+  return (
+    <li className="flex items-center justify-between gap-2">
+      <span className="truncate">{item.name}</span>
+      <Badge variant="secondary" className="bg-red-100 text-red-700 hover:bg-red-100">
+        {item.reason ?? item.status}
+      </Badge>
+    </li>
+  )
 }
 
 export function RetailerCartResultView({ result }: RetailerCartResultViewProps) {
@@ -29,12 +86,7 @@ export function RetailerCartResultView({ result }: RetailerCartResultViewProps) 
       {result.added.length > 0 && (
         <ul className="space-y-1 text-sm text-zinc-600">
           {result.added.map((item) => (
-            <li key={item.item_code} className="flex items-center justify-between gap-2">
-              <span className="truncate">{item.name}</span>
-              <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
-                Added × {item.quantity_confirmed ?? '?'}
-              </Badge>
-            </li>
+            <AddedItem key={item.item_code} item={item} />
           ))}
         </ul>
       )}
@@ -42,12 +94,7 @@ export function RetailerCartResultView({ result }: RetailerCartResultViewProps) 
       {result.failed.length > 0 && (
         <ul className="space-y-1 text-sm text-zinc-500">
           {result.failed.map((item) => (
-            <li key={item.item_code} className="flex items-center justify-between gap-2">
-              <span className="truncate">{item.name}</span>
-              <Badge variant="secondary" className="bg-red-100 text-red-700 hover:bg-red-100">
-                {item.reason ?? item.status}
-              </Badge>
-            </li>
+            <FailedItem key={item.item_code} item={item} />
           ))}
         </ul>
       )}

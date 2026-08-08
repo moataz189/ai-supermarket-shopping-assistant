@@ -3,7 +3,17 @@ from typing import Literal, TypedDict
 
 class ParsedItem(TypedDict, total=False):
     name: str
-    display_name: str  # localized label; only set for recipe-derived items (CP7)
+    display_name: str  # user-facing label in this conversation's own language; only set
+    # for recipe-derived items (CP7)
+    search_name: str  # catalog search query — always tried in Hebrew when a translation
+    # exists, independent of the conversation's language (the real catalog is Hebrew-only
+    # regardless); only set for recipe-derived items (CP9 follow-up)
+    english_name: str  # the canonical English ingredient name as returned by Spoonacular
+    # — preserved alongside search_name for debugging/future improvements (CP9 follow-up,
+    # 2026-08-08: static-dictionary translation); only set for recipe-derived items
+    translation_resolved: bool  # whether english_name was found in the static Hebrew
+    # ingredient dictionary (app/agent/ingredient_dictionary.py) — False means
+    # search_name fell back to english_name unresolved; only set for recipe-derived items
     quantity: float | None
     unit: str  # only set for recipe-derived items (CP7) — grocery-list items have none
 
@@ -44,7 +54,11 @@ class AgentState(TypedDict, total=False):
     chosen_recipe: ChosenRecipe | None
     dietary_conflicts: list[str]              # item names with no dietary-compliant option
     item_candidates: dict[str, dict[str, list[dict]]]  # item name -> retailer -> candidates
-    resolved_choices: dict[str, str]          # item name -> resolved label
+    resolved_choices: dict[str, dict[str, str]]  # item name -> retailer -> resolved label
+    # (CP9 follow-up, 2026-08-08 — previously item name -> a single label shared across
+    # every retailer; a retailer's own product name can genuinely differ from another
+    # retailer's for "the same" grocery item, so each retailer's own resolution is kept
+    # independent — see resolve_items.py/resolve_ambiguity.py/build_retailer_cart.py)
     pending_clarification_item: str | None
     retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
     chosen_retailer: str | None

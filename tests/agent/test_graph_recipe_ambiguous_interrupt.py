@@ -3,7 +3,11 @@ from langgraph.types import Command
 
 from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
-from tests.agent.fakes import FakeLLM, FakeRecipeClient, FakeSupermarketDataClient
+from tests.agent.fakes import (
+    FakeLLM,
+    FakeRecipeClient,
+    FakeSupermarketDataClient,
+)
 
 
 def _grocery_client_for_pasta():
@@ -45,7 +49,9 @@ async def test_two_recipe_matches_with_no_exact_title_interrupts_then_resume_pro
         },
     )
     client = _grocery_client_for_pasta()
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t1"}}
 
     result = await app.ainvoke({"raw_message": "pasta for 2"}, config=config)
@@ -92,7 +98,9 @@ async def test_single_search_result_auto_selects_without_interrupt():
             ("rami_levy", "R-EGG"): {"unit_price": 9.0, "price": 9.0},
         },
     )
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t2"}}
 
     result = await app.ainvoke({"raw_message": "shakshuka for 4"}, config=config)
@@ -137,7 +145,9 @@ async def test_exact_title_match_among_multiple_candidates_auto_selects_without_
             ("rami_levy", "R-EGG"): {"unit_price": 9.0, "price": 9.0},
         },
     )
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t3"}}
 
     result = await app.ainvoke({"raw_message": "Shakshuka for 4"}, config=config)

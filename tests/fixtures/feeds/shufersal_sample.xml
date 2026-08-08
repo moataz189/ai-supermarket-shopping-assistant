@@ -99,15 +99,20 @@
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus />
     </Item>
+    <!-- ItemCode/ItemName below are a REAL Shufersal barcode + product name (confirmed
+         live, 2026-08-08), unlike this fixture's other fabricated item codes — a fake
+         code here previously caused retailer_cart_mcp's Shufersal adapter to add an
+         unrelated real product to a real cart when its item_code search found nothing.
+         See docs/plan/08-playwright-cart-automation.md's CP9 follow-up #5. -->
     <Item>
       <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
-      <ItemCode>7290000000001</ItemCode>
+      <ItemCode>7296073011224</ItemCode>
       <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
       <ItemType>1</ItemType>
-      <ItemName>פסטה פנה 500 גרם</ItemName>
+      <ItemName>פסטה פוסילי 500 גרם</ItemName>
       <ManufactureName>ברילה</ManufactureName>
       <ManufactureCountry>IT</ManufactureCountry>
-      <ManufactureItemDescription>פסטה פנה 500 גרם</ManufactureItemDescription>
+      <ManufactureItemDescription>פסטה פוסילי 500 גרם</ManufactureItemDescription>
       <UnitQty>גרם</UnitQty>
       <Quantity>500.00</Quantity>
       <UnitOfMeasure>100 גרם</UnitOfMeasure>
@@ -115,6 +120,30 @@
       <QtyInPackage>1</QtyInPackage>
       <ItemPrice>8.90</ItemPrice>
       <UnitOfMeasurePrice>1.78</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus />
+    </Item>
+    <!-- Second pasta product (fabricated test code, like this fixture's other
+         placeholder entries — not a real barcode) added deliberately (2026-08-08) so
+         "pasta" is genuinely ambiguous at Shufersal, to exercise the per-retailer
+         ambiguity-resolution UI (CP9 follow-up #8) with real, persistent fixture data
+         instead of a one-off manual DB insert. -->
+    <Item>
+      <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
+      <ItemCode>7290000000005</ItemCode>
+      <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
+      <ItemType>1</ItemType>
+      <ItemName>פסטה ספגטי 500 גרם</ItemName>
+      <ManufactureName>ברילה</ManufactureName>
+      <ManufactureCountry>IT</ManufactureCountry>
+      <ManufactureItemDescription>פסטה ספגטי 500 גרם</ManufactureItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>500.00</Quantity>
+      <UnitOfMeasure>100 גרם</UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1</QtyInPackage>
+      <ItemPrice>7.50</ItemPrice>
+      <UnitOfMeasurePrice>1.50</UnitOfMeasurePrice>
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus />
     </Item>

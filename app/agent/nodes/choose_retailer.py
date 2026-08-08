@@ -1,5 +1,7 @@
 from langgraph.types import interrupt
 
+from app.agent.recipe_info import recipe_info
+
 
 async def choose_retailer(state):
     carts = state["retailer_carts"]
@@ -22,5 +24,9 @@ async def choose_retailer(state):
             {"id": "rami_levy", "label": "Use Rami Levy Online"},
             {"id": "decline", "label": "Neither — just show me this"},
         ],
+        # Shown before the user has picked a retailer, so a recipe's actual requested
+        # quantities are visible up front instead of only inferable from the chosen
+        # cart afterward (spec: show quantities before/alongside the comparison).
+        "recipe": recipe_info(state),
     })
     return {"chosen_retailer": answer if answer in ("shufersal", "rami_levy") else None}

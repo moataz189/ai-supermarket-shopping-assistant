@@ -8,11 +8,14 @@ import { ClarificationCard } from '@/components/clarification/ClarificationCard'
 import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
 import { RetailerCartResultView } from '@/components/RetailerCartResultView'
+import { RecipeIngredientsView } from '@/components/RecipeIngredientsView'
 import { WarningsList } from './WarningsList'
+import { formatRetailerName } from '@/format'
 
 interface MessageThreadProps {
   turns: Turn[]
   onSelectOption: (turnId: string, optionId: string, label: string) => void
+  onSelectMultipleOption: (turnId: string, answersByRetailer: Record<string, string>, displayLabel: string) => void
   onRetry: (turnId: string) => void
 }
 
@@ -22,7 +25,7 @@ function leadText(status: string): string {
     : "Here's your comparison:"
 }
 
-export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadProps) {
+export function MessageThread({ turns, onSelectOption, onSelectMultipleOption, onRetry }: MessageThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -60,22 +63,29 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
             )
           }
 
-          const { response, answeredOptionId } = turn
+          const { response, answeredOptionId, answeredByRetailer } = turn
           const clarification = response.clarification
 
           if (clarification && clarification.reason === 'retailer_choice' && clarification.carts) {
             const carts = clarification.carts
             return (
-              <div key={turn.id} className="flex justify-start">
-                <RetailerComparison
-                  carts={carts}
-                  options={clarification.options}
-                  answeredOptionId={answeredOptionId}
-                  onChoose={(optionId) => {
-                    const label = clarification.options.find((o) => o.id === optionId)?.label ?? optionId
-                    onSelectOption(turn.id, optionId, label)
-                  }}
-                />
+              <div key={turn.id} className="flex flex-col gap-3">
+                {clarification.recipe && (
+                  <div className="flex justify-start">
+                    <RecipeIngredientsView recipe={clarification.recipe} />
+                  </div>
+                )}
+                <div className="flex justify-start">
+                  <RetailerComparison
+                    carts={carts}
+                    options={clarification.options}
+                    answeredOptionId={answeredOptionId}
+                    onChoose={(optionId) => {
+                      const label = clarification.options.find((o) => o.id === optionId)?.label ?? optionId
+                      onSelectOption(turn.id, optionId, label)
+                    }}
+                  />
+                </div>
               </div>
             )
           }
@@ -86,9 +96,16 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
                 <ClarificationCard
                   clarification={clarification}
                   answeredOptionId={answeredOptionId}
+                  answeredByRetailer={answeredByRetailer}
                   onSelect={(optionId) => {
                     const label = clarification.options.find((o) => o.id === optionId)?.label ?? optionId
                     onSelectOption(turn.id, optionId, label)
+                  }}
+                  onSelectMultiple={(answersByRetailer) => {
+                    const displayLabel = Object.entries(answersByRetailer)
+                      .map(([retailer, label]) => `${formatRetailerName(retailer)}: ${label}`)
+                      .join(', ')
+                    onSelectMultipleOption(turn.id, answersByRetailer, displayLabel)
                   }}
                 />
               </div>
@@ -129,6 +146,11 @@ export function MessageThread({ turns, onSelectOption, onRetry }: MessageThreadP
             return (
               <div key={turn.id} className="flex flex-col gap-3">
                 <AssistantBubble>{leadText(response.status)}</AssistantBubble>
+                {response.recipe && (
+                  <div className="flex justify-start">
+                    <RecipeIngredientsView recipe={response.recipe} />
+                  </div>
+                )}
                 <div className="flex justify-start">
                   <RetailerComparison carts={response.carts} chosenRetailer={response.chosen_retailer} />
                 </div>

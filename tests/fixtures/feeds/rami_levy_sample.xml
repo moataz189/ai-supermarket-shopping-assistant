@@ -94,14 +94,18 @@
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus>1</ItemStatus>
     </Item>
+    <!-- ItemNm below is a REAL, exact Rami Levy product name (confirmed live,
+         2026-08-08) — this adapter matches by exact name only (the real site exposes no
+         item_code), so it must match a live product's alt text byte-for-byte, not just
+         "look right". See docs/plan/08-playwright-cart-automation.md's CP9 follow-up #5. -->
     <Item>
       <PriceUpdateDate>2026-08-01 09:05:21</PriceUpdateDate>
-      <ItemCode>300001</ItemCode>
+      <ItemCode>7290117769690</ItemCode>
       <ItemType>1</ItemType>
-      <ItemNm>פסטה פנה 500 גרם</ItemNm>
-      <ManufacturerName>ברילה</ManufacturerName>
-      <ManufactureCountry>IT</ManufactureCountry>
-      <ManufacturerItemDescription>פסטה פנה 500 גרם</ManufacturerItemDescription>
+      <ItemNm>פסטה פוזילי 500 גרם מותג רמי לוי</ItemNm>
+      <ManufacturerName>רמי לוי</ManufacturerName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufacturerItemDescription>פסטה פוזילי 500 גרם מותג רמי לוי</ManufacturerItemDescription>
       <UnitQty>גרם</UnitQty>
       <Quantity>500</Quantity>
       <UnitOfMeasure>100 גרם  </UnitOfMeasure>
@@ -109,6 +113,29 @@
       <QtyInPackage>1.0000</QtyInPackage>
       <ItemPrice>7.90</ItemPrice>
       <UnitOfMeasurePrice>1.58</UnitOfMeasurePrice>
+      <AllowDiscount>1</AllowDiscount>
+      <ItemStatus>1</ItemStatus>
+    </Item>
+    <!-- Second pasta product (fabricated test code, like this fixture's other
+         placeholder entries — not a real barcode) added deliberately (2026-08-08) so
+         "pasta" is genuinely ambiguous at Rami Levy too, to exercise the per-retailer
+         ambiguity-resolution UI (CP9 follow-up #8) with real, persistent fixture data
+         instead of a one-off manual DB insert. -->
+    <Item>
+      <PriceUpdateDate>2026-08-01 09:05:21</PriceUpdateDate>
+      <ItemCode>300005</ItemCode>
+      <ItemType>1</ItemType>
+      <ItemNm>פסטה ספגטי 500 גרם מותג רמי לוי</ItemNm>
+      <ManufacturerName>רמי לוי</ManufacturerName>
+      <ManufactureCountry>IL</ManufactureCountry>
+      <ManufacturerItemDescription>פסטה ספגטי 500 גרם מותג רמי לוי</ManufacturerItemDescription>
+      <UnitQty>גרם</UnitQty>
+      <Quantity>500</Quantity>
+      <UnitOfMeasure>100 גרם  </UnitOfMeasure>
+      <bIsWeighted>0</bIsWeighted>
+      <QtyInPackage>1.0000</QtyInPackage>
+      <ItemPrice>6.90</ItemPrice>
+      <UnitOfMeasurePrice>1.38</UnitOfMeasurePrice>
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus>1</ItemStatus>
     </Item>
