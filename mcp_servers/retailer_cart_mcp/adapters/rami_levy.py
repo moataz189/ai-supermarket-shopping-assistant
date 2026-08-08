@@ -84,6 +84,20 @@ by both the weighed and whole-unit click paths so neither can hang on it.
 No login/checkout/payment method exists here or anywhere in this adapter, by construction.
 No bot-evasion, CAPTCHA-bypass, or fingerprint-spoofing is implemented — a detected block is
 always reported and the run stops gracefully; it is never worked around.
+
+**Item_code-based search added (CP9 follow-up, 2026-08-08), correcting an earlier
+untested assumption.** This adapter previously never searched by `item_code` at all,
+reasoning that "the real site doesn't expose our fixture-style item_code on search
+tiles" — true for the *fixture's* fake codes, but never actually tested against a real
+barcode. Root-caused live, after a real item's full-exact-name search still returned
+`not_found` even with a correct, live-verified product name in the fixture: searching
+Rami Levy's real site with that same product's *full* name as the query doesn't reliably
+surface that exact tile among the results (shorter/partial queries do) — a
+search-relevance quirk distinct from anything about matching itself. Separately
+confirmed live that querying with a *real barcode* returns only that product's tile(s),
+while a nonexistent one returns zero — so `search_and_match` now tries item_code first,
+exactly like Shufersal's adapter, sidestepping the full-name query problem entirely for
+any item with a real code.
 """
 
 from urllib.parse import quote
@@ -168,17 +182,35 @@ class RamiLevyAdapter:
         return None
 
     async def search_and_match(self, page: Page, item_name: str, item_code: str) -> MatchResult | None:
-        # The real site doesn't expose our fixture-style item_code on search tiles (its own
-        # barcode is only reachable via the product image's URL), so item_code-based
-        # matching isn't attempted here — name matching is the only reliable path.
-        #
-        # Only an *exact* name match is accepted (no "just take the first search result"
-        # fallback — removed CP9 follow-up, 2026-08-08). Confirmed live on Shufersal's
-        # adapter (same fallback pattern) that guessing the top, non-deterministically
-        # ranked search result for a real product name can add a genuinely wrong product
-        # to a real cart — our local catalog's item_name comes from a fixture-derived
-        # dataset, not the live site's own data, so a legitimately unmatched item is
-        # possible and must be reported as such, not guessed at.
+        # Searches by item_code FIRST when we have one (CP9 follow-up, 2026-08-08) —
+        # confirmed live that the real site's own search DOES support an exact barcode
+        # lookup: querying a real product's barcode returns only that product's tile(s);
+        # querying a nonexistent/fake one returns zero results. This corrects an earlier,
+        # untested assumption in this adapter ("the real site doesn't expose item_code on
+        # search tiles") that turned out to be an artifact of testing with fixture-style
+        # fake codes, not an actual site limitation — the real barcode simply wasn't being
+        # tried. As with Shufersal's equivalent code-first search, a non-empty result for
+        # a barcode query is trusted directly (no further name check): the site itself is
+        # doing the disambiguation, the same way a real barcode scanner would.
+        if item_code:
+            await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_code)}")
+            await _wait_for_tiles_hydrated(page)
+            code_images = page.locator(".product-img img[alt]")
+            if await code_images.count() > 0:
+                tile = code_images.first.locator(
+                    "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' big-plus-minus ')][1]"
+                )
+                return MatchResult(item_code=item_code, locator=tile, matched_by="item_code")
+
+        # Falls back to a name search if code search finds nothing, or there is no
+        # item_code to search by at all — but only an *exact* name match is accepted (no
+        # "just take the first search result" fallback — removed CP9 follow-up,
+        # 2026-08-08). Confirmed live on Shufersal's adapter (same fallback pattern) that
+        # guessing the top, non-deterministically ranked search result for a real product
+        # name can add a genuinely wrong product to a real cart — our local catalog's
+        # item_name comes from a fixture-derived dataset, not the live site's own data,
+        # so a legitimately unmatched item is possible and must be reported as such, not
+        # guessed at.
         await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")
         await _wait_for_tiles_hydrated(page)
         # `alt` lives on the `<img>` nested inside `.product-img`, not on that div itself
