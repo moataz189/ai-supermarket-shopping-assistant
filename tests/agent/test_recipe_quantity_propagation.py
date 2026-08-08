@@ -40,20 +40,23 @@ def _shakshuka_recipe_client():
 
 
 def _grocery_client_for_scaled_ingredients():
+    # Keyed by the Hebrew search_name (see get_recipe_ingredients.py) — the catalog
+    # search always tries Hebrew when a translation exists, regardless of the
+    # conversation's own language, since the real catalog is Hebrew-only.
     candidates = {
-        ("eggs", "shufersal"): [{"item_code": "S-EGG", "name": "Eggs Large 12pk", "price": 12.0}],
+        ("ביצים", "shufersal"): [{"item_code": "S-EGG", "name": "Eggs Large 12pk", "price": 12.0}],
         ("Eggs Large 12pk", "shufersal"): [
             {"item_code": "S-EGG", "name": "Eggs Large 12pk", "price": 12.0}
         ],
-        ("eggs", "rami_levy"): [{"item_code": "R-EGG", "name": "Eggs Large 12pk", "price": 11.0}],
+        ("ביצים", "rami_levy"): [{"item_code": "R-EGG", "name": "Eggs Large 12pk", "price": 11.0}],
         ("Eggs Large 12pk", "rami_levy"): [
             {"item_code": "R-EGG", "name": "Eggs Large 12pk", "price": 11.0}
         ],
-        ("tomatoes", "shufersal"): [{"item_code": "S-TOM", "name": "Tomatoes 1kg", "price": 8.0}],
+        ("עגבניה", "shufersal"): [{"item_code": "S-TOM", "name": "Tomatoes 1kg", "price": 8.0}],
         ("Tomatoes 1kg", "shufersal"): [
             {"item_code": "S-TOM", "name": "Tomatoes 1kg", "price": 8.0}
         ],
-        ("tomatoes", "rami_levy"): [{"item_code": "R-TOM", "name": "Tomatoes 1kg", "price": 7.0}],
+        ("עגבניה", "rami_levy"): [{"item_code": "R-TOM", "name": "Tomatoes 1kg", "price": 7.0}],
         ("Tomatoes 1kg", "rami_levy"): [
             {"item_code": "R-TOM", "name": "Tomatoes 1kg", "price": 7.0}
         ],

@@ -14,6 +14,14 @@ def make_get_recipe_ingredients(recipe_client):
             {
                 "name": i["name"],
                 "display_name": localize_ingredient_name(i["name"], language),
+                # The real Shufersal/Rami Levy catalog is Hebrew-only regardless of what
+                # language *this conversation* is in (confirmed live: an English-language
+                # recipe request still needs "tomatoes" searched for as "עגבניה", not
+                # "tomatoes") — so the catalog search query always tries Hebrew, entirely
+                # independent of `display_name`, which is user-facing and follows the
+                # conversation's own language. Falls back to the canonical English name
+                # (matching display_name's own fallback) when no translation exists.
+                "search_name": localize_ingredient_name(i["name"], "he"),
                 "quantity": i["amount"],
                 "unit": i["unit"],
             }

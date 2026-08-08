@@ -726,3 +726,32 @@ the ingredient list already showed "עגבניה" (localized), and — the actua
 fixed — Rami Levy's cart now shows it as a genuinely **matched** line
 (`product_name: "עגבניה"`, `requested_quantity: 14.0`, `requested_unit: "ounces"`)
 instead of appearing in `missing_items` as it did before this fix.
+
+**Follow-up (same day): the fix above wasn't actually enough.** A second live report
+showed the identical symptom for an *English*-language request ("pasta for 4 people" →
+the same Ratatouille Pasta) — every ingredient, including tomatoes, still showed
+`missing`. Root cause: the first fix made the search query `item.get("display_name") or
+name`, but `display_name` follows *this conversation's* own detected language
+(`get_recipe_ingredients.py`'s `language = parsed.get("language", "en")`) — for an
+English conversation it evaluates to the plain English name again, since
+`INGREDIENT_TRANSLATIONS` has no `"en"` entries by design (there's nothing to translate
+English *to* English). The real catalog's language has nothing to do with the
+conversation's language, so the search needs a query that's Hebrew *whenever a
+translation exists*, full stop — independent of `display_name`.
+
+Fixed by adding a distinct `search_name` field (`get_recipe_ingredients.py`), always
+computed as `localize_ingredient_name(name, "he")` regardless of the conversation's
+`language`, and used ahead of `display_name` everywhere the catalog is actually queried
+(`resolve_items.py`, `build_retailer_cart.py`). `display_name` keeps its original,
+purely cosmetic role (what the user sees, in their own language); `search_name` is what
+the catalog is actually queried with, always. `ParsedItem` (`app/agent/state.py`) documents
+both fields' distinct purposes explicitly to head off the same mix-up in the future.
+
+New test `test_english_recipe_request_still_searches_the_catalog_by_hebrew_name` uses the
+same Hebrew-only fake catalog as the earlier Hebrew test, but drives an English-language
+conversation instead — asserting `parsed_request["language"] == "en"` and
+`display_name == "tomatoes"` first, to prove it's genuinely exercising the English path,
+then asserting tomatoes still resolve to the matched `"עגבניה"` line. Re-verified live
+(rebuilt `backend` container): "pasta for 4 people" → Ratatouille Pasta now matches
+tomatoes against the real catalog (`product_name: "עגבניה"`) instead of reporting all
+12 ingredients missing, as it did before this follow-up.
