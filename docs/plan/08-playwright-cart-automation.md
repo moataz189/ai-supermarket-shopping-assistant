@@ -683,3 +683,46 @@ reported as `quantity_conversion_required` instead of silently guessed — a liv
 confirmation that the "never guess an incompatible conversion" safety net works
 correctly even when this document's own authored assumption about a product's selling
 method turns out to be wrong.
+
+## CP9 follow-up #3 — Hebrew recipe requests search by localized name (2026-08-08)
+
+**The bug.** A real user report: asking for a recipe in Hebrew whose ingredients include
+tomatoes was told "עגבניה" (tomato) is missing/not found, even though it genuinely exists
+in the real catalog. Root cause: `resolve_items.py` and `build_retailer_cart.py` both
+searched the catalog using an item's *canonical* name — Spoonacular's English ingredient
+name for recipe items (e.g. `"tomatoes"`) — never the localized `display_name`
+(`"עגבניה"`) that `get_recipe_ingredients.py` already computes via
+`localize_ingredient_name` (CP7) purely for UI display. Against the Hebrew-only real
+catalog (see this document's earlier note on `resolve_weekly_shop_profile.py`), an
+English query never matches even when the equivalent Hebrew product genuinely exists — so
+every recipe ingredient with a Hebrew translation was silently mismatched whenever the
+conversation itself was in Hebrew (an English-language conversation's `display_name`
+already equals the canonical name in practice, since `INGREDIENT_TRANSLATIONS` only has
+`"he"` entries, so this bug was invisible there).
+
+**A second bug found alongside it**: `INGREDIENT_TRANSLATIONS["tomatoes"]["he"]` was the
+*plural* `"עגבניות"`, but — exactly like `resolve_weekly_shop_profile.py`'s own
+documented gotcha — the real catalog lists fresh produce in *singular* form (`"עגבניה"`),
+and the search is substring-based, so even a correctly-localized-but-plural query would
+still have silently missed. Fixed to the singular form.
+
+**The fix.** Both `resolve_items.py` (`_candidates_by_retailer` and the exact-name check
+inside `_resolve_item`) and `build_retailer_cart.py`'s own independent re-search now use
+`item.get("display_name") or name` as the search query — the localized term when one
+exists, falling back unchanged to the canonical name otherwise. Grocery-list items (typed
+directly by the user, already in their own language) have no `display_name` at all, so
+this is a no-op for them — confirmed by the full existing suite passing unmodified except
+for the one test asserting the old, buggy plural translation. `missing_items` entries for
+recipe-derived items now also display the localized name, for the same reason.
+
+**Tests.** `tests/agent/test_graph_recipe_happy_path.py` gained
+`test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_english` — a fake
+catalog with candidates registered *only* under the Hebrew term (no `"tomatoes"` key at
+all), so it only passes if the localized name is genuinely what gets searched for.
+
+**Manual verification (live, via a rebuilt `backend` container, real catalog).** A real
+Hebrew recipe request ("מתכון לפסטה ל-4 אנשים" → Ratatouille Pasta) that needs tomatoes:
+the ingredient list already showed "עגבניה" (localized), and — the actual bug being
+fixed — Rami Levy's cart now shows it as a genuinely **matched** line
+(`product_name: "עגבניה"`, `requested_quantity: 14.0`, `requested_unit: "ounces"`)
+instead of appearing in `missing_items` as it did before this fix.

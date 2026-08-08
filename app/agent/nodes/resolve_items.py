@@ -31,17 +31,20 @@ def _unique_labels(candidates_by_retailer: dict[str, list[dict]]) -> list[dict]:
 
 
 async def _resolve_item(
-    name: str, candidates: list[dict], brand_preference: str | None, selection_preference: str,
+    search_name: str, candidates: list[dict], brand_preference: str | None, selection_preference: str,
 ) -> tuple[str | None, bool]:
-    """`candidates` is the deduped, cross-retailer set from `_unique_labels`. Returns
-    (resolved_label_or_None, still_ambiguous). A resolved label is a product name used as
-    the search query in each retailer's own catalog later — not an item_code."""
+    """`search_name` is the (possibly localized) query actually used to find `candidates`
+    — see `resolve_items`'s own `search_name` for why this isn't always the item's
+    canonical name. `candidates` is the deduped, cross-retailer set from
+    `_unique_labels`. Returns (resolved_label_or_None, still_ambiguous). A resolved label
+    is a product name used as the search query in each retailer's own catalog later — not
+    an item_code."""
     if not candidates:
-        return name, False  # nothing matched anywhere; let per-retailer building report it missing
+        return search_name, False  # nothing matched anywhere; let per-retailer building report it missing
     if len(candidates) == 1:
         return candidates[0]["name"], False
 
-    exact = [c for c in candidates if c["name"].strip().lower() == name.strip().lower()]
+    exact = [c for c in candidates if c["name"].strip().lower() == search_name.strip().lower()]
     if len(exact) == 1:
         return exact[0]["name"], False
 
@@ -69,8 +72,18 @@ def make_resolve_items(client):
             name = item["name"]
             if name in resolved_choices or name in dietary_conflicts:
                 continue
+            # Recipe-derived items carry an English canonical `name` (Spoonacular) but a
+            # real, localized `display_name` when one exists (see
+            # get_recipe_ingredients.py) — searching with the English name against the
+            # Hebrew-only real catalog (see resolve_weekly_shop_profile.py's docstring)
+            # never matches even when the equivalent product genuinely exists (confirmed
+            # live: a recipe needing tomatoes was reported missing despite "עגבניה"
+            # existing in the catalog). Grocery-list items have no display_name at all
+            # (already typed in the user's own language), so this is a no-op fallback
+            # for them — `name` itself is used unchanged.
+            search_name = item.get("display_name") or name
             if name not in item_candidates:
-                item_candidates[name] = await _candidates_by_retailer(client, name, forbidden)
+                item_candidates[name] = await _candidates_by_retailer(client, search_name, forbidden)
             by_retailer = item_candidates[name]
             unique = _unique_labels(by_retailer)
 
@@ -84,7 +97,7 @@ def make_resolve_items(client):
                 unique = _unique_labels(by_retailer)
 
             label, still_ambiguous = await _resolve_item(
-                name, unique,
+                search_name, unique,
                 parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
             )
             if label is not None:

@@ -29,7 +29,12 @@ def make_build_retailer_cart(retailer: str, client):
 
         for item in parsed["items"]:
             name = item["name"]
-            label = state["resolved_choices"].get(name, name)
+            # Same fallback as resolve_items.py: prefer the actual matched catalog
+            # product name (resolved_choices) when resolve_items already found one;
+            # otherwise fall back to the localized display_name (not the English
+            # canonical name) so this independent re-search still has a real chance of
+            # matching the Hebrew-only catalog — see resolve_items.py's own comment.
+            label = state["resolved_choices"].get(name) or item.get("display_name") or name
             candidates = await client.search_product(label, retailer)
             if forbidden:
                 compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
@@ -39,7 +44,7 @@ def make_build_retailer_cart(retailer: str, client):
                 candidates = compliant
             if not candidates:
                 reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
-                missing.append({"name": name, "reason": reason})
+                missing.append({"name": item.get("display_name") or name, "reason": reason})
                 continue
 
             best = min(candidates, key=lambda c: c["price"])

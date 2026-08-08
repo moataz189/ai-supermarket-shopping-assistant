@@ -107,7 +107,46 @@ async def test_recipe_display_fields_localized_while_canonical_names_stay_englis
     assert by_name["eggs"]["name"] == "eggs"
     assert by_name["eggs"]["display_name"] == "ביצים"
     assert by_name["tomatoes"]["name"] == "tomatoes"
-    assert by_name["tomatoes"]["display_name"] == "עגבניות"
+    # Singular, matching the real catalog's convention — not "עגבניות" (plural), which a
+    # substring search against the real Hebrew-only catalog never matches (see
+    # app/agent/i18n.py's INGREDIENT_TRANSLATIONS comment).
+    assert by_name["tomatoes"]["display_name"] == "עגבניה"
+
+
+async def test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_english():
+    # Real user report: asking for a recipe in Hebrew that needs tomatoes reported them
+    # missing even though "עגבניה" genuinely exists in the catalog — root-caused to
+    # resolve_items/build_retailer_cart searching with the item's English canonical name
+    # ("tomatoes") instead of its localized display_name ("עגבניה"), which the Hebrew-only
+    # real catalog never matches. This fake catalog deliberately has *no* "tomatoes"-keyed
+    # entry at all — only "עגבניה" — so this only passes if the localized name is what's
+    # actually searched for.
+    llm = FakeLLM(
+        ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=4, items=[])
+    )
+    recipe_client = _shakshuka_recipe_client()
+    candidates = {
+        ("ביצים", "shufersal"): [{"item_code": "S-EGG", "name": "ביצים", "price": 12.0}],
+        ("ביצים", "rami_levy"): [{"item_code": "R-EGG", "name": "ביצים", "price": 11.0}],
+        ("עגבניה", "shufersal"): [{"item_code": "S-TOM", "name": "עגבניה", "price": 8.0}],
+        ("עגבניה", "rami_levy"): [{"item_code": "R-TOM", "name": "עגבניה", "price": 7.0}],
+    }
+    prices = {
+        ("shufersal", "S-EGG"): {"unit_price": 12.0, "price": 12.0},
+        ("shufersal", "S-TOM"): {"unit_price": 8.0, "price": 8.0},
+        ("rami_levy", "R-EGG"): {"unit_price": 11.0, "price": 11.0},
+        ("rami_levy", "R-TOM"): {"unit_price": 7.0, "price": 7.0},
+    }
+    client = FakeSupermarketDataClient(candidates, prices)
+    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    config = {"configurable": {"thread_id": "t1b"}}
+
+    result = await app.ainvoke({"raw_message": "אני רוצה שקשוקה"}, config=config)
+
+    shufersal = result["retailer_carts"]["shufersal"]
+    assert shufersal["missing_items"] == []
+    tomato_line = next(line for line in shufersal["items"] if line["item_code"] == "S-TOM")
+    assert tomato_line["product_name"] == "עגבניה"
 
 
 async def test_recipe_display_falls_back_to_english_when_no_localization_available():
