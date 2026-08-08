@@ -3,7 +3,11 @@ from langgraph.types import Command
 
 from app.agent.graph import build_graph
 from app.agent.nodes.parse_request import ParsedRequestSchema
-from tests.agent.fakes import FakeLLM, FakeRecipeClient, FakeSupermarketDataClient
+from tests.agent.fakes import (
+    FakeLLM,
+    FakeRecipeClient,
+    FakeSupermarketDataClient,
+)
 
 
 def _shakshuka_recipe_client():
@@ -59,7 +63,9 @@ async def test_recipe_request_resolves_to_scaled_ingredients_and_builds_both_car
     )
     recipe_client = _shakshuka_recipe_client()
     client = _grocery_client_for_scaled_ingredients()
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t1"}}
 
     result = await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
@@ -94,7 +100,9 @@ async def test_recipe_display_fields_localized_while_canonical_names_stay_englis
     )
     recipe_client = _shakshuka_recipe_client()
     client = _grocery_client_for_scaled_ingredients()
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t2"}}
 
     result = await app.ainvoke({"raw_message": "אני רוצה שקשוקה ל-4"}, config=config)
@@ -141,7 +149,9 @@ async def test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_
         ("rami_levy", "R-TOM"): {"unit_price": 7.0, "price": 7.0},
     }
     client = FakeSupermarketDataClient(candidates, prices)
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t1b"}}
 
     result = await app.ainvoke({"raw_message": "אני רוצה שקשוקה"}, config=config)
@@ -178,7 +188,9 @@ async def test_english_recipe_request_still_searches_the_catalog_by_hebrew_name(
         ("rami_levy", "R-TOM"): {"unit_price": 7.0, "price": 7.0},
     }
     client = FakeSupermarketDataClient(candidates, prices)
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t1c"}}
 
     result = await app.ainvoke({"raw_message": "shakshuka please"}, config=config)
@@ -210,7 +222,9 @@ async def test_recipe_display_falls_back_to_english_when_no_localization_availab
         },
     )
     client = FakeSupermarketDataClient({}, {})
-    app = build_graph(client, llm, MemorySaver(), recipe_client=recipe_client)
+    app = build_graph(
+        client, llm, MemorySaver(), recipe_client=recipe_client,
+    )
     config = {"configurable": {"thread_id": "t3"}}
 
     result = await app.ainvoke({"raw_message": "קובה חלבי בבקשה"}, config=config)

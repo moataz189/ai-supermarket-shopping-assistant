@@ -36,14 +36,18 @@ def build_graph(client, llm, checkpointer, recipe_client=None, retailer_cart_cli
     """`recipe_client` is optional so grocery-list-only callers (including CP4's existing
     tests) don't need to supply one — it's only ever used on the recipe branch, reached
     solely when `request_type == "recipe"`. `retailer_cart_client` is optional the same
-    way — it's only ever used once the user has actually chosen a retailer (CP4)."""
+    way — it's only ever used once the user has actually chosen a retailer (CP4).
+    `client` (the Supermarket-Data client) is reused by get_recipe_ingredients too, for
+    its persistent ingredient-translation cache (CP9 follow-up) — that cache lives behind
+    the Supermarket-Data MCP, not a direct DB connection, since the backend/agent process
+    has no direct SQLite access at all (app/api/Dockerfile excludes app/db by design)."""
     graph = StateGraph(AgentState)
     graph.add_node("parse_request", make_parse_request(llm))
     graph.add_node("general_chat", general_chat)
     graph.add_node("search_recipes", make_search_recipes(recipe_client))
     graph.add_node("recipe_not_found", recipe_not_found)
     graph.add_node("resolve_recipe_ambiguity", resolve_recipe_ambiguity)
-    graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client))
+    graph.add_node("get_recipe_ingredients", make_get_recipe_ingredients(recipe_client, llm, client))
     graph.add_node("resolve_weekly_shop_profile", resolve_weekly_shop_profile)
     graph.add_node("resolve_items", make_resolve_items(client))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)

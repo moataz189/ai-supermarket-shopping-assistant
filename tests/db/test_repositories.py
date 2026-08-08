@@ -5,7 +5,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db.models import Base, RetailerProduct
-from app.db.repositories import ProductRepository
+from app.db.repositories import (
+    IngredientTranslationRepository,
+    ProductRepository,
+    canonicalize_ingredient_name,
+    seed_ingredient_translations,
+)
 
 
 @pytest.fixture
@@ -73,3 +78,47 @@ def test_get_product_scoped_to_retailer(session):
 
     assert shufersal_product.name == "מלפפון"
     assert rami_levy_product.name == "מלפפון אחר"
+
+
+def test_canonicalize_ingredient_name_normalizes_case_and_whitespace():
+    assert canonicalize_ingredient_name("  Heavy Cream  ") == "heavy cream"
+
+
+def test_ingredient_translation_save_then_get(session):
+    repo = IngredientTranslationRepository(session)
+
+    repo.save_many([("pasta", "pasta", "פסטה")])
+    found = repo.get_many(["pasta", "unknown"])
+
+    assert set(found) == {"pasta"}
+    assert found["pasta"].original_name == "pasta"
+    assert found["pasta"].search_name_he == "פסטה"
+
+
+def test_ingredient_translation_get_many_empty_input_returns_empty_dict(session):
+    repo = IngredientTranslationRepository(session)
+    assert repo.get_many([]) == {}
+
+
+def test_seed_ingredient_translations_populates_known_terms(session):
+    seed_ingredient_translations(session)
+
+    repo = IngredientTranslationRepository(session)
+    found = repo.get_many(["tomatoes", "onion", "milk"])
+
+    assert found["tomatoes"].search_name_he == "עגבניה"  # singular, not "עגבניות"
+    assert found["onion"].search_name_he == "בצל"
+    assert found["milk"].search_name_he == "חלב"
+
+
+def test_seed_ingredient_translations_is_idempotent_and_never_overwrites(session):
+    seed_ingredient_translations(session)
+    repo = IngredientTranslationRepository(session)
+    # Simulate a manually-corrected entry — re-seeding must never clobber it.
+    tomatoes_row = repo.get_many(["tomatoes"])["tomatoes"]
+    tomatoes_row.search_name_he = "עגבניה מיוחדת"
+    session.commit()
+
+    seed_ingredient_translations(session)
+
+    assert repo.get_many(["tomatoes"])["tomatoes"].search_name_he == "עגבניה מיוחדת"

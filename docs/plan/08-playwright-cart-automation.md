@@ -755,3 +755,92 @@ then asserting tomatoes still resolve to the matched `"עגבניה"` line. Re-v
 (rebuilt `backend` container): "pasta for 4 people" → Ratatouille Pasta now matches
 tomatoes against the real catalog (`product_name: "עגבניה"`) instead of reporting all
 12 ingredients missing, as it did before this follow-up.
+
+## CP9 follow-up #4 — LLM-based ingredient translation with a persistent cache (2026-08-08)
+
+**The bug.** Even with the Hebrew-search fix above, a real "Miso Cream Pasta" request
+still showed pasta as missing — `INGREDIENT_TRANSLATIONS` (`app/agent/i18n.py`) is a
+**6-entry hardcoded dict** (milk, oat milk, eggs, tomatoes, onion, olive oil). Any
+ingredient outside that tiny list — pasta, garlic, mushroom, heavy cream, miso paste,
+shiso leaves — has no Hebrew translation at all and falls straight back to English,
+regardless of the earlier fixes. A fixed table can never cover every ingredient a recipe
+might call for; this needed a real, scalable translation mechanism.
+
+**The design (explicit product decision).** Not a bigger static table, and not calling
+an LLM to translate every ingredient on every request either. Instead: a **persistent
+cache**, keyed by a normalized ("canonical") English name, storing the original name (for
+debugging) alongside the resolved Hebrew search term; the LLM is used **only** to fill a
+genuine cache miss — a name never seen before — and its result is written back so that
+exact ingredient is never sent to the LLM again, by anyone, ever.
+
+**Where the cache lives — a real architectural correction made mid-implementation.** The
+first attempt put `IngredientTranslationRepository`/`SessionLocal` calls directly in
+`app/agent/nodes/get_recipe_ingredients.py`. This is **wrong** and was caught by actually
+rebuilding and starting the `backend` container: `app/api/Dockerfile` deliberately does
+not copy `app/db` into that image at all —
+```
+# Backend image — only app/agent, app/api, app/dietary. No mcp_servers code (the backend
+# only talks to MCP servers over HTTP, via app/agent/mcp_clients.py), no app/db (the
+# backend never touches SQLite directly — that's supermarket-mcp's job), no app/ingestion.
+```
+— a real, deliberate separation this project already had (the agent talks to product data
+only via the Supermarket-Data MCP over HTTP), and the new code silently violated it,
+something no unit test caught since none of them actually build the Docker image.
+**Corrected**: `get_ingredient_translations`/`save_ingredient_translations` are two new
+tools on the *existing* `supermarket-mcp` server (the one service with direct SQLite
+access), called from `get_recipe_ingredients.py` through the same `client`
+(`McpSupermarketDataClient`) already used for product search elsewhere in the graph —
+`app/agent/` still never touches a database connection directly. `IngredientTranslation`
+(the DB model), `IngredientTranslationRepository`, and `SEED_INGREDIENT_TRANSLATIONS`
+(`app/db/repositories.py`) stay exactly where DB-layer code already lives; only *how they're
+reached* from the agent changed.
+
+**The cache/LLM/write-back flow**, in `get_recipe_ingredients.py`'s `_resolve_search_names`:
+1. Ask `supermarket-mcp`'s `get_ingredient_translations` for every ingredient name at once.
+2. Whatever's missing from the response goes to the LLM in a single batched call
+   (`app/agent/ingredient_translation.py`'s `translate_ingredients_to_hebrew` — same
+   `with_structured_output(..., include_raw=True)` pattern as `parse_request.py`, including
+   the same raw-JSON fallback for the openai.gpt-oss-20b-1:0-on-Bedrock quirk of skipping
+   the tool call).
+3. Successful translations are written back via `save_ingredient_translations` — that
+   specific ingredient never reaches the LLM again, for any future recipe, by any user.
+4. If the whole cache service is unreachable (network error, etc.), falls back to the
+   original small static `INGREDIENT_TRANSLATIONS` table rather than an empty result — an
+   outage degrades to "no worse than before this feature", not "no translation at all".
+
+**Startup/seeding**: `supermarket-mcp` is the one service that runs `init_db()` +
+`seed_ingredient_translations()` (in its own `if __name__ == "__main__":` block —
+deliberately *not* at module import time, so importing the module in tests never touches a
+real DB file as a side effect) — pre-populating the same 6 already-verified terms so they
+never need an LLM call at all. `app/api/main.py`'s lifespan was reverted back to not
+touching any DB (it never should have).
+
+**Tests.** `tests/db/test_repositories.py` (repository CRUD, seeding idempotency, never
+overwriting a corrected entry), `tests/agent/test_ingredient_translation.py` (the LLM batch
+call in isolation — batching, partial responses, the raw-content fallback, never raising),
+`tests/mcp/test_supermarket_mcp_contract.py` (the two new tools directly, including a
+same-batch-duplicate-name test that caught a real dedup bug — a naive `dict()` comprehension
+keeps the *last* duplicate, not the first, silently overwriting a correct translation with a
+wrong one from the same request), and `tests/agent/test_get_recipe_ingredients.py`
+(cache-hit-never-calls-the-LLM, cache-miss-then-cached-for-next-time, mixed hit/miss,
+case/whitespace normalization sharing one entry, and the static-fallback-on-outage path,
+each using `_BoomLLM`/`_BoomClient` fakes that raise if actually invoked, to *prove* a given
+code path never reaches them). `FakeSupermarketDataClient` (`tests/agent/fakes.py`) grew
+matching `get_ingredient_translations`/`save_ingredient_translations` methods, seeded by
+default with the same `SEED_INGREDIENT_TRANSLATIONS` the real service seeds, so existing
+recipe tests get realistic cache-hit behavior without a real DB or LLM call.
+
+**Manual verification (live, via rebuilt `backend` **and** `supermarket-mcp` containers,
+real Bedrock LLM, real catalog).** "Miso Cream Pasta" (garlic, heavy cream, miso paste,
+mushroom, olive oil, pasta, onion, shiso leaves — none but olive oil/onion previously
+translatable at all): every never-before-seen ingredient was translated correctly on the
+first request (garlic→שום, heavy cream→שמנת מתוקה, miso paste→מיסו, mushroom→פטרייה,
+pasta→פסטה, shiso leaves→שיזו) and pasta matched a real catalog product
+(`"פסטה פנה 500 גרם"`) instead of showing missing, as it did before this fix — confirmed
+directly against the DB: all six now sit in `ingredient_translations`, seed rows and
+LLM-translated rows side by side. A repeat request for the same recipe completed in 0.52s
+versus the first request's 2.86s — confirming the cache, not a fresh LLM call, served the
+second request. (The remaining "missing" ingredients on that recipe are a separate, this
+local dev catalog simply not carrying matching products for garlic/mushroom/etc. — a
+catalog-completeness gap, not a translation problem; onion/olive oil translate correctly
+via the seed but likewise aren't in this specific local catalog.)

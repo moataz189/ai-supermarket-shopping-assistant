@@ -7,6 +7,8 @@ from mcp.client.streamable_http import streamablehttp_client
 class SupermarketDataClient(Protocol):
     async def search_product(self, query: str, retailer: str) -> list[dict]: ...
     async def get_product_price(self, retailer: str, item_code: str) -> dict | None: ...
+    async def get_ingredient_translations(self, names: list[str]) -> dict[str, str]: ...
+    async def save_ingredient_translations(self, entries: list[dict]) -> None: ...
 
 
 class McpSupermarketDataClient:
@@ -33,6 +35,13 @@ class McpSupermarketDataClient:
         # `SearchProductResponse`, which comes back unwrapped (see `search_product` above).
         result = await self._call("get_product_price", {"retailer": retailer, "item_code": item_code})
         return (result or {}).get("result")
+
+    async def get_ingredient_translations(self, names: list[str]) -> dict[str, str]:
+        result = await self._call("get_ingredient_translations", {"names": names})
+        return (result or {}).get("translations", {})
+
+    async def save_ingredient_translations(self, entries: list[dict]) -> None:
+        await self._call("save_ingredient_translations", {"entries": entries})
 
 
 class RecipeClient(Protocol):
