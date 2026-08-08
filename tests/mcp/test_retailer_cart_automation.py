@@ -119,12 +119,16 @@ async def test_matched_by_exact_name_fallback_when_item_code_unknown(mock_site):
     assert result["added"][0]["item_code"] == "UNKNOWN-CODE"  # echoes the request
 
 
-async def test_matched_by_name_fallback_when_no_exact_match(mock_site):
+async def test_no_exact_match_is_reported_as_not_found(mock_site):
+    # The "just take the first search result" fallback was removed (CP9 follow-up,
+    # 2026-08-08) after it added a real, wrong product to a real cart live — a search hit
+    # with no exact name match must be reported honestly as not_found, not guessed at.
     items = [{"name": "Milk", "item_code": "UNKNOWN-CODE-2", "quantity": 1}]
 
     result = await prepare_cart_for_retailer(MockRetailerAdapter(mock_site), items)
 
-    assert result["added"][0]["matched_by"] == "name_fallback"
+    assert result["added"] == []
+    assert result["failed"][0]["status"] == "not_found"
 
 
 async def test_captcha_stops_gracefully_and_preserves_added_items(mock_site):

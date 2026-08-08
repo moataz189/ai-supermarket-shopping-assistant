@@ -42,7 +42,7 @@ class UnsupportedSiteFlowError(Exception):
 class MatchResult:
     item_code: str
     locator: Any
-    matched_by: str  # "item_code" | "exact_name" | "name_fallback"
+    matched_by: str  # "item_code" | "exact_name"
 
 
 class RetailerAdapter(Protocol):

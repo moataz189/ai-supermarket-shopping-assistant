@@ -171,6 +171,14 @@ class RamiLevyAdapter:
         # The real site doesn't expose our fixture-style item_code on search tiles (its own
         # barcode is only reachable via the product image's URL), so item_code-based
         # matching isn't attempted here — name matching is the only reliable path.
+        #
+        # Only an *exact* name match is accepted (no "just take the first search result"
+        # fallback — removed CP9 follow-up, 2026-08-08). Confirmed live on Shufersal's
+        # adapter (same fallback pattern) that guessing the top, non-deterministically
+        # ranked search result for a real product name can add a genuinely wrong product
+        # to a real cart — our local catalog's item_name comes from a fixture-derived
+        # dataset, not the live site's own data, so a legitimately unmatched item is
+        # possible and must be reported as such, not guessed at.
         await page.goto(f"{BASE_URL}/he/online/search?q={quote(item_name)}")
         await _wait_for_tiles_hydrated(page)
         # `alt` lives on the `<img>` nested inside `.product-img`, not on that div itself
@@ -190,10 +198,7 @@ class RamiLevyAdapter:
                 tile = img.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' big-plus-minus ')][1]")
                 return MatchResult(item_code=item_code, locator=tile, matched_by="exact_name")
 
-        first_tile = images.first.locator(
-            "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' big-plus-minus ')][1]"
-        )
-        return MatchResult(item_code=item_code, locator=first_tile, matched_by="name_fallback")
+        return None
 
     async def add_to_cart(
         self, page: Page, match: MatchResult, quantity: float, unit: str | None = None

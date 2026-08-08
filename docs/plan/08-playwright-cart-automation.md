@@ -844,3 +844,65 @@ second request. (The remaining "missing" ingredients on that recipe are a separa
 local dev catalog simply not carrying matching products for garlic/mushroom/etc. — a
 catalog-completeness gap, not a translation problem; onion/olive oil translate correctly
 via the seed but likewise aren't in this specific local catalog.)
+
+## CP9 follow-up #5 — removed the `name_fallback` "guess the first result" match, after it added a real wrong item to a real cart (2026-08-08)
+
+**The incident.** With the ingredient-translation fix above live, a real "Miso Cream
+Pasta" request via the actual chat UI reported `pasta` matched to `"פסטה פנה 500 גרם"`
+and added to the Shufersal cart. The user checked their real cart and found
+`רביولי גבינות` (cheese ravioli) instead — not pasta at all. Verified live (fresh,
+authoritative `cartStatus` read from the real search endpoint, not a possibly-stale
+browser tab — the already-known [[shufersal_stale_tab_gotcha]] was ruled out first): the
+ravioli really was in the account cart, qty 4, with nothing pasta-related in it.
+
+**Root cause.** This local environment's entire product catalog is seeded from
+`tests/fixtures/feeds/{shufersal,rami_levy}_sample.xml` — small, hand-made test fixtures
+(`app/ingestion/run.py`'s `load_fixtures`), not a real retailer price feed. Their item
+codes are fabricated (e.g. `7290000000001` for "pasta penne", not a real Shufersal
+barcode) and their `ItemName` strings don't necessarily match the live site's own product
+names exactly. `ShufersalAdapter.search_and_match` (and `RamiLevyAdapter`'s equivalent)
+already searched by item_code first, then by exact name — both already known-safe paths
+— but had a third fallback, present since CP8 and already flagged as an open,
+undecided risk in `docs/plan/09-containerization.md`'s Risks section after a first,
+hypothetical-looking incident during CP9 testing: when neither matched, **just take the
+first search result**. Confirmed live (re-querying the real Shufersal search endpoint
+with the exact fixture code/name from this incident): the fake code returns zero
+results, and the fixture name returns real, on-topic pasta products but none with an
+exactly matching name — so the adapter fell through to "first result", and whatever the
+site's (not necessarily stable) search ranking put first that time was cheese ravioli.
+
+**The fix — explicit product decision, not a silent code change.** Given the choice
+between two options (stop the fallback entirely and report unmatched items honestly, vs.
+keep it and just discuss further), the decision was to **remove the fallback outright**
+in both `shufersal.py` and `rami_levy.py` (and the mirroring `mock_retailer_adapter.py`
+used by the test suite) — `search_and_match` now returns `None` when item_code and exact
+name matching both fail, which `automation.py`'s `prepare_cart_for_retailer` already
+turns into a clean `status: "not_found"` failed-item entry (no changes needed there — this
+path already existed and was already tested). The trade-off is explicit: more items may
+now show as "missing" instead of being auto-added, in exchange for never again silently
+adding a real, wrong product to a real cart. `MatchResult.matched_by` and
+`CartItemResult.matched_by`'s type narrowed from `"item_code" | "exact_name" |
+"name_fallback"` to just the first two.
+
+**Recovery.** The wrong item was removed from the real cart before the code fix, using
+the same `window.ajaxCall('/cart/add', ...)` mechanism the adapter itself uses, with
+`qty: 0` for the confirmed product code — verified via a fresh follow-up search that
+`cartStatus.inCart` became `false`.
+
+**Tests.** `tests/mcp/test_shufersal_adapter.py`'s
+`test_search_and_match_falls_back_to_first_result` became
+`test_search_and_match_returns_none_when_no_exact_name_match` (asserts `None`, not a
+guessed match). `tests/mcp/test_retailer_cart_automation.py`'s
+`test_matched_by_name_fallback_when_no_exact_match` became
+`test_no_exact_match_is_reported_as_not_found` (asserts `added == []` and
+`failed[0]["status"] == "not_found"`). No test exercised Rami Levy's equivalent fallback
+directly, so none needed updating there beyond the adapter code itself. Full suite (258
+tests) and `ruff check` both pass after the change.
+
+**Live verification.** Rebuilt and restarted the `retailer-cart-mcp` container. Re-ran the
+exact request that previously produced the wrong add (`name="פסטה פנה 500 גרם",
+item_code="7290000000001"`, the real fixture-derived values) directly against
+`prepare_cart_for_retailer` with the real Shufersal session: `added: []`, `failed: [{...,
+"status": "not_found"}]` — no product added at all, honestly reported as unmatched.
+Re-confirmed via a fresh authoritative cart-status query that the real account cart still
+has no ravioli and nothing incorrectly added.
