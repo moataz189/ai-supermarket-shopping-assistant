@@ -70,15 +70,23 @@ def test_rami_levy_wrong_store_id_raises():
 
 
 def test_both_retailers_carry_matching_pasta_and_milk_items():
-    """Both fixtures deliberately carry a few identically-named staples (pasta, milk) so
-    a single grocery-list request can find a real match at both retailers — the original
-    5+5 items had no overlap at all, which made cross-retailer comparison untestable."""
+    """Both fixtures deliberately carry a pasta and a milk product findable by the same
+    Hebrew search term at each retailer, so a single grocery-list request can find a real
+    match at both — the original 5+5 items had no overlap at all, which made
+    cross-retailer comparison untestable.
+
+    Product *names* don't need to be byte-identical across retailers (CP9 follow-up,
+    2026-08-08: each retailer's own real product naming is used instead — see
+    tests/fixtures/feeds/{shufersal,rami_levy}_sample.xml's item_code/name comments), only
+    that the shared search term (app/db/repositories.py's ILIKE substring match, driven by
+    IngredientTranslation's search_name_he) appears in a product name at each retailer.
+    """
     shufersal_products = shufersal.parse((FIXTURES / "shufersal_sample.xml").read_bytes())
     rami_levy_products = rami_levy.parse((FIXTURES / "rami_levy_sample.xml").read_bytes())
 
     shufersal_names = {p.name for p in shufersal_products}
     rami_levy_names = {p.name for p in rami_levy_products}
-    shared = shufersal_names & rami_levy_names
 
-    assert "פסטה פנה 500 גרם" in shared
-    assert "חלב תנובה 3% 1 ליטר" in shared
+    for term in ("פסטה", "חלב"):
+        assert any(term in name for name in shufersal_names), f"no shufersal product matches {term!r}"
+        assert any(term in name for name in rami_levy_names), f"no rami_levy product matches {term!r}"

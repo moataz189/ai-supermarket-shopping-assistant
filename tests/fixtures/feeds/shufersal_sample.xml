@@ -99,15 +99,20 @@
       <AllowDiscount>1</AllowDiscount>
       <ItemStatus />
     </Item>
+    <!-- ItemCode/ItemName below are a REAL Shufersal barcode + product name (confirmed
+         live, 2026-08-08), unlike this fixture's other fabricated item codes — a fake
+         code here previously caused retailer_cart_mcp's Shufersal adapter to add an
+         unrelated real product to a real cart when its item_code search found nothing.
+         See docs/plan/08-playwright-cart-automation.md's CP9 follow-up #5. -->
     <Item>
       <PriceUpdateTime>2026-08-01T06:23:00</PriceUpdateTime>
-      <ItemCode>7290000000001</ItemCode>
+      <ItemCode>7296073011224</ItemCode>
       <LastSaleDateTime>2026-07-30T00:00:00</LastSaleDateTime>
       <ItemType>1</ItemType>
-      <ItemName>פסטה פנה 500 גרם</ItemName>
+      <ItemName>פסטה פוסילי 500 גרם</ItemName>
       <ManufactureName>ברילה</ManufactureName>
       <ManufactureCountry>IT</ManufactureCountry>
-      <ManufactureItemDescription>פסטה פנה 500 גרם</ManufactureItemDescription>
+      <ManufactureItemDescription>פסטה פוסילי 500 גרם</ManufactureItemDescription>
       <UnitQty>גרם</UnitQty>
       <Quantity>500.00</Quantity>
       <UnitOfMeasure>100 גרם</UnitOfMeasure>
