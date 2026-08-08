@@ -13,7 +13,7 @@ def test_shufersal_parses_real_sample_feed():
 
     products = shufersal.parse(xml_bytes)
 
-    assert len(products) == 9
+    assert len(products) == 10
     assert all(p.store_id == "413" for p in products)
     by_code = {p.item_code: p for p in products}
     grams_item = by_code["10181040009"]
@@ -43,7 +43,7 @@ def test_rami_levy_parses_real_sample_feed():
 
     products = rami_levy.parse(xml_bytes)
 
-    assert len(products) == 9
+    assert len(products) == 10
     assert all(p.store_id == "39" for p in products)
     by_code = {p.item_code: p for p in products}
     tomato = by_code["100"]
