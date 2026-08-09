@@ -5,6 +5,7 @@ from app.agent.nodes.choose_retailer import choose_retailer
 from app.agent.nodes.finalize import finalize
 from app.agent.nodes.general_chat import general_chat
 from app.agent.nodes.get_recipe_ingredients import make_get_recipe_ingredients
+from app.agent.nodes.no_ingredients_to_buy import no_ingredients_to_buy
 from app.agent.nodes.parse_request import make_parse_request
 from app.agent.nodes.prepare_retailer_cart import make_prepare_retailer_cart
 from app.agent.nodes.recipe_not_found import recipe_not_found
@@ -13,6 +14,10 @@ from app.agent.nodes.resolve_items import make_resolve_items
 from app.agent.nodes.resolve_recipe_ambiguity import resolve_recipe_ambiguity
 from app.agent.nodes.resolve_weekly_shop_profile import resolve_weekly_shop_profile
 from app.agent.nodes.search_recipes import make_search_recipes, route_after_search_recipes
+from app.agent.nodes.select_recipe_ingredients import (
+    route_after_ingredient_selection,
+    select_recipe_ingredients,
+)
 from app.agent.state import AgentState
 
 
@@ -54,6 +59,8 @@ def build_graph(
         "get_recipe_ingredients",
         make_get_recipe_ingredients(recipe_client, ingredient_dictionary or {}),
     )
+    graph.add_node("select_recipe_ingredients", select_recipe_ingredients)
+    graph.add_node("no_ingredients_to_buy", no_ingredients_to_buy)
     graph.add_node("resolve_weekly_shop_profile", resolve_weekly_shop_profile)
     graph.add_node("resolve_items", make_resolve_items(client))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)
@@ -78,7 +85,13 @@ def build_graph(
     )
     graph.add_edge("recipe_not_found", END)
     graph.add_edge("resolve_recipe_ambiguity", "get_recipe_ingredients")
-    graph.add_edge("get_recipe_ingredients", "resolve_items")
+    graph.add_edge("get_recipe_ingredients", "select_recipe_ingredients")
+    graph.add_conditional_edges(
+        "select_recipe_ingredients",
+        route_after_ingredient_selection,
+        ["resolve_items", "no_ingredients_to_buy"],
+    )
+    graph.add_edge("no_ingredients_to_buy", END)
     graph.add_conditional_edges(
         "resolve_items", route_after_resolve, ["resolve_ambiguity", "build_shufersal_cart"]
     )

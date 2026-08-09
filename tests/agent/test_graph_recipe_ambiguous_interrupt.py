@@ -62,10 +62,16 @@ async def test_two_recipe_matches_with_no_exact_title_interrupts_then_resume_pro
     assert {opt["id"] for opt in payload["options"]} == {"10", "11"}
     assert {opt["label"] for opt in payload["options"]} == {"Chicken Pasta Bake", "Creamy Pasta"}
 
-    final = await app.ainvoke(Command(resume="10"), config=config)
+    recipe_chosen = await app.ainvoke(Command(resume="10"), config=config)
 
-    assert final["chosen_recipe_id"] == 10
-    assert final["chosen_recipe"]["title"] == "Chicken Pasta Bake"
+    assert recipe_chosen["chosen_recipe_id"] == 10
+    assert recipe_chosen["chosen_recipe"]["title"] == "Chicken Pasta Bake"
+    # CP10: pauses for ingredient selection before ever touching the supermarket —
+    # resuming with everything selected reproduces this test's pre-CP10 behavior.
+    assert recipe_chosen["__interrupt__"][0].value["reason"] == "recipe_ingredient_selection"
+
+    final = await app.ainvoke(Command(resume=["pasta"]), config=config)
+
     assert "__interrupt__" in final  # now at choose_retailer
     carts = final["__interrupt__"][0].value["carts"]
     assert carts["shufersal"]["items"][0]["item_code"] == "S-PASTA"

@@ -70,19 +70,24 @@ async def test_recipe_request_resolves_to_scaled_ingredients_and_builds_both_car
     )
     config = {"configurable": {"thread_id": "t1"}}
 
-    result = await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
+    interrupted = await app.ainvoke({"raw_message": "shakshuka for 8"}, config=config)
 
-    assert result["recipe_ambiguous"] is False
-    assert result["chosen_recipe"]["id"] == 1
-    assert result["chosen_recipe"]["title"] == "Shakshuka"
-    assert result["chosen_recipe"]["servings"] == 8
+    assert interrupted["recipe_ambiguous"] is False
+    assert interrupted["chosen_recipe"]["id"] == 1
+    assert interrupted["chosen_recipe"]["title"] == "Shakshuka"
+    assert interrupted["chosen_recipe"]["servings"] == 8
 
-    items = result["parsed_request"]["items"]
+    items = interrupted["parsed_request"]["items"]
     by_name = {i["name"]: i for i in items}
     assert by_name["eggs"]["quantity"] == 8.0
     assert by_name["eggs"]["unit"] == "large"
     assert by_name["tomatoes"]["quantity"] == 800.0
     assert by_name["tomatoes"]["unit"] == "g"
+
+    # CP10: pauses for ingredient selection before ever touching the supermarket —
+    # resuming with everything selected reproduces this test's pre-CP10 behavior.
+    assert interrupted["__interrupt__"][0].value["reason"] == "recipe_ingredient_selection"
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
 
     assert "__interrupt__" in result
     shufersal = result["retailer_carts"]["shufersal"]
@@ -158,7 +163,8 @@ async def test_hebrew_recipe_request_searches_the_catalog_by_localized_name_not_
     )
     config = {"configurable": {"thread_id": "t1b"}}
 
-    result = await app.ainvoke({"raw_message": "אני רוצה שקשוקה"}, config=config)
+    await app.ainvoke({"raw_message": "אני רוצה שקשוקה"}, config=config)
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
 
     shufersal = result["retailer_carts"]["shufersal"]
     assert shufersal["missing_items"] == []
@@ -198,14 +204,15 @@ async def test_english_recipe_request_still_searches_the_catalog_by_hebrew_name(
     )
     config = {"configurable": {"thread_id": "t1c"}}
 
-    result = await app.ainvoke({"raw_message": "shakshuka please"}, config=config)
+    interrupted = await app.ainvoke({"raw_message": "shakshuka please"}, config=config)
 
     # Sanity check this really is an English-detected conversation (the exact condition
     # that broke display_name-based search).
-    assert result["parsed_request"]["language"] == "en"
-    by_name = {i["name"]: i for i in result["parsed_request"]["items"]}
+    assert interrupted["parsed_request"]["language"] == "en"
+    by_name = {i["name"]: i for i in interrupted["parsed_request"]["items"]}
     assert by_name["tomatoes"]["display_name"] == "tomatoes"  # English — no "en" translation exists
 
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
     shufersal = result["retailer_carts"]["shufersal"]
     assert shufersal["missing_items"] == []
     tomato_line = next(line for line in shufersal["items"] if line["item_code"] == "S-TOM")
