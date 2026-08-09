@@ -19,72 +19,182 @@ async def _suggest_trade_off(client, retailer: str, most_expensive: dict) -> dic
     }
 
 
+def _label_for(name: str, item: dict, resolved_choices: dict, retailer: str) -> str:
+    # Prefer THIS retailer's own resolved catalog product name (resolved_choices is
+    # per-retailer, CP9 follow-up, 2026-08-08 — a retailer's real product name for "the
+    # same" item can genuinely differ from another retailer's); otherwise fall back to
+    # search_name — always tried in Hebrew when a translation exists, regardless of this
+    # conversation's own language, since the real catalog is Hebrew-only.
+    return (
+        resolved_choices.get(name, {}).get(retailer)
+        or item.get("search_name")
+        or item.get("display_name")
+        or name
+    )
+
+
+async def _candidates_for(
+    client, retailer: str, name: str, label: str, forbidden: set[str], dietary_conflicts: list[str],
+) -> tuple[list[dict], dict | None]:
+    """Returns (candidates, missing_entry). `missing_entry` is None when candidates were
+    found; otherwise it's the dict to append to this retailer's `missing_items`."""
+    candidates = await client.search_product(label, retailer)
+    if forbidden:
+        compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
+        if not compliant:
+            sub_query = find_substitute_query(name, forbidden)
+            compliant = await client.search_product(sub_query, retailer) if sub_query else []
+        candidates = compliant
+    if not candidates:
+        reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
+        return [], {"name": name, "reason": reason}
+    return candidates, None
+
+
+def _estimated_cost(price_info: dict, quantity: float | None, unit: str | None) -> float:
+    """Best-effort cost for one cart line honoring the item's real required quantity —
+    used only by the open-ended/weekly-profile budget-constrained selection below to
+    decide whether a candidate fits the remaining budget. `unit_price` is price per
+    gram/ml/package-unit (see app/db/repositories.py's unit_price); "kg" is the only
+    weight unit STARTER_LISTS/recipes ever attach to a grocery-list item, so a "kg"
+    request is priced via unit_price (price-per-gram) x grams requested. Any other unit
+    (or no quantity at all) is priced as a straight package-count multiple of the
+    package price, matching how a plain unit count (loaves, cartons...) is actually
+    sold."""
+    if quantity is None or unit is None:
+        return price_info["price"]
+    if unit == "kg":
+        return round(price_info["unit_price"] * quantity * 1000, 2)
+    return round(price_info["price"] * quantity, 2)
+
+
+async def _add_every_item(
+    client, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
+    dietary_conflicts: list[str],
+) -> tuple[list[dict], list[dict]]:
+    """The pre-existing behavior for explicit shopping lists and recipes: every item is
+    resolved and added regardless of budget — the user's explicit intent is never
+    silently dropped (budget-constrained selection is reserved for
+    open_ended_budget_selection carts, see _select_items_within_budget below)."""
+    lines: list[dict] = []
+    missing: list[dict] = []
+    for item in items:
+        name = item["name"]
+        label = _label_for(name, item, resolved_choices, retailer)
+        candidates, missing_entry = await _candidates_for(
+            client, retailer, name, label, forbidden, dietary_conflicts
+        )
+        if missing_entry is not None:
+            missing.append({
+                "name": item.get("display_name") or missing_entry["name"],
+                "reason": missing_entry["reason"],
+            })
+            continue
+
+        best = min(candidates, key=lambda c: c["price"])
+        price_info = await client.get_product_price(retailer, best["item_code"])
+        # `quantity`/`unit` are only ever set on recipe-derived items (CP7's
+        # get_recipe_ingredients) — None for ordinary grocery-list items. `qty` here
+        # (used only for this retailer's own price-comparison subtotal/total math)
+        # intentionally stays 1 regardless — recipe quantities are a real amount to add
+        # to the retailer's cart, not a multiplier on the comparison-view price; the
+        # retailer cart's actual add-to-cart quantity is requested_quantity/
+        # requested_unit below, threaded through prepare_retailer_cart.py.
+        lines.append({
+            "name": name,
+            "item_code": best["item_code"],
+            "product_name": best["name"],
+            "unit_price": price_info["unit_price"],
+            "qty": 1,
+            "requested_quantity": item.get("quantity"),
+            "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
+            "subtotal": price_info["price"],
+        })
+    return lines, missing
+
+
+async def _select_items_within_budget(
+    client, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
+    dietary_conflicts: list[str], budget: float,
+) -> tuple[list[dict], list[dict], float]:
+    """Only used for open_ended_budget_selection carts (a budget-only request with no
+    items, or its "custom" freeform follow-up — see resolve_weekly_shop_profile.py).
+    Walks `items` in their existing stable order (STARTER_LISTS is already curated
+    "useful/common items first" with reasonable category spread) and greedily adds each
+    item's cheapest matching candidate, using its real required quantity
+    (_estimated_cost) — skipping (never adding) any single item whose cost would push
+    the running total past `budget * 1.10`, then continuing to try the rest of the list
+    rather than stopping outright, so a handful of expensive items don't starve an
+    otherwise-affordable cart. Deterministic: no randomness, stable input order, stable
+    price-based tie-break per item (cheapest candidate wins, same as the non-budget
+    path)."""
+    allowed_max = round(budget * 1.10, 2)
+    lines: list[dict] = []
+    missing: list[dict] = []
+    running_total = 0.0
+
+    for item in items:
+        name = item["name"]
+        label = _label_for(name, item, resolved_choices, retailer)
+        candidates, missing_entry = await _candidates_for(
+            client, retailer, name, label, forbidden, dietary_conflicts
+        )
+        if missing_entry is not None:
+            missing.append({
+                "name": item.get("display_name") or missing_entry["name"],
+                "reason": missing_entry["reason"],
+            })
+            continue
+
+        best = min(candidates, key=lambda c: c["price"])
+        price_info = await client.get_product_price(retailer, best["item_code"])
+        cost = _estimated_cost(price_info, item.get("quantity"), item.get("unit"))
+
+        if round(running_total + cost, 2) > allowed_max:
+            continue  # doesn't fit within the tolerance -- skip it, keep trying the rest
+
+        running_total = round(running_total + cost, 2)
+        lines.append({
+            "name": name,
+            "item_code": best["item_code"],
+            "product_name": best["name"],
+            "unit_price": price_info["unit_price"],
+            "qty": 1,
+            "requested_quantity": item.get("quantity"),
+            "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
+            "subtotal": cost,
+        })
+
+    return lines, missing, running_total
+
+
 def make_build_retailer_cart(retailer: str, client):
     async def build_cart(state: AgentState) -> AgentState:
         parsed = state["parsed_request"]
         forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
         dietary_conflicts = state.get("dietary_conflicts", [])
-        lines: list[dict] = []
-        missing: list[dict] = []
-
-        for item in parsed["items"]:
-            name = item["name"]
-            # Prefer THIS retailer's own resolved catalog product name (resolved_choices
-            # is now per-retailer, CP9 follow-up 2026-08-08 — resolving one retailer's
-            # ambiguity must never borrow another retailer's chosen label, since the two
-            # retailers' real product names for "the same" item are frequently different
-            # strings); otherwise fall back to search_name — always tried in Hebrew when
-            # a translation exists, regardless of this conversation's own language, since
-            # the real catalog is Hebrew-only — so this independent re-search still has
-            # a real chance of matching. See resolve_items.py's own comment.
-            label = (
-                state["resolved_choices"].get(name, {}).get(retailer)
-                or item.get("search_name")
-                or item.get("display_name")
-                or name
-            )
-            candidates = await client.search_product(label, retailer)
-            if forbidden:
-                compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
-                if not compliant:
-                    sub_query = find_substitute_query(name, forbidden)
-                    compliant = await client.search_product(sub_query, retailer) if sub_query else []
-                candidates = compliant
-            if not candidates:
-                reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
-                missing.append({"name": item.get("display_name") or name, "reason": reason})
-                continue
-
-            best = min(candidates, key=lambda c: c["price"])
-            price_info = await client.get_product_price(retailer, best["item_code"])
-            # `quantity`/`unit` are only ever set on recipe-derived items (CP7's
-            # get_recipe_ingredients) — None for ordinary grocery-list/weekly-shop items,
-            # exactly the pre-existing behavior. `qty` here (used only for this
-            # retailer's own price-comparison subtotal/total/budget math) intentionally
-            # stays 1 regardless — recipe quantities are a real amount to add to the
-            # retailer's cart, not a multiplier on the comparison-view price, and scaling
-            # that math is out of scope for this fix (see docs/plan). The retailer cart's
-            # actual add-to-cart quantity is requested_quantity/requested_unit below,
-            # threaded through prepare_retailer_cart.py to the Retailer-Cart MCP, where
-            # each retailer's own selling-method/increment rules decide the real
-            # cart_quantity/cart_unit — see mcp_servers/retailer_cart_mcp/quantity.py.
-            lines.append({
-                "name": name,
-                "item_code": best["item_code"],
-                "product_name": best["name"],
-                "unit_price": price_info["unit_price"],
-                "qty": 1,
-                "requested_quantity": item.get("quantity"),
-                "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
-                "subtotal": price_info["price"],
-            })
-
-        total = sum(line["subtotal"] for line in lines)
+        resolved_choices = state["resolved_choices"]
         budget = parsed.get("budget")
-        over_budget_by = round(total - budget, 2) if budget is not None and total > budget else None
+        open_ended = state.get("open_ended_budget_selection", False)
 
-        trade_offs = []
-        if over_budget_by is not None and lines:
+        trade_offs: list[dict] = []
+        no_items_fit_budget = False
+
+        if open_ended and budget is not None:
+            lines, missing, total = await _select_items_within_budget(
+                client, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts, budget,
+            )
+            no_items_fit_budget = not lines
+        else:
+            lines, missing = await _add_every_item(
+                client, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts,
+            )
+            total = sum(line["subtotal"] for line in lines)
+
+        over_budget_by = round(total - budget, 2) if budget is not None and total > budget else None
+        allowed_max = round(budget * 1.10, 2) if budget is not None else None
+
+        if not open_ended and over_budget_by is not None and lines:
             most_expensive = max(lines, key=lambda l: l["subtotal"])
             suggestion = await _suggest_trade_off(client, retailer, most_expensive)
             if suggestion:
@@ -96,7 +206,9 @@ def make_build_retailer_cart(retailer: str, client):
             "missing_items": missing,
             "total": total,
             "budget": budget,
+            "allowed_max": allowed_max,
             "over_budget_by": over_budget_by,
+            "no_items_fit_budget": no_items_fit_budget,
             "trade_off_suggestions": trade_offs,
         }
         return {"retailer_carts": {**state.get("retailer_carts", {}), retailer: cart}}
