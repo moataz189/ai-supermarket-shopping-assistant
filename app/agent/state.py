@@ -70,6 +70,12 @@ class AgentState(TypedDict, total=False):
     # (the list every downstream node — resolve_items, build_retailer_cart — actually
     # consumes) so nothing downstream needs to know ingredient selection exists at all.
     retailer_carts: dict[str, dict]           # "shufersal"/"rami_levy" -> cart dict
+    open_ended_budget_selection: bool         # True only when items came from
+    # resolve_weekly_shop_profile.py (a budget-only request with no items, or its
+    # "custom" freeform follow-up) — tells build_retailer_cart.py to progressively
+    # select items that fit `budget * 1.10` instead of adding every item unconditionally.
+    # Absent/False for every explicit shopping list (recipe or grocery-list-with-items),
+    # which must never have requested items silently dropped for budget reasons.
     chosen_retailer: str | None
     retailer_cart_result: dict | None         # CP8's prepare_retailer_cart tool result
     warnings: list[dict]
