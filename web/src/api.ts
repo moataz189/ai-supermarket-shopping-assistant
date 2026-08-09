@@ -60,7 +60,9 @@ export interface RetailerCart {
   missing_items: Record<string, unknown>[]
   total: number
   budget: number | null
+  allowed_max: number | null
   over_budget_by: number | null
+  no_items_fit_budget: boolean
   trade_off_suggestions: Record<string, unknown>[]
   savings_vs_other?: number
 }

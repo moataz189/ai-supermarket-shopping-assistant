@@ -190,3 +190,15 @@ async def test_grocery_list_with_no_items_and_no_budget_is_unaffected_by_the_new
 
     assert "__interrupt__" in result
     assert result["__interrupt__"][0].value["reason"] == "retailer_choice"
+
+
+async def test_choosing_a_profile_marks_open_ended_budget_selection():
+    llm = FakeLLM(ParsedRequestSchema(items=[], budget=250))
+    client = FakeSupermarketDataClient({}, {})
+    app = build_graph(client, llm, MemorySaver())
+    config = {"configurable": {"thread_id": "t2e"}}
+
+    await app.ainvoke({"raw_message": "Weekly shopping under ₪250"}, config=config)
+    result = await app.ainvoke(Command(resume="basic"), config=config)
+
+    assert result["open_ended_budget_selection"] is True

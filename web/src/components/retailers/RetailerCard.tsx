@@ -13,11 +13,17 @@ interface RetailerCardProps {
 
 export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }: RetailerCardProps) {
   const name = formatRetailerName(retailer)
-  const overBudget = cart.over_budget_by != null
+  const hasBudget = cart.budget != null
+  // Only a genuine overshoot past the 10% tolerance is treated as "over budget" — a
+  // total between the requested budget and allowed_max is shown as a subtle note
+  // instead (see below), never a warning-style badge.
+  const overAllowedMax = hasBudget && cart.allowed_max != null && cart.total > cart.allowed_max
+  const overBudgetWithinTolerance = hasBudget && !overAllowedMax && cart.total > cart.budget!
   const hasSavings = cart.savings_vs_other != null && cart.savings_vs_other > 0
   // A ₪0.00 cart with missing items has nothing to compare, not a bargain — flagged
-  // clearly instead of silently looking like just a cheap/empty cart.
-  const isIncomplete = cart.total === 0 && cart.missing_items.length > 0
+  // clearly instead of silently looking like just a cheap/empty cart. A budget-only
+  // cart where nothing could fit at all (see no_items_fit_budget) gets its own message.
+  const isIncomplete = cart.total === 0 && cart.missing_items.length > 0 && !cart.no_items_fit_budget
 
   return (
     <div
@@ -39,6 +45,18 @@ export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }
 
       <p className="mt-4 text-3xl font-bold text-zinc-900">₪{cart.total.toFixed(2)}</p>
 
+      {hasBudget && (
+        <p className="mt-1 text-xs text-zinc-500">
+          Requested budget: ₪{cart.budget!.toFixed(2)}
+          {cart.allowed_max != null && <> · Allowed tolerance: up to ₪{cart.allowed_max.toFixed(2)}</>}
+        </p>
+      )}
+      {overBudgetWithinTolerance && (
+        <p className="mt-1 text-xs text-amber-600">
+          ₪{(cart.total - cart.budget!).toFixed(2)} above your target, within the allowed 10% tolerance.
+        </p>
+      )}
+
       <div className="mt-2 flex flex-wrap gap-2">
         {hasSavings && (
           <Badge variant="secondary" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">
@@ -50,19 +68,25 @@ export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }
             Incomplete cart
           </Badge>
         )}
-        {cart.budget != null && (
+        {hasBudget && (
           <Badge
             variant="secondary"
             className={
-              overBudget
+              overAllowedMax
                 ? 'bg-red-100 text-red-700 hover:bg-red-100'
                 : 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
             }
           >
-            {overBudget ? `Over budget by ₪${cart.over_budget_by!.toFixed(2)}` : 'Under budget'}
+            {overAllowedMax ? `Over budget by ₪${cart.over_budget_by!.toFixed(2)}` : 'Under budget'}
           </Badge>
         )}
       </div>
+
+      {cart.no_items_fit_budget && (
+        <p className="mt-3 text-sm text-zinc-500">
+          No suitable grocery items could be found within this budget.
+        </p>
+      )}
 
       <ul className="mt-4 space-y-1 text-sm text-zinc-600">
         {cart.items.map((line) => (
