@@ -45,6 +45,19 @@ export function RetailerComparison({
         })}
       </motion.div>
 
+      {isInteractive && (
+        <div className="mt-4 flex items-start gap-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-xs text-blue-700">
+          <span aria-hidden>ℹ️</span>
+          <p>
+            Prices shown include only the grocery items.
+            <br />
+            Delivery fees are not included and typically range between ₪30–₪40, depending on
+            the retailer, delivery area, delivery time, promotions, and minimum order
+            requirements.
+          </p>
+        </div>
+      )}
+
       {isInteractive && declineOption && (
         <button
           type="button"
