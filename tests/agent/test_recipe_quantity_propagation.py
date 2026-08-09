@@ -277,7 +277,19 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
         for retailer, prefix, price in [("shufersal", "S", 10.0 + i), ("rami_levy", "R", 9.0 + i)]:
             item_code = f"{prefix}-{i}"
             candidates[(name, retailer)] = [{"item_code": item_code, "name": name, "price": price}]
-            prices[(retailer, item_code)] = {"unit_price": price, "price": price}
+            # This request is budget-only (no explicit items), so it goes through the
+            # open-ended/weekly-profile budget-constrained selection path, which prices
+            # a "kg" item via unit_price (price PER GRAM, see
+            # app/db/repositories.py's unit_price) x grams requested rather than the raw
+            # package price -- unit_price is set here so a kg entry's estimated cost
+            # still comes out to exactly `price`, same as every plain unit-count entry,
+            # so the whole list (summing to well under this test's ₪110 allowed_max)
+            # fits exactly as intended and every item's quantity/unit is still verified.
+            if entry["unit"] == "kg":
+                unit_price = price / (entry["quantity"] * 1000)
+            else:
+                unit_price = price
+            prices[(retailer, item_code)] = {"unit_price": unit_price, "price": price}
     retailer_cart_client = FakeRetailerCartClient({"retailer": "shufersal", "added": [], "failed": [],
                                                     "blocked": False, "blocked_reason": None, "cart_url": None})
     app = build_graph(

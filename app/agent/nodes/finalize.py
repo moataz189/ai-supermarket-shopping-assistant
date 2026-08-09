@@ -13,7 +13,12 @@ def finalize(state):
     for retailer, cart in relevant_carts.items():
         if cart["missing_items"]:
             warnings.append({"code": "product_not_found", "retailer": retailer, "items": cart["missing_items"]})
-        if cart["over_budget_by"] is not None:
+        if cart["no_items_fit_budget"]:
+            warnings.append({"code": "no_items_within_budget", "retailer": retailer})
+        # A total between the requested budget and allowed_max (budget * 1.10) is within
+        # the accepted tolerance -- shown as a subtle frontend note (see RetailerCard.tsx),
+        # not a hard warning. Only a genuine overshoot past allowed_max warrants one.
+        elif cart["allowed_max"] is not None and cart["total"] > cart["allowed_max"]:
             warnings.append({"code": "budget_exceeded", "retailer": retailer, "over_budget_by": cart["over_budget_by"]})
 
     return {

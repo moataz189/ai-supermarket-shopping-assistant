@@ -151,4 +151,4 @@ async def resolve_weekly_shop_profile(state: AgentState) -> AgentState:
 
     parsed = dict(state["parsed_request"])
     parsed["items"] = items
-    return {"parsed_request": parsed}
+    return {"parsed_request": parsed, "open_ended_budget_selection": True}

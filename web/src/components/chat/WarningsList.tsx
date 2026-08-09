@@ -23,6 +23,9 @@ function formatWarning(warning: Record<string, unknown>): string {
     const overBy = Number(warning.over_budget_by)
     return `${retailer} is ₪${overBy.toFixed(2)} over budget.`
   }
+  if (code === 'no_items_within_budget') {
+    return 'No suitable grocery items could be found within this budget.'
+  }
   if (code === 'recipe_not_found') {
     return `No recipe found for "${String(warning.query)}".`
   }
