@@ -88,7 +88,11 @@ class RetailerCart(BaseModel):
     missing_items: list[dict]
     total: float
     budget: float | None
+    allowed_max: float | None = None  # budget * 1.10; None when no budget was given
     over_budget_by: float | None
+    no_items_fit_budget: bool = False  # True only for an open-ended/weekly-profile cart
+    # where no candidate item could fit within allowed_max at all — the frontend must
+    # never render this as a plain "successful" ₪0.00 cart.
     trade_off_suggestions: list[dict]
 
 
