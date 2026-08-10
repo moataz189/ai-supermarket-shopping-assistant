@@ -318,11 +318,11 @@ async def test_non_actionable_servings_unit_uses_the_ingredient_default_table():
     assert by_name["onion"]["unit"] == "unit"
     assert by_name["tomatoes"]["amount"] == pytest.approx(0.5)
     assert by_name["tomatoes"]["unit"] == "kg"
-    # Not in any default table -- keeps the raw (unhelpful, but honest) fallback value,
-    # scaled by the same servings ratio as everything else (base servings=1 -> requested
-    # 4 => x4): still shows "servings" as a last resort, nothing better available.
-    assert by_name["shiso leaves"]["amount"] == pytest.approx(36.0)
-    assert by_name["shiso leaves"]["unit"] == "servings"
+    # Not in either default table -- never resolves to the raw, meaningless "36
+    # servings" (9 x4) -- falls back to the same safe "buy 1" default as a known
+    # unit-sold item.
+    assert by_name["shiso leaves"]["amount"] == pytest.approx(1.0)
+    assert by_name["shiso leaves"]["unit"] == "unit"
 
 
 async def test_unit_default_ignores_the_servings_count_entirely():

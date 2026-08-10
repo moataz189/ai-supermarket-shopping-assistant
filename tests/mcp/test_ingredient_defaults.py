@@ -46,7 +46,7 @@ def test_per_serving_default_is_case_insensitive():
     assert default_quantity_for("OLIVE OIL", 4) == (60.0, "ml")
 
 
-def test_unit_default_always_buys_exactly_one_regardless_of_servings():
+def test_known_unit_sold_produce_always_buys_exactly_one_regardless_of_servings():
     assert default_quantity_for("onion", 4) == (1.0, "unit")
     assert default_quantity_for("onion", 20) == (1.0, "unit")
     assert default_quantity_for("melon", 1) == (1.0, "unit")
@@ -60,6 +60,10 @@ def test_weight_default_is_flat_and_ignores_servings():
     assert default_quantity_for("apples", 4) == (0.5, "kg")
 
 
-def test_unknown_ingredient_returns_none():
-    assert default_quantity_for("shiso leaves", 4) is None
-    assert default_quantity_for("an obscure ingredient", 4) is None
+def test_unknown_ingredient_falls_back_to_buying_a_single_unit():
+    # An ingredient with no entry anywhere (e.g. "shiso leaves — 36 servings", a real
+    # Spoonacular placeholder) must never resolve to literally "36" of something --
+    # falls back to the same safe default as a known unit-sold item: buy 1.
+    assert default_quantity_for("shiso leaves", 4) == (1.0, "unit")
+    assert default_quantity_for("shiso leaves", 36) == (1.0, "unit")
+    assert default_quantity_for("an obscure ingredient", 4) == (1.0, "unit")

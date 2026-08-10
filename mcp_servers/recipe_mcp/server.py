@@ -105,13 +105,10 @@ def create_server(client) -> FastMCP:
                 # A "servings" count (or no unit at all) is not a real, buyable
                 # quantity — confirmed live (Spoonacular id 652061, "Miso Cream Pasta")
                 # that this happens when Spoonacular has no parseable amount for an
-                # ingredient anywhere, in either endpoint. Use a data-driven default
-                # instead of literally buying `final_amount` units of it (see
-                # ingredient_defaults.py); an ingredient not in any default table keeps
-                # this (unhelpful, but honest) placeholder as a last resort.
-                default = default_quantity_for(i["name"], target_servings)
-                if default is not None:
-                    final_amount, final_unit = default
+                # ingredient anywhere, in either endpoint. Always resolves to something
+                # data-driven and usable instead of literally buying `final_amount`
+                # units of it (see ingredient_defaults.py).
+                final_amount, final_unit = default_quantity_for(i["name"], target_servings)
 
             ingredients.append(Ingredient(
                 name=i["name"],
