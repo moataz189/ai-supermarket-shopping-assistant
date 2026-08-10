@@ -249,7 +249,7 @@ class _ScriptedAdapter:
             raise RuntimeError("search_and_match boom")
         return MatchResult(item_code=item_code, locator=None, matched_by="item_code")
 
-    async def add_to_cart(self, page, match, quantity, unit=None):
+    async def add_to_cart(self, page, match, quantity, unit=None, *, package_size=None, package_unit=None):
         if self.fail_at == "add_to_cart":
             raise RuntimeError("add_to_cart boom")
         return AddToCartResult(quantity, "unit")
@@ -376,7 +376,7 @@ class _WeighedItemAdapter(_ScriptedAdapter):
     the raw requested number, exactly like a real weighed-produce adapter would after
     running its own retailer-specific conversion."""
 
-    async def add_to_cart(self, page, match, quantity, unit=None):
+    async def add_to_cart(self, page, match, quantity, unit=None, *, package_size=None, package_unit=None):
         return AddToCartResult(0.5, "kg")
 
 
@@ -425,7 +425,7 @@ class _IncompatibleUnitAdapter(_ScriptedAdapter):
     for a bare unit count — no deterministic conversion exists, so this must raise
     QuantityConversionRequiredError rather than guess."""
 
-    async def add_to_cart(self, page, match, quantity, unit=None):
+    async def add_to_cart(self, page, match, quantity, unit=None, *, package_size=None, package_unit=None):
         raise automation.QuantityConversionRequiredError(
             f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no deterministic conversion",
             requested_quantity=quantity,

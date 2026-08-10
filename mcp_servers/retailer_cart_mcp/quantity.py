@@ -51,6 +51,32 @@ def normalize_weight_to_kg(quantity: float, unit: str) -> float | None:
     return round(quantity * factor, 6) if factor is not None else None
 
 
+# Recognized volume units, normalized to a liter multiplier. Deliberately mirrors
+# _WEIGHT_TO_KG's strictness (see normalize_weight_to_kg) -- only ml/l forms are
+# deterministic; anything else (cup, tbsp, ...) has no fixed, ingredient-independent
+# volume conversion and must not be guessed at here.
+_VOLUME_TO_L = {
+    "ml": 0.001,
+    "milliliter": 0.001,
+    "milliliters": 0.001,
+    "millilitre": 0.001,
+    "millilitres": 0.001,
+    "l": 1.0,
+    "liter": 1.0,
+    "liters": 1.0,
+    "litre": 1.0,
+    "litres": 1.0,
+}
+
+
+def normalize_volume_to_l(quantity: float, unit: str) -> float | None:
+    """Returns `quantity` expressed in liters if `unit` is a recognized volume unit
+    (ml/l forms only), else None — mirrors normalize_weight_to_kg's philosophy: an
+    honest None for anything not deterministically convertible, never a guess."""
+    factor = _VOLUME_TO_L.get(unit.strip().lower())
+    return round(quantity * factor, 6) if factor is not None else None
+
+
 def is_count_unit(unit: str) -> bool:
     """True for anything that reads as "N discrete items" rather than a weight or a
     volume. Deliberately classifies by *elimination* (not a recognized weight/volume
@@ -76,6 +102,30 @@ def round_up_to_increment(requested_kg: float, increment_kg: float) -> float:
     """
     steps = math.ceil(round(requested_kg / increment_kg, 9))
     return round(steps * increment_kg, 6)
+
+
+def packages_needed(
+    requested_quantity: float, requested_unit: str, package_size: float, package_unit: str
+) -> int | None:
+    """How many whole packages of `package_size` `package_unit` are needed to cover at
+    least `requested_quantity` `requested_unit` (e.g. a recipe needing 1000 g of pasta,
+    sold in 500 g packages, needs 2) — never rounds down, so the recipe is never left
+    short. Returns None when the two amounts aren't the same kind of quantity (a weight
+    request against a package with no known weight/volume, a volume request against a
+    weight-only package, etc.) — callers must fall back to buying a single package
+    rather than guessing a conversion in that case.
+    """
+    requested_kg = normalize_weight_to_kg(requested_quantity, requested_unit)
+    package_kg = normalize_weight_to_kg(package_size, package_unit)
+    if requested_kg is not None and package_kg is not None and package_kg > 0:
+        return max(1, math.ceil(round(requested_kg / package_kg, 9)))
+
+    requested_l = normalize_volume_to_l(requested_quantity, requested_unit)
+    package_l = normalize_volume_to_l(package_size, package_unit)
+    if requested_l is not None and package_l is not None and package_l > 0:
+        return max(1, math.ceil(round(requested_l / package_l, 9)))
+
+    return None
 
 
 @dataclass

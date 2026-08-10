@@ -25,3 +25,10 @@ class SpoonacularClient:
         )
         response.raise_for_status()
         return response.json()
+
+    def get_ingredient_widget(self, recipe_id: int) -> dict:
+        response = self.client.get(
+            f"/recipes/{recipe_id}/ingredientWidget.json", params={"apiKey": self.api_key}
+        )
+        response.raise_for_status()
+        return response.json()

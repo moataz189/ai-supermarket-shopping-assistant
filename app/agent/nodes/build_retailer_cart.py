@@ -1,3 +1,4 @@
+from app.agent.quantity import estimated_package_count
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
@@ -95,20 +96,36 @@ async def _add_every_item(
         price_info = await client.get_product_price(retailer, best["item_code"])
         # `quantity`/`unit` are only ever set on recipe-derived items (CP7's
         # get_recipe_ingredients) — None for ordinary grocery-list items. `qty` here
-        # (used only for this retailer's own price-comparison subtotal/total math)
-        # intentionally stays 1 regardless — recipe quantities are a real amount to add
-        # to the retailer's cart, not a multiplier on the comparison-view price; the
-        # retailer cart's actual add-to-cart quantity is requested_quantity/
-        # requested_unit below, threaded through prepare_retailer_cart.py.
+        # (a plain product count, distinct from `estimated_package_count` below) stays 1
+        # regardless — the retailer cart's actual add-to-cart quantity is
+        # requested_quantity/requested_unit below, threaded through
+        # prepare_retailer_cart.py.
+        quantity, unit = item.get("quantity"), item.get("unit")
+        package_size, package_unit = price_info.get("package_size"), price_info.get("package_unit")
+        # Best-effort estimate of how many whole packages this recipe amount will
+        # actually need (real user report: "1000 g pasta" matched to a 500 g package
+        # showed a single package's price/quantity in the comparison view, even though
+        # 2 packages is what the Retailer-Cart MCP would go on to actually buy) — None
+        # (and the comparison view falls back to the raw amount, unchanged) whenever
+        # there's no quantity/package size to compare, or they're not the same kind of
+        # quantity (see app/agent/quantity.py).
+        count = None
+        if quantity is not None and unit is not None and package_size is not None and package_unit is not None:
+            count = estimated_package_count(quantity, unit, package_size, package_unit)
+        subtotal = round(price_info["price"] * count, 2) if count is not None else price_info["price"]
+
         lines.append({
             "name": name,
             "item_code": best["item_code"],
             "product_name": best["name"],
             "unit_price": price_info["unit_price"],
             "qty": 1,
-            "requested_quantity": item.get("quantity"),
-            "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
-            "subtotal": price_info["price"],
+            "requested_quantity": quantity,
+            "requested_unit": unit if quantity is not None else None,
+            "subtotal": subtotal,
+            "package_size": package_size,
+            "package_unit": package_unit,
+            "estimated_package_count": count,
         })
     return lines, missing
 
@@ -163,6 +180,12 @@ async def _select_items_within_budget(
             "requested_quantity": item.get("quantity"),
             "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
             "subtotal": cost,
+            "package_size": price_info.get("package_size"),
+            "package_unit": price_info.get("package_unit"),
+            # Not computed for the open-ended/budget-selection path -- _estimated_cost
+            # above already prices this line by the real requested quantity for budget
+            # purposes, so there's no separate "packages needed" estimate to show here.
+            "estimated_package_count": None,
         })
 
     return lines, missing, running_total

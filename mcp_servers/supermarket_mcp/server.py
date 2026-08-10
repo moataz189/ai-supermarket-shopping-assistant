@@ -59,6 +59,8 @@ def get_product_price(retailer: str, item_code: str) -> ProductPriceResponse | N
             name=product.name,
             price=product.price,
             unit_price=unit_price(product.price, product.package_size, product.package_unit),
+            package_size=product.package_size,
+            package_unit=product.package_unit,
             listed_in_feed=product.listed_in_feed,
             last_updated_at=product.last_updated_at.isoformat(),
             stale=status.stale if status else False,

@@ -79,6 +79,8 @@ def make_get_recipe_ingredients(recipe_client, ingredient_dictionary: dict[str, 
                 "translation_resolved": translation["resolved"],
                 "quantity": i["amount"],
                 "unit": i["unit"],
+                "original_quantity": i.get("original_amount", i["amount"]),
+                "original_unit": i.get("original_unit", i["unit"]),
             })
 
         chosen_recipe = dict(state.get("chosen_recipe") or {"id": recipe_id})

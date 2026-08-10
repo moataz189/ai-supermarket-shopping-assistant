@@ -63,6 +63,46 @@ async def test_original_english_name_is_always_preserved_regardless_of_resolutio
         assert item["english_name"] == item["name"]
 
 
+async def test_original_quantity_and_unit_survive_from_the_recipe_client_when_present():
+    dictionary = {"tomato": "עגבנייה"}
+    recipe_client = FakeRecipeClient(
+        search_results={"shakshuka": [{"id": 1, "title": "Shakshuka"}]},
+        recipes={
+            1: {
+                "title": "Shakshuka",
+                "servings": 4,
+                "ingredients": [
+                    {"name": "tomato", "amount": 400.0, "unit": "g", "original_amount": 14.0, "original_unit": "ounces"},
+                ],
+            }
+        },
+    )
+    node = make_get_recipe_ingredients(recipe_client, dictionary)
+    state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    tomato = result["parsed_request"]["items"][0]
+    assert tomato["quantity"] == 400.0
+    assert tomato["unit"] == "g"
+    assert tomato["original_quantity"] == 14.0
+    assert tomato["original_unit"] == "ounces"
+
+
+async def test_original_quantity_defaults_to_the_normalized_value_when_the_client_omits_it():
+    # A recipe client (or fake) that doesn't supply original_amount/original_unit at all
+    # (e.g. any test double predating this feature) must not crash -- original_quantity/
+    # unit simply mirror the normalized quantity/unit in that case.
+    node = make_get_recipe_ingredients(_shakshuka_recipe_client(), {"tomato": "עגבנייה"})
+    state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 1}
+
+    result = await node(state)
+
+    tomato = next(i for i in result["parsed_request"]["items"] if i["name"] == "tomato")
+    assert tomato["original_quantity"] == tomato["quantity"]
+    assert tomato["original_unit"] == tomato["unit"]
+
+
 async def test_empty_dictionary_leaves_every_ingredient_unresolved_without_crashing():
     node = make_get_recipe_ingredients(_shakshuka_recipe_client(), {})
     state = {"parsed_request": {"servings": 4, "language": "en"}, "chosen_recipe_id": 1}

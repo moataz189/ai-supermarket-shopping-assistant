@@ -173,6 +173,38 @@ async def test_weighed_item_1_1kg_rounds_up_to_1_5kg():
     assert result.quantity == pytest.approx(1.5)
 
 
+async def test_weighed_item_530g_rounds_up_to_one_kg_with_half_kg_increment():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 530, "g")
+
+    assert result.quantity == pytest.approx(1.0)
+    assert result.unit == "kg"
+
+
+async def test_weighed_item_500g_stays_at_half_kg_no_rounding_down_and_no_extra_step():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 500, "g")
+
+    assert result.quantity == pytest.approx(0.5)
+    assert tile.clicks == 1  # exactly one 0.5 kg step, never rounded up past the boundary
+
+
+async def test_weighed_item_501g_rounds_up_to_one_kg_never_down():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 501, "g")
+
+    assert result.quantity == pytest.approx(1.0)
+    # A short add (0.5 kg for a 501 g request) would leave the recipe short -- the
+    # confirmed cart quantity must always be >= what was requested, converted to kg.
+    assert result.quantity >= 0.501
+
+
 async def test_weighed_item_with_count_unit_raises_quantity_conversion_required():
     tile = FakeTile(is_weighed=True, step=0.5)
     page = FakePage()
@@ -206,6 +238,46 @@ async def test_whole_unit_item_with_weight_unit_buys_one_whole_package():
 
     assert result.quantity == 1
     assert result.unit == "unit"
+    assert tile.clicks == 1
+
+
+async def test_whole_unit_item_with_weight_unit_buys_enough_whole_packages_when_size_known():
+    # Reproduces a real bug: a recipe needing 1000 g of pasta, matched to a 500 g
+    # package, previously bought only 1 package (500 g).
+    tile = FakeTile(is_weighed=False)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(
+        page, _match(tile), 1000, "g", package_size=500.0, package_unit="g"
+    )
+
+    assert result.quantity == pytest.approx(2.0)
+    assert result.unit == "unit"
+    assert tile.clicks == 2
+
+
+async def test_whole_unit_item_with_weight_unit_still_buys_one_package_when_size_unknown():
+    # No package_size/package_unit given -- unchanged legacy behavior.
+    tile = FakeTile(is_weighed=False)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 1000, "g")
+
+    assert result.quantity == pytest.approx(1.0)
+    assert tile.clicks == 1
+
+
+async def test_whole_unit_item_with_weight_unit_buys_one_package_when_size_is_not_comparable():
+    # package_unit is "unit" (a count, not a real weight/volume) -- packages_needed
+    # returns None, falls back to the safe "buy 1" default rather than guessing.
+    tile = FakeTile(is_weighed=False)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(
+        page, _match(tile), 1000, "g", package_size=1.0, package_unit="unit"
+    )
+
+    assert result.quantity == pytest.approx(1.0)
     assert tile.clicks == 1
 
 

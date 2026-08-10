@@ -70,3 +70,20 @@ def test_the_real_dictionary_file_loads_and_contains_known_terms():
     assert dictionary["tomato"] == "עגבנייה"
     assert dictionary["milk"] == "חלב"
     assert dictionary["pasta"] == "פסטה"
+
+
+def test_mushroom_singular_resolves_to_the_same_hebrew_term_as_the_plural():
+    # Real user report: "mushroom" (Spoonacular's singular ingredient name) had no
+    # dictionary entry even though "mushrooms" did, so it fell back unresolved and
+    # never matched the real (Hebrew-only) catalog. Reuses the plural's own proven
+    # Hebrew search term rather than inventing a new one.
+    dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
+
+    assert dictionary["mushroom"] == "פטריות"
+    assert dictionary["mushroom"] == dictionary["mushrooms"]
+
+
+def test_miso_paste_resolves_to_a_real_hebrew_supermarket_search_term():
+    dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
+
+    assert dictionary["miso paste"] == "ממרח מיסו"
