@@ -218,7 +218,8 @@ class ShufersalAdapter:
         return 0.0
 
     async def add_to_cart(
-        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
         item = match.locator
         selling_method = (item.get("sellingMethod") or {}).get("code", "BY_UNIT")

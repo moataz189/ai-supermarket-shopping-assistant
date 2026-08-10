@@ -53,11 +53,13 @@ class MockRetailerAdapter:
         return None
 
     async def add_to_cart(
-        self, page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
-        # This mock site doesn't simulate weight-sold products — `unit` is accepted (to
-        # satisfy the RetailerAdapter protocol used by prepare_cart_for_retailer) but
-        # unused, exactly like both real adapters' legacy (unit=None) whole-unit path.
+        # This mock site doesn't simulate weight-sold products — `unit`/`package_size`/
+        # `package_unit` are accepted (to satisfy the RetailerAdapter protocol used by
+        # prepare_cart_for_retailer) but unused, exactly like both real adapters' legacy
+        # (unit=None) whole-unit path.
         await match.locator.locator("[data-testid='add-to-cart']").click()
 
         await page.locator("input[name='quantity']").fill(str(quantity))

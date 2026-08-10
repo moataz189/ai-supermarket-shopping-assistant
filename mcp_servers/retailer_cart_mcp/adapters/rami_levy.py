@@ -233,7 +233,8 @@ class RamiLevyAdapter:
         return None
 
     async def add_to_cart(
-        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
         # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
         # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: each click adds
