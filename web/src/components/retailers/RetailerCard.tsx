@@ -93,14 +93,20 @@ export function RetailerCard({ retailer, cart, selected, onChoose, chooseLabel }
           <li key={line.item_code} className="flex justify-between gap-2">
             <span className="truncate">
               {line.product_name}{' '}
-              {/* The real requested amount (e.g. "800 g") when known — a recipe
-                  ingredient, or a weekly-shop-profile item sized for its household. The
-                  comparison-view qty otherwise shown here always stays 1 (see
-                  build_retailer_cart.py), which would misleadingly read as "× 1" for an
-                  item that actually asked for more. */}
-              {line.requested_quantity != null
-                ? `× ${formatQuantity(line.requested_quantity, line.requested_unit)}`
-                : `× ${line.qty}`}
+              {/* estimated_package_count (e.g. "× 2") takes priority when set — the
+                  matched product is a whole package and this many is what will actually
+                  be bought, so showing the raw requested weight/volume here (e.g.
+                  "× 1000 g") would be confusing and wouldn't match subtotal's price.
+                  Otherwise, the real requested amount (e.g. "800 g") when known — a
+                  recipe ingredient, or a weekly-shop-profile item sized for its
+                  household. The comparison-view qty otherwise shown here always stays 1
+                  (see build_retailer_cart.py), which would misleadingly read as "× 1"
+                  for an item that actually asked for more. */}
+              {line.estimated_package_count != null
+                ? `× ${line.estimated_package_count}`
+                : line.requested_quantity != null
+                  ? `× ${formatQuantity(line.requested_quantity, line.requested_unit)}`
+                  : `× ${line.qty}`}
             </span>
             <span className="shrink-0 text-zinc-900">₪{line.subtotal.toFixed(2)}</span>
           </li>

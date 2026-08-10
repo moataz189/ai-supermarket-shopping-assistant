@@ -80,6 +80,13 @@ class CartLine(BaseModel):
     # weekly-shop items, exactly as before these fields existed.
     requested_quantity: float | None = None
     requested_unit: str | None = None
+    # Best-effort "how many whole packages will this likely need" estimate (see
+    # app/agent/quantity.py) -- set only when the matched product's own package size is
+    # known and comparable to requested_quantity/requested_unit. `subtotal` above
+    # already reflects this many packages' price when set. None when unknown/not
+    # applicable, in which case the frontend falls back to showing requested_quantity/
+    # requested_unit directly, exactly as before this field existed.
+    estimated_package_count: int | None = None
 
 
 class RetailerCart(BaseModel):

@@ -52,6 +52,7 @@ export interface CartLine {
   link?: string | null
   requested_quantity?: number | null
   requested_unit?: string | null
+  estimated_package_count?: number | null
 }
 
 export interface RetailerCart {
