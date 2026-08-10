@@ -1,0 +1,32 @@
+{
+  "ingredients": [
+    {
+      "name": "eggs",
+      "amount": {
+        "metric": { "value": 4.0, "unit": "large" },
+        "us": { "value": 4.0, "unit": "large" }
+      }
+    },
+    {
+      "name": "tomatoes",
+      "amount": {
+        "metric": { "value": 400.0, "unit": "g" },
+        "us": { "value": 14.0, "unit": "oz" }
+      }
+    },
+    {
+      "name": "onion",
+      "amount": {
+        "metric": { "value": 110.0, "unit": "g" },
+        "us": { "value": 1.0, "unit": "medium" }
+      }
+    },
+    {
+      "name": "olive oil",
+      "amount": {
+        "metric": { "value": 30.0, "unit": "ml" },
+        "us": { "value": 2.0, "unit": "Tbsp" }
+      }
+    }
+  ]
+}

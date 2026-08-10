@@ -8,25 +8,41 @@
       "id": 1123,
       "name": "eggs",
       "amount": 4.0,
-      "unit": "large"
+      "unit": "large",
+      "measures": {
+        "metric": { "amount": 4.0, "unitShort": "large", "unitLong": "large" },
+        "us": { "amount": 4.0, "unitShort": "large", "unitLong": "large" }
+      }
     },
     {
       "id": 11529,
       "name": "tomatoes",
-      "amount": 400.0,
-      "unit": "g"
+      "amount": 14.0,
+      "unit": "ounces",
+      "measures": {
+        "metric": { "amount": 400.0, "unitShort": "g", "unitLong": "grams" },
+        "us": { "amount": 14.0, "unitShort": "oz", "unitLong": "ounces" }
+      }
     },
     {
       "id": 11282,
       "name": "onion",
       "amount": 1.0,
-      "unit": "medium"
+      "unit": "medium",
+      "measures": {
+        "metric": { "amount": 1.0, "unitShort": "medium", "unitLong": "medium" },
+        "us": { "amount": 1.0, "unitShort": "medium", "unitLong": "medium" }
+      }
     },
     {
       "id": 2001,
       "name": "olive oil",
       "amount": 2.0,
-      "unit": "tbsp"
+      "unit": "tbsp",
+      "measures": {
+        "metric": { "amount": 30.0, "unitShort": "ml", "unitLong": "milliliters" },
+        "us": { "amount": 2.0, "unitShort": "Tbsp", "unitLong": "Tbsps" }
+      }
     }
   ]
 }
