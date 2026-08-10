@@ -218,6 +218,63 @@ async def test_prepare_retailer_cart_payload_includes_the_matched_products_packa
     assert pasta_call["package_unit"] == "g"
 
 
+async def test_comparison_view_cart_line_shows_the_price_and_quantity_of_all_packages_needed():
+    # Real user report: the comparison view (before a retailer is even chosen) showed
+    # "× 1000 g" for a 1000 g pasta request at a single 500 g package's price (₪8.90),
+    # even though 2 packages (₪17.80) are what will actually be bought. The cart line
+    # must reflect the same realistic estimate the Retailer-Cart MCP will act on later.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="tuna pasta", servings=4, items=[]))
+    recipe_client = FakeRecipeClient(
+        search_results={"tuna pasta": [{"id": 11, "title": "Tuna Pasta"}]},
+        recipes={11: {"title": "Tuna Pasta", "servings": 4, "ingredients": [
+            {"name": "pasta", "amount": 1000.0, "unit": "g"},
+        ]}},
+    )
+    candidates = {
+        ("פסטה", "shufersal"): [{"item_code": "S-PASTA", "name": "Pasta Fusilli 500g", "price": 8.9}],
+        ("Pasta Fusilli 500g", "shufersal"): [{"item_code": "S-PASTA", "name": "Pasta Fusilli 500g", "price": 8.9}],
+        ("פסטה", "rami_levy"): [{"item_code": "R-PASTA", "name": "Pasta Fusilli 500g", "price": 7.9}],
+        ("Pasta Fusilli 500g", "rami_levy"): [{"item_code": "R-PASTA", "name": "Pasta Fusilli 500g", "price": 7.9}],
+    }
+    prices = {
+        ("shufersal", "S-PASTA"): {"unit_price": 0.0178, "price": 8.9, "package_size": 500.0, "package_unit": "g"},
+        ("rami_levy", "R-PASTA"): {"unit_price": 0.0158, "price": 7.9, "package_size": 500.0, "package_unit": "g"},
+    }
+    app = build_graph(
+        FakeSupermarketDataClient(candidates, prices), llm, MemorySaver(),
+        recipe_client=recipe_client, ingredient_dictionary={"pasta": "פסטה"},
+    )
+    config = {"configurable": {"thread_id": "pasta2"}}
+
+    await app.ainvoke({"raw_message": "tuna pasta"}, config=config)
+    result = await app.ainvoke(Command(resume=["pasta"]), config=config)
+
+    pasta_line = result["retailer_carts"]["shufersal"]["items"][0]
+    assert pasta_line["estimated_package_count"] == 2
+    assert pasta_line["subtotal"] == 17.8  # 2 x 8.9, not just one package's price
+    # The recipe's true requested amount is preserved unchanged for other consumers
+    # (e.g. the post-purchase "Requested: X / Added: Y" view).
+    assert pasta_line["requested_quantity"] == 1000.0
+    assert pasta_line["requested_unit"] == "g"
+
+
+async def test_comparison_view_falls_back_to_the_raw_amount_when_package_size_unknown():
+    # No package_size/package_unit in this fixture's prices -- unchanged legacy display.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="shakshuka", servings=4, items=[]))
+    app = build_graph(
+        _grocery_client_for_scaled_ingredients(), llm, MemorySaver(), recipe_client=_shakshuka_recipe_client(),
+        ingredient_dictionary=TEST_INGREDIENT_DICTIONARY,
+    )
+    config = {"configurable": {"thread_id": "shak_pkg"}}
+
+    await app.ainvoke({"raw_message": "shakshuka"}, config=config)
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
+
+    tomatoes_line = next(i for i in result["retailer_carts"]["shufersal"]["items"] if i["name"] == "tomatoes")
+    assert tomatoes_line["estimated_package_count"] is None
+    assert tomatoes_line["subtotal"] == 8.0  # unchanged: the raw package price
+
+
 async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_result():
     # Requirement 8: requested quantity remains separate from cart quantity — the graph
     # must pass through whatever the Retailer-Cart MCP reports without collapsing the two.
