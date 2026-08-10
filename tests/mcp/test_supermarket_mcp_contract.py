@@ -92,6 +92,8 @@ def test_get_product_price_returns_expected_fields(db_session_factory):
     assert result.item_code == "100"
     assert result.price == 6.0
     assert result.unit_price == 0.003
+    assert result.package_size == 2.0
+    assert result.package_unit == "l"
     assert result.listed_in_feed is True
     assert result.stale is False
     assert result.last_updated_at
