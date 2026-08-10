@@ -255,3 +255,95 @@ async def test_get_recipe_ingredients_rejects_non_positive_original_servings():
         await zero_servings_server.call_tool(
             "get_recipe_ingredients", {"recipe_id": fixture["id"]}
         )
+
+
+class _ServingsPlaceholderClient:
+    """Stub client for ingredients whose only available quantity anywhere (both
+    measures.metric and the ingredientWidget) is a meaningless "servings" placeholder --
+    a real Spoonacular data-completeness gap, confirmed live against recipe 652061 ("Miso
+    Cream Pasta"). Isolates the ingredient-defaults override (see
+    mcp_servers/recipe_mcp/ingredient_defaults.py) from the shared recipe_12345 fixture.
+    """
+
+    def __init__(self):
+        self.widget_calls = 0
+
+    def search_recipes(self, query: str, number: int = 5) -> list[dict]:
+        raise NotImplementedError
+
+    def get_recipe(self, recipe_id: int) -> dict:
+        return {
+            "id": recipe_id,
+            "title": "Servings Placeholder Test",
+            "servings": 1,
+            "extendedIngredients": [
+                {"name": "olive oil", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "pasta", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "onion", "amount": 1.0, "unit": "",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": ""}}},
+                {"name": "tomatoes", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "shiso leaves", "amount": 9.0, "unit": "servings",
+                 "measures": {"metric": {"amount": 9.0, "unitShort": "servings"}}},
+            ],
+        }
+
+    def get_ingredient_widget(self, recipe_id: int) -> dict:
+        self.widget_calls += 1
+        return {"ingredients": [
+            {"name": "olive oil", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "pasta", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "onion", "amount": {"metric": {"value": 1.0, "unit": ""}}},
+            {"name": "tomatoes", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "shiso leaves", "amount": {"metric": {"value": 9.0, "unit": "servings"}}},
+        ]}
+
+
+async def test_non_actionable_servings_unit_uses_the_ingredient_default_table():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 4}
+    )
+    by_name = {i["name"]: i for i in structured["ingredients"]}
+
+    assert by_name["olive oil"]["amount"] == pytest.approx(60.0)
+    assert by_name["olive oil"]["unit"] == "ml"
+    assert by_name["pasta"]["amount"] == pytest.approx(500.0)
+    assert by_name["pasta"]["unit"] == "g"
+    assert by_name["onion"]["amount"] == pytest.approx(1.0)
+    assert by_name["onion"]["unit"] == "unit"
+    assert by_name["tomatoes"]["amount"] == pytest.approx(0.5)
+    assert by_name["tomatoes"]["unit"] == "kg"
+    # Not in any default table -- keeps the raw (unhelpful, but honest) fallback value,
+    # scaled by the same servings ratio as everything else (base servings=1 -> requested
+    # 4 => x4): still shows "servings" as a last resort, nothing better available.
+    assert by_name["shiso leaves"]["amount"] == pytest.approx(36.0)
+    assert by_name["shiso leaves"]["unit"] == "servings"
+
+
+async def test_unit_default_ignores_the_servings_count_entirely():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 20}
+    )
+
+    onion = next(i for i in structured["ingredients"] if i["name"] == "onion")
+    assert onion["amount"] == pytest.approx(1.0)  # still just 1, regardless of servings
+
+
+async def test_weight_default_ignores_the_servings_count_entirely():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 20}
+    )
+
+    tomatoes = next(i for i in structured["ingredients"] if i["name"] == "tomatoes")
+    assert tomatoes["amount"] == pytest.approx(0.5)  # flat default, not scaled

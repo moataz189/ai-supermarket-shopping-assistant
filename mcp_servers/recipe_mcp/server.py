@@ -3,6 +3,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mcp_servers.recipe_mcp.ingredient_defaults import (
+    default_quantity_for,
+    is_non_actionable_unit,
+)
 from mcp_servers.recipe_mcp.quantity import is_precise_metric_unit
 from mcp_servers.recipe_mcp.schemas import (
     GetRecipeIngredientsResponse,
@@ -96,10 +100,23 @@ def create_server(client) -> FastMCP:
                     # original amount/unit rather than guessing.
                     amount, unit = original_amount, original_unit
 
+            final_amount, final_unit = amount * ratio, unit
+            if is_non_actionable_unit(final_unit):
+                # A "servings" count (or no unit at all) is not a real, buyable
+                # quantity — confirmed live (Spoonacular id 652061, "Miso Cream Pasta")
+                # that this happens when Spoonacular has no parseable amount for an
+                # ingredient anywhere, in either endpoint. Use a data-driven default
+                # instead of literally buying `final_amount` units of it (see
+                # ingredient_defaults.py); an ingredient not in any default table keeps
+                # this (unhelpful, but honest) placeholder as a last resort.
+                default = default_quantity_for(i["name"], target_servings)
+                if default is not None:
+                    final_amount, final_unit = default
+
             ingredients.append(Ingredient(
                 name=i["name"],
-                amount=amount * ratio,
-                unit=unit,
+                amount=final_amount,
+                unit=final_unit,
                 original_amount=original_amount * ratio,
                 original_unit=original_unit,
             ))
