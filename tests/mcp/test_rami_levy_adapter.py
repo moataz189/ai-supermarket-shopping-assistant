@@ -173,6 +173,38 @@ async def test_weighed_item_1_1kg_rounds_up_to_1_5kg():
     assert result.quantity == pytest.approx(1.5)
 
 
+async def test_weighed_item_530g_rounds_up_to_one_kg_with_half_kg_increment():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 530, "g")
+
+    assert result.quantity == pytest.approx(1.0)
+    assert result.unit == "kg"
+
+
+async def test_weighed_item_500g_stays_at_half_kg_no_rounding_down_and_no_extra_step():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 500, "g")
+
+    assert result.quantity == pytest.approx(0.5)
+    assert tile.clicks == 1  # exactly one 0.5 kg step, never rounded up past the boundary
+
+
+async def test_weighed_item_501g_rounds_up_to_one_kg_never_down():
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 501, "g")
+
+    assert result.quantity == pytest.approx(1.0)
+    # A short add (0.5 kg for a 501 g request) would leave the recipe short -- the
+    # confirmed cart quantity must always be >= what was requested, converted to kg.
+    assert result.quantity >= 0.501
+
+
 async def test_weighed_item_with_count_unit_raises_quantity_conversion_required():
     tile = FakeTile(is_weighed=True, step=0.5)
     page = FakePage()

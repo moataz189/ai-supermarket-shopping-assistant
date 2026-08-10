@@ -135,6 +135,47 @@ async def test_build_retailer_cart_no_longer_hardcodes_qty_1_quantity_for_recipe
     assert by_name["eggs"]["unit"] == "large"
 
 
+async def test_prepare_retailer_cart_payload_uses_the_normalized_quantity_not_qty_1():
+    # Regression guard for the accurate-recipe-quantities feature: a recipe ingredient's
+    # real (normalized-to-metric) amount must reach the Retailer-Cart MCP call as-is --
+    # never silently collapsed to qty=1 the way a plain grocery-list item legitimately is.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="tuna pasta", servings=4, items=[]))
+    recipe_client = FakeRecipeClient(
+        search_results={"tuna pasta": [{"id": 9, "title": "Tuna Pasta"}]},
+        recipes={9: {"title": "Tuna Pasta", "servings": 4, "ingredients": [
+            {"name": "tuna", "amount": 530.0, "unit": "g"},
+        ]}},
+    )
+    candidates = {
+        ("טונה", "shufersal"): [{"item_code": "S-TUNA", "name": "Tuna 530g", "price": 25.0}],
+        ("Tuna 530g", "shufersal"): [{"item_code": "S-TUNA", "name": "Tuna 530g", "price": 25.0}],
+        ("טונה", "rami_levy"): [{"item_code": "R-TUNA", "name": "Tuna 530g", "price": 24.0}],
+        ("Tuna 530g", "rami_levy"): [{"item_code": "R-TUNA", "name": "Tuna 530g", "price": 24.0}],
+    }
+    prices = {
+        ("shufersal", "S-TUNA"): {"unit_price": 0.05, "price": 25.0},
+        ("rami_levy", "R-TUNA"): {"unit_price": 0.045, "price": 24.0},
+    }
+    retailer_cart_client = FakeRetailerCartClient({"retailer": "shufersal", "added": [], "failed": [],
+                                                    "blocked": False, "blocked_reason": None, "cart_url": None})
+    app = build_graph(
+        FakeSupermarketDataClient(candidates, prices), llm, MemorySaver(),
+        recipe_client=recipe_client, retailer_cart_client=retailer_cart_client,
+        ingredient_dictionary={"tuna": "טונה"},
+    )
+    config = {"configurable": {"thread_id": "tuna1"}}
+
+    await app.ainvoke({"raw_message": "tuna pasta"}, config=config)
+    await app.ainvoke(Command(resume=["tuna"]), config=config)
+    await app.ainvoke(Command(resume="shufersal"), config=config)
+
+    _, called_items = retailer_cart_client.calls[0]
+    tuna_call = called_items[0]
+    assert tuna_call["quantity"] == 530.0
+    assert tuna_call["unit"] == "g"
+    assert tuna_call["quantity"] != 1
+
+
 async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_result():
     # Requirement 8: requested quantity remains separate from cart quantity — the graph
     # must pass through whatever the Retailer-Cart MCP reports without collapsing the two.

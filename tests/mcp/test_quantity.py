@@ -69,6 +69,18 @@ class TestRoundUpToIncrement:
     def test_1_1kg_with_half_kg_increment_rounds_up_to_1_5kg(self):
         assert round_up_to_increment(1.1, 0.5) == pytest.approx(1.5)
 
+    def test_530g_with_half_kg_increment_rounds_up_to_one_kg(self):
+        assert round_up_to_increment(0.530, 0.5) == pytest.approx(1.0)
+
+    def test_500g_with_half_kg_increment_stays_at_half_kg(self):
+        # Exactly on the increment boundary -- never rounds up further.
+        assert round_up_to_increment(0.500, 0.5) == pytest.approx(0.5)
+
+    def test_501g_with_half_kg_increment_rounds_up_to_one_kg(self):
+        # One gram over the boundary is enough to require the next whole increment --
+        # rounding must never leave the recipe short.
+        assert round_up_to_increment(0.501, 0.5) == pytest.approx(1.0)
+
     def test_exact_multiple_does_not_round_up_further(self):
         # Guards against floating-point artifacts (e.g. 0.5/0.5 landing a hair above 1.0
         # and ceiling to a spurious extra increment) — an exact multiple of the increment
