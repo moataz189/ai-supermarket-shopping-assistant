@@ -7,7 +7,9 @@ import pytest
 
 from mcp_servers.retailer_cart_mcp.quantity import (
     is_count_unit,
+    normalize_volume_to_l,
     normalize_weight_to_kg,
+    packages_needed,
     round_up_to_increment,
 )
 
@@ -96,3 +98,53 @@ class TestRoundUpToIncrement:
     def test_generic_for_any_increment_not_hardcoded_to_half_kg(self):
         assert round_up_to_increment(0.3, 0.25) == pytest.approx(0.5)
         assert round_up_to_increment(1.0, 0.25) == pytest.approx(1.0)
+
+
+class TestNormalizeVolumeToL:
+    def test_milliliters_converts_to_liters(self):
+        assert normalize_volume_to_l(500, "ml") == pytest.approx(0.5)
+
+    def test_liters_passes_through(self):
+        assert normalize_volume_to_l(1.5, "l") == pytest.approx(1.5)
+
+    def test_long_forms_and_case_insensitive(self):
+        assert normalize_volume_to_l(250, "Milliliters") == pytest.approx(0.25)
+        assert normalize_volume_to_l(2, "Liters") == pytest.approx(2.0)
+
+    def test_non_volume_unit_returns_none(self):
+        assert normalize_volume_to_l(2, "g") is None
+        assert normalize_volume_to_l(2, "cup") is None
+        assert normalize_volume_to_l(2, "unit") is None
+
+
+class TestPackagesNeeded:
+    def test_1000g_needed_in_500g_packages_is_two(self):
+        # Reproduces a real bug: a recipe needing 1000 g of pasta, matched to a 500 g
+        # package, previously bought only 1 package (500 g) -- half of what's needed.
+        assert packages_needed(1000, "g", 500, "g") == 2
+
+    def test_exact_multiple_needs_exactly_that_many_packages(self):
+        assert packages_needed(1000, "g", 500, "g") == 2
+        assert packages_needed(500, "g", 500, "g") == 1
+
+    def test_never_rounds_down_partial_package_still_needs_one_more(self):
+        assert packages_needed(501, "g", 500, "g") == 2
+        assert packages_needed(1001, "g", 500, "g") == 3
+
+    def test_kg_and_g_units_are_compatible(self):
+        assert packages_needed(1, "kg", 500, "g") == 2
+        assert packages_needed(1.5, "kg", 0.5, "kg") == 3
+
+    def test_ml_and_l_units_are_compatible(self):
+        assert packages_needed(1500, "ml", 500, "ml") == 3
+        assert packages_needed(1.5, "l", 500, "ml") == 3
+
+    def test_at_least_one_package_even_for_a_tiny_request(self):
+        assert packages_needed(10, "g", 500, "g") == 1
+
+    def test_incompatible_dimensions_return_none(self):
+        # A weight request against a package with no known weight/volume (e.g. a
+        # count-based "unit" package), or vice versa -- callers must not guess.
+        assert packages_needed(1000, "g", 1, "unit") is None
+        assert packages_needed(500, "ml", 2, "unit") is None
+        assert packages_needed(500, "g", 500, "ml") is None  # weight vs volume mismatch
