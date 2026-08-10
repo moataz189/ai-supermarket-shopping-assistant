@@ -109,6 +109,8 @@ async def _add_every_item(
             "requested_quantity": item.get("quantity"),
             "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
             "subtotal": price_info["price"],
+            "package_size": price_info.get("package_size"),
+            "package_unit": price_info.get("package_unit"),
         })
     return lines, missing
 
@@ -163,6 +165,8 @@ async def _select_items_within_budget(
             "requested_quantity": item.get("quantity"),
             "requested_unit": item.get("unit") if item.get("quantity") is not None else None,
             "subtotal": cost,
+            "package_size": price_info.get("package_size"),
+            "package_unit": price_info.get("package_unit"),
         })
 
     return lines, missing, running_total

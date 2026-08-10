@@ -176,6 +176,48 @@ async def test_prepare_retailer_cart_payload_uses_the_normalized_quantity_not_qt
     assert tuna_call["quantity"] != 1
 
 
+async def test_prepare_retailer_cart_payload_includes_the_matched_products_package_size():
+    # Regression guard for the whole-package quantity fix: the Retailer-Cart MCP needs
+    # to know the matched product's own package size to know how many whole packages
+    # to buy when a weight/volume amount was requested against a whole-package product.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="tuna pasta", servings=4, items=[]))
+    recipe_client = FakeRecipeClient(
+        search_results={"tuna pasta": [{"id": 10, "title": "Tuna Pasta"}]},
+        recipes={10: {"title": "Tuna Pasta", "servings": 4, "ingredients": [
+            {"name": "pasta", "amount": 1000.0, "unit": "g"},
+        ]}},
+    )
+    candidates = {
+        ("פסטה", "shufersal"): [{"item_code": "S-PASTA", "name": "Pasta Fusilli 500g", "price": 8.9}],
+        ("Pasta Fusilli 500g", "shufersal"): [{"item_code": "S-PASTA", "name": "Pasta Fusilli 500g", "price": 8.9}],
+        ("פסטה", "rami_levy"): [{"item_code": "R-PASTA", "name": "Pasta Fusilli 500g", "price": 7.9}],
+        ("Pasta Fusilli 500g", "rami_levy"): [{"item_code": "R-PASTA", "name": "Pasta Fusilli 500g", "price": 7.9}],
+    }
+    prices = {
+        ("shufersal", "S-PASTA"): {"unit_price": 0.0178, "price": 8.9, "package_size": 500.0, "package_unit": "g"},
+        ("rami_levy", "R-PASTA"): {"unit_price": 0.0158, "price": 7.9, "package_size": 500.0, "package_unit": "g"},
+    }
+    retailer_cart_client = FakeRetailerCartClient({"retailer": "shufersal", "added": [], "failed": [],
+                                                    "blocked": False, "blocked_reason": None, "cart_url": None})
+    app = build_graph(
+        FakeSupermarketDataClient(candidates, prices), llm, MemorySaver(),
+        recipe_client=recipe_client, retailer_cart_client=retailer_cart_client,
+        ingredient_dictionary={"pasta": "פסטה"},
+    )
+    config = {"configurable": {"thread_id": "pasta1"}}
+
+    await app.ainvoke({"raw_message": "tuna pasta"}, config=config)
+    await app.ainvoke(Command(resume=["pasta"]), config=config)
+    await app.ainvoke(Command(resume="shufersal"), config=config)
+
+    _, called_items = retailer_cart_client.calls[0]
+    pasta_call = called_items[0]
+    assert pasta_call["quantity"] == 1000.0
+    assert pasta_call["unit"] == "g"
+    assert pasta_call["package_size"] == 500.0
+    assert pasta_call["package_unit"] == "g"
+
+
 async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_result():
     # Requirement 8: requested quantity remains separate from cart quantity — the graph
     # must pass through whatever the Retailer-Cart MCP reports without collapsing the two.
@@ -300,7 +342,10 @@ async def test_grocery_list_items_still_send_quantity_1_unit_none_no_regression(
     await app.ainvoke(Command(resume="shufersal"), config=config)
 
     _, called_items = retailer_cart_client.calls[0]
-    assert called_items == [{"name": "milk", "item_code": "S-MILK", "quantity": 1, "unit": None}]
+    assert called_items == [{
+        "name": "milk", "item_code": "S-MILK", "quantity": 1, "unit": None,
+        "package_size": None, "package_unit": None,
+    }]
 
 
 async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities():
@@ -351,4 +396,7 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
         assert by_name[entry["name"]]["quantity"] == entry["quantity"]
         assert by_name[entry["name"]]["unit"] == entry["unit"]
     # a household-size-scaled example, explicitly: tomatoes for one person is 0.5 kg.
-    assert by_name["עגבניה"] == {"name": "עגבניה", "item_code": "S-6", "quantity": 0.5, "unit": "kg"}
+    assert by_name["עגבניה"] == {
+        "name": "עגבניה", "item_code": "S-6", "quantity": 0.5, "unit": "kg",
+        "package_size": None, "package_unit": None,
+    }
