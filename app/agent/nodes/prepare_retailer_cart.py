@@ -18,6 +18,13 @@ def make_prepare_retailer_cart(retailer_cart_client):
                 # exact pre-existing whole-unit behavior unchanged.
                 "quantity": line["requested_quantity"] if line.get("requested_quantity") is not None else line["qty"],
                 "unit": line.get("requested_unit"),
+                # The matched product's own package size/unit from the local catalog
+                # (e.g. 500 "g" for a pasta box) -- None when unknown. Lets the
+                # Retailer-Cart MCP buy enough whole packages to cover a requested
+                # weight/volume instead of always assuming one package is enough (see
+                # mcp_servers/retailer_cart_mcp/quantity.py's packages_needed).
+                "package_size": line.get("package_size"),
+                "package_unit": line.get("package_unit"),
             }
             for line in cart["items"]
         ]

@@ -115,6 +115,7 @@ from mcp_servers.retailer_cart_mcp.quantity import (
     QuantityConversionRequiredError,
     is_count_unit,
     normalize_weight_to_kg,
+    packages_needed,
     round_up_to_increment,
 )
 
@@ -233,7 +234,8 @@ class RamiLevyAdapter:
         return None
 
     async def add_to_cart(
-        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
         # Loose/weighed produce (marked "לק"ג" — "per kg" — on the tile, confirmed live,
         # CP9 2026-08-08) doesn't behave like a normal whole-unit stepper: each click adds
@@ -264,11 +266,16 @@ class RamiLevyAdapter:
         # are representable.
         if unit is not None and not is_count_unit(unit):
             # Recipe gave a weight/volume for a product this retailer sells as a whole
-            # package/unit (e.g. "250 g pasta" -> one box of pasta) — buy one of it, the
-            # ordinary way people shop for packaged goods, same default as Shufersal's
-            # equivalent case, rather than inventing a package count from an amount with
-            # no per-product package size available to convert with.
-            unit_count = 1
+            # package/unit (e.g. "1000 g pasta" against a 500 g box) -- buy enough whole
+            # packages to cover the real requested amount when this matched product's
+            # own package size is known (from the local catalog) and comparable;
+            # otherwise fall back to buying just one, the ordinary way people shop for
+            # packaged goods, rather than inventing a package count with no known
+            # per-product size to convert with.
+            count = None
+            if package_size is not None and package_unit is not None:
+                count = packages_needed(quantity, unit, package_size, package_unit)
+            unit_count = count or 1
         else:
             if quantity != int(quantity):
                 raise UnsupportedQuantityError(

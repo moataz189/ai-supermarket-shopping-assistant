@@ -361,6 +361,31 @@ async def test_by_unit_product_with_weight_unit_buys_one_whole_package():
     assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 1}]
 
 
+async def test_by_unit_product_with_weight_unit_buys_enough_whole_packages_when_size_known():
+    # "1000 g pasta" matched to a 500 g package -> buy 2, not 1 (a real reported bug).
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 2}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(
+        page, _by_unit_match(), 1000, "g", package_size=500.0, package_unit="g"
+    )
+
+    assert result.quantity == 2
+    assert result.unit == "unit"
+    assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 2}]
+
+
+async def test_by_unit_product_with_weight_unit_still_buys_one_when_size_unknown():
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 1}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _by_unit_match(), 1000, "g")
+
+    assert result.quantity == 1
+
+
 async def test_legacy_call_without_unit_is_unchanged():
     page = FakePage(search_results=[_ok([
         {"code": "P1", "name": "Pasta", "cartStatus": {"inCart": True, "qty": 2}},

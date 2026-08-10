@@ -3,6 +3,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mcp_servers.recipe_mcp.ingredient_defaults import (
+    default_quantity_for,
+    is_non_actionable_unit,
+)
+from mcp_servers.recipe_mcp.quantity import is_precise_metric_unit
 from mcp_servers.recipe_mcp.schemas import (
     GetRecipeIngredientsResponse,
     Ingredient,
@@ -60,10 +65,59 @@ def create_server(client) -> FastMCP:
             raise ValueError(f"servings must be a positive integer, got {target_servings}")
 
         ratio = target_servings / original_servings
-        ingredients = [
-            Ingredient(name=i["name"], amount=i["amount"] * ratio, unit=i["unit"])
-            for i in data["extendedIngredients"]
-        ]
+        raw_ingredients = data["extendedIngredients"]
+
+        # Fetched at most once per call, and only if at least one ingredient actually
+        # needs it (see the loop below) -- never once per ingredient, never when every
+        # ingredient's own measures.metric is already precise.
+        widget_by_name: dict[str, dict] | None = None
+
+        def _widget_lookup(name: str) -> dict | None:
+            nonlocal widget_by_name
+            if widget_by_name is None:
+                widget = client.get_ingredient_widget(recipe_id)
+                widget_by_name = {
+                    w["name"].strip().lower(): w["amount"]["metric"] for w in widget["ingredients"]
+                }
+            return widget_by_name.get(name.strip().lower())
+
+        ingredients = []
+        for i in raw_ingredients:
+            original_amount, original_unit = i["amount"], i["unit"]
+            metric = ((i.get("measures") or {}).get("metric")) or {}
+            metric_amount, metric_unit = metric.get("amount"), metric.get("unitShort")
+
+            if is_precise_metric_unit(metric_unit):
+                amount, unit = metric_amount, metric_unit
+            else:
+                widget_entry = _widget_lookup(i["name"])
+                if widget_entry is not None and is_precise_metric_unit(widget_entry.get("unit")):
+                    amount, unit = widget_entry["value"], widget_entry["unit"]
+                else:
+                    # Neither Spoonacular's own metric measure nor the ingredient
+                    # widget has a deterministic weight/volume for this ingredient
+                    # (e.g. a whole egg) -- gracefully fall back to the recipe's
+                    # original amount/unit rather than guessing.
+                    amount, unit = original_amount, original_unit
+
+            final_amount, final_unit = amount * ratio, unit
+            if is_non_actionable_unit(final_unit):
+                # A "servings" count (or no unit at all) is not a real, buyable
+                # quantity — confirmed live (Spoonacular id 652061, "Miso Cream Pasta")
+                # that this happens when Spoonacular has no parseable amount for an
+                # ingredient anywhere, in either endpoint. Always resolves to something
+                # data-driven and usable instead of literally buying `final_amount`
+                # units of it (see ingredient_defaults.py).
+                final_amount, final_unit = default_quantity_for(i["name"], target_servings)
+
+            ingredients.append(Ingredient(
+                name=i["name"],
+                amount=final_amount,
+                unit=final_unit,
+                original_amount=original_amount * ratio,
+                original_unit=original_unit,
+            ))
+
         return GetRecipeIngredientsResponse(
             recipe_id=recipe_id, servings=target_servings, ingredients=ingredients
         )

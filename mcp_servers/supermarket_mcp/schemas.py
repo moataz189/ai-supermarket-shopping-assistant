@@ -18,6 +18,8 @@ class ProductPriceResponse(BaseModel):
     name: str
     price: float
     unit_price: float
+    package_size: float
+    package_unit: str
     listed_in_feed: bool
     last_updated_at: str
     stale: bool

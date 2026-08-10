@@ -13,6 +13,13 @@ class CartItemRequest(BaseModel):
     # amount in that unit, and adapters run it through the retailer-specific quantity
     # conversion in mcp_servers/retailer_cart_mcp/quantity.py instead.
     unit: str | None = None
+    # The matched product's own package size/unit from the local catalog (e.g. 500 "g"
+    # for a pasta box) -- None when unknown. Only meaningful together with `unit` being
+    # a real weight/volume: lets an adapter buy enough whole packages to cover a
+    # requested weight/volume instead of always assuming one package is enough (see
+    # quantity.py's packages_needed).
+    package_size: float | None = None
+    package_unit: str | None = None
 
 
 class CartItemResult(BaseModel):

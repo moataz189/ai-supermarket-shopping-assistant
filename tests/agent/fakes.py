@@ -45,7 +45,13 @@ class FakeRecipeClient:
             "recipe_id": recipe_id,
             "servings": target_servings,
             "ingredients": [
-                {"name": i["name"], "amount": i["amount"] * ratio, "unit": i["unit"]}
+                {
+                    "name": i["name"],
+                    "amount": i["amount"] * ratio,
+                    "unit": i["unit"],
+                    **({"original_amount": i["original_amount"] * ratio} if "original_amount" in i else {}),
+                    **({"original_unit": i["original_unit"]} if "original_unit" in i else {}),
+                }
                 for i in recipe["ingredients"]
             ],
         }

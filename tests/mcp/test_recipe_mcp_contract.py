@@ -63,8 +63,10 @@ async def test_get_recipe_ingredients_scales_amounts(mcp_server):
     assert structured["servings"] == doubled_servings
     assert len(structured["ingredients"]) == len(fixture["extendedIngredients"])
     for ingredient in structured["ingredients"]:
-        expected = original_by_name[ingredient["name"]] * 2
-        assert ingredient["amount"] == pytest.approx(expected)
+        expected_original = original_by_name[ingredient["name"]] * 2
+        assert ingredient["original_amount"] == pytest.approx(expected_original)
+    tomatoes = next(i for i in structured["ingredients"] if i["name"] == "tomatoes")
+    assert tomatoes["amount"] == pytest.approx(800.0)  # 400 g normalized x2 servings
 
 
 async def test_get_recipe_ingredients_defaults_to_original_servings(mcp_server):
@@ -77,7 +79,149 @@ async def test_get_recipe_ingredients_defaults_to_original_servings(mcp_server):
 
     assert structured["servings"] == fixture["servings"]
     for ingredient in structured["ingredients"]:
-        assert ingredient["amount"] == pytest.approx(original_by_name[ingredient["name"]])
+        assert ingredient["original_amount"] == pytest.approx(original_by_name[ingredient["name"]])
+
+
+async def test_tomatoes_use_the_precise_metric_measure_directly():
+    # Note: this recipe's "eggs" entry (processed first) is itself imprecise and does
+    # trigger the shared widget fetch on its own -- that's covered by
+    # test_widget_is_fetched_at_most_once_even_with_multiple_imprecise_ingredients and
+    # test_no_widget_call_at_all_when_every_ingredient_is_already_precise below. This
+    # test only proves tomatoes' own value came from measures.metric, not the widget
+    # (the widget's tomatoes entry is intentionally identical, so a value-only
+    # assertion can't distinguish the two on its own -- see the dedicated
+    # zero-widget-calls test for that proof).
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": fixture["id"]}
+    )
+
+    tomatoes = next(i for i in structured["ingredients"] if i["name"] == "tomatoes")
+    assert tomatoes["amount"] == pytest.approx(400.0)
+    assert tomatoes["unit"] == "g"
+    assert tomatoes["original_amount"] == pytest.approx(14.0)
+    assert tomatoes["original_unit"] == "ounces"
+
+
+async def test_olive_oil_precise_metric_scales_with_servings_matching_the_spec_example():
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": fixture["id"], "servings": fixture["servings"] * 2}
+    )
+
+    olive_oil = next(i for i in structured["ingredients"] if i["name"] == "olive oil")
+    assert olive_oil["amount"] == pytest.approx(60.0)  # 30 ml x2 servings
+    assert olive_oil["unit"] == "ml"
+
+
+class _AllPreciseClient:
+    """Stub client for a recipe where every ingredient's own measures.metric is already
+    precise -- isolates the "never calls the widget at all when nothing needs it" case
+    from the shared recipe_12345 fixture, where eggs/onion legitimately do need it."""
+
+    def __init__(self):
+        self.widget_calls = 0
+
+    def search_recipes(self, query: str, number: int = 5) -> list[dict]:
+        raise NotImplementedError
+
+    def get_recipe(self, recipe_id: int) -> dict:
+        return {
+            "id": recipe_id,
+            "title": "All Precise",
+            "servings": 2,
+            "extendedIngredients": [
+                {
+                    "name": "tomatoes", "amount": 14.0, "unit": "ounces",
+                    "measures": {"metric": {"amount": 400.0, "unitShort": "g"}},
+                },
+                {
+                    "name": "olive oil", "amount": 2.0, "unit": "tbsp",
+                    "measures": {"metric": {"amount": 30.0, "unitShort": "ml"}},
+                },
+            ],
+        }
+
+    def get_ingredient_widget(self, recipe_id: int) -> dict:
+        self.widget_calls += 1
+        raise AssertionError("should never be called when every ingredient is precise")
+
+
+async def test_no_widget_call_at_all_when_every_ingredient_is_already_precise():
+    fake_client = _AllPreciseClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool("get_recipe_ingredients", {"recipe_id": 1})
+
+    assert fake_client.widget_calls == 0
+    tomatoes = next(i for i in structured["ingredients"] if i["name"] == "tomatoes")
+    assert tomatoes["amount"] == pytest.approx(400.0)
+
+
+async def test_imprecise_metric_measure_falls_back_to_the_ingredient_widget():
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": fixture["id"]}
+    )
+
+    onion = next(i for i in structured["ingredients"] if i["name"] == "onion")
+    assert onion["amount"] == pytest.approx(110.0)
+    assert onion["unit"] == "g"
+    assert onion["original_amount"] == pytest.approx(1.0)
+    assert onion["original_unit"] == "medium"
+    assert fake_client.widget_calls == 1  # onion needed it
+
+
+async def test_widget_is_fetched_at_most_once_even_with_multiple_imprecise_ingredients():
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    await mcp_server.call_tool("get_recipe_ingredients", {"recipe_id": fixture["id"]})
+
+    # onion AND eggs are both imprecise in measures.metric -- still exactly one call.
+    assert fake_client.widget_calls == 1
+
+
+async def test_ingredient_with_no_usable_metric_anywhere_gracefully_falls_back_to_original():
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": fixture["id"]}
+    )
+
+    # eggs: measures.metric is "4 large" (not precise) AND the widget's own entry is
+    # also "4 large" (Spoonacular has no deterministic weight for a whole egg) -- falls
+    # all the way back to the recipe's original amount/unit, unchanged.
+    eggs = next(i for i in structured["ingredients"] if i["name"] == "eggs")
+    assert eggs["amount"] == pytest.approx(4.0)
+    assert eggs["unit"] == "large"
+    assert eggs["original_amount"] == pytest.approx(4.0)
+    assert eggs["original_unit"] == "large"
+
+
+async def test_widget_lookup_scales_by_the_same_servings_ratio_as_everything_else():
+    fake_client = FakeSpoonacularClient()
+    mcp_server = server.create_server(fake_client)
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": fixture["id"], "servings": fixture["servings"] * 2}
+    )
+
+    onion = next(i for i in structured["ingredients"] if i["name"] == "onion")
+    assert onion["amount"] == pytest.approx(220.0)  # 110 g x2 servings
 
 
 async def test_get_recipe_ingredients_rejects_non_positive_requested_servings(mcp_server):
@@ -111,3 +255,95 @@ async def test_get_recipe_ingredients_rejects_non_positive_original_servings():
         await zero_servings_server.call_tool(
             "get_recipe_ingredients", {"recipe_id": fixture["id"]}
         )
+
+
+class _ServingsPlaceholderClient:
+    """Stub client for ingredients whose only available quantity anywhere (both
+    measures.metric and the ingredientWidget) is a meaningless "servings" placeholder --
+    a real Spoonacular data-completeness gap, confirmed live against recipe 652061 ("Miso
+    Cream Pasta"). Isolates the ingredient-defaults override (see
+    mcp_servers/recipe_mcp/ingredient_defaults.py) from the shared recipe_12345 fixture.
+    """
+
+    def __init__(self):
+        self.widget_calls = 0
+
+    def search_recipes(self, query: str, number: int = 5) -> list[dict]:
+        raise NotImplementedError
+
+    def get_recipe(self, recipe_id: int) -> dict:
+        return {
+            "id": recipe_id,
+            "title": "Servings Placeholder Test",
+            "servings": 1,
+            "extendedIngredients": [
+                {"name": "olive oil", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "pasta", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "onion", "amount": 1.0, "unit": "",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": ""}}},
+                {"name": "tomatoes", "amount": 1.0, "unit": "serving",
+                 "measures": {"metric": {"amount": 1.0, "unitShort": "serving"}}},
+                {"name": "shiso leaves", "amount": 9.0, "unit": "servings",
+                 "measures": {"metric": {"amount": 9.0, "unitShort": "servings"}}},
+            ],
+        }
+
+    def get_ingredient_widget(self, recipe_id: int) -> dict:
+        self.widget_calls += 1
+        return {"ingredients": [
+            {"name": "olive oil", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "pasta", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "onion", "amount": {"metric": {"value": 1.0, "unit": ""}}},
+            {"name": "tomatoes", "amount": {"metric": {"value": 1.0, "unit": "serving"}}},
+            {"name": "shiso leaves", "amount": {"metric": {"value": 9.0, "unit": "servings"}}},
+        ]}
+
+
+async def test_non_actionable_servings_unit_uses_the_ingredient_default_table():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 4}
+    )
+    by_name = {i["name"]: i for i in structured["ingredients"]}
+
+    assert by_name["olive oil"]["amount"] == pytest.approx(60.0)
+    assert by_name["olive oil"]["unit"] == "ml"
+    assert by_name["pasta"]["amount"] == pytest.approx(500.0)
+    assert by_name["pasta"]["unit"] == "g"
+    assert by_name["onion"]["amount"] == pytest.approx(1.0)
+    assert by_name["onion"]["unit"] == "unit"
+    assert by_name["tomatoes"]["amount"] == pytest.approx(0.5)
+    assert by_name["tomatoes"]["unit"] == "kg"
+    # Not in either default table -- never resolves to the raw, meaningless "36
+    # servings" (9 x4) -- falls back to the same safe "buy 1" default as a known
+    # unit-sold item.
+    assert by_name["shiso leaves"]["amount"] == pytest.approx(1.0)
+    assert by_name["shiso leaves"]["unit"] == "unit"
+
+
+async def test_unit_default_ignores_the_servings_count_entirely():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 20}
+    )
+
+    onion = next(i for i in structured["ingredients"] if i["name"] == "onion")
+    assert onion["amount"] == pytest.approx(1.0)  # still just 1, regardless of servings
+
+
+async def test_weight_default_ignores_the_servings_count_entirely():
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 20}
+    )
+
+    tomatoes = next(i for i in structured["ingredients"] if i["name"] == "tomatoes")
+    assert tomatoes["amount"] == pytest.approx(0.5)  # flat default, not scaled

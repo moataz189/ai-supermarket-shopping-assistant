@@ -99,6 +99,7 @@ from mcp_servers.retailer_cart_mcp.quantity import (
     QuantityConversionRequiredError,
     is_count_unit,
     normalize_weight_to_kg,
+    packages_needed,
 )
 
 BASE_URL = "https://www.shufersal.co.il"
@@ -218,7 +219,8 @@ class ShufersalAdapter:
         return 0.0
 
     async def add_to_cart(
-        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
         item = match.locator
         selling_method = (item.get("sellingMethod") or {}).get("code", "BY_UNIT")
@@ -246,10 +248,16 @@ class ShufersalAdapter:
             send_qty, result_unit = quantity, "unit"
         else:
             # Recipe gave a weight/volume for a product this retailer sells as a whole
-            # package/unit (e.g. "250 g pasta" -> one box of pasta) — buy one of it, same
-            # as ordinary packaged-goods shopping, rather than inventing a package count
-            # from an amount with no per-product package size available to convert with.
-            send_qty, result_unit = 1, "unit"
+            # package/unit (e.g. "1000 g pasta" against a 500 g box) -- buy enough whole
+            # packages to cover the real requested amount when this matched product's
+            # own package size is known (from the local catalog) and comparable;
+            # otherwise fall back to buying just one, the ordinary way people shop for
+            # packaged goods, rather than inventing a package count with no known
+            # per-product size to convert with.
+            count = None
+            if package_size is not None and package_unit is not None:
+                count = packages_needed(quantity, unit, package_size, package_unit)
+            send_qty, result_unit = (count or 1), "unit"
 
         has_ajax_call = await page.evaluate("() => typeof window.ajaxCall === 'function'")
         if not has_ajax_call:

@@ -60,17 +60,23 @@ class RetailerAdapter(Protocol):
         ...
 
     async def add_to_cart(
-        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None
+        self, page: Page, match: MatchResult, quantity: float, unit: str | None = None,
+        *, package_size: float | None = None, package_unit: str | None = None,
     ) -> AddToCartResult:
         """Adds the matched product to the cart and returns what actually ended up
         there. `unit=None` (the default) means a legacy whole-unit request — behavior
         must be unchanged from before `unit` existed. Any other `unit` (e.g. "g", "kg",
         "large") means `quantity` is a recipe's real requested amount in that unit;
         adapters run it through mcp_servers/retailer_cart_mcp/quantity.py's conversion
-        helpers to decide what to actually add. Raises UnsupportedQuantityError or
+        helpers to decide what to actually add. `package_size`/`package_unit`, when
+        given, are the matched product's own known package size from the local catalog
+        — used only when `unit` is a weight/volume that doesn't match this product's
+        selling method, to buy enough whole packages instead of assuming one is enough
+        (see quantity.py's packages_needed). Raises UnsupportedQuantityError or
         QuantityNotConfirmedError for the legacy failure cases, or
         QuantityConversionRequiredError when `unit` and the matched product's retailer
-        selling method are incompatible with no deterministic conversion between them."""
+        selling method are incompatible with no deterministic conversion between them.
+        """
         ...
 
     async def get_cart_url(self, page: Page) -> str | None: ...
@@ -122,6 +128,8 @@ async def prepare_cart_for_retailer(
                 for item in items:
                     name, item_code, quantity = item["name"], item["item_code"], item["quantity"]
                     unit = item.get("unit")  # None => legacy request, unchanged behavior below
+                    package_size = item.get("package_size")
+                    package_unit = item.get("package_unit")
 
                     # A fresh context per item — not the shared `page` used for
                     # open_site()/get_cart_url() above — reloading the same
@@ -153,7 +161,10 @@ async def prepare_cart_for_retailer(
                             continue
 
                         try:
-                            result = await adapter.add_to_cart(item_page, match, quantity, unit)
+                            result = await adapter.add_to_cart(
+                                item_page, match, quantity, unit,
+                                package_size=package_size, package_unit=package_unit,
+                            )
                         except QuantityConversionRequiredError as exc:
                             failed.append({
                                 "name": name,
