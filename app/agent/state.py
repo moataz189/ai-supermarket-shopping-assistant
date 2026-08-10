@@ -16,6 +16,11 @@ class ParsedItem(TypedDict, total=False):
     # search_name fell back to english_name unresolved; only set for recipe-derived items
     quantity: float | None
     unit: str  # only set for recipe-derived items (CP7) — grocery-list items have none
+    original_quantity: float | None  # the recipe's own original amount before metric
+    # normalization (e.g. 14 "ounces") -- internal-only, preserved for debugging;
+    # `quantity`/`unit` above are the normalized value used everywhere else. Only set
+    # alongside quantity/unit (recipe-derived items).
+    original_unit: str
 
 
 class ParsedRequest(TypedDict):
