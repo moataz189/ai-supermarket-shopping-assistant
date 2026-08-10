@@ -1161,6 +1161,7 @@ peppermint patties;קציצות מנטה;19091;package,piece,g,bag,oz,cup
 dried basil;בזיליקום מיובש;2003;piece,g,oz,teaspoon,serving,tablespoon
 white wine vinegar;חומץ יין לבן;1002068;g,oz,teaspoon,cup,serving,tablespoon
 miso;מיסו;16112;g,oz,teaspoon,cup,tablespoon
+miso paste;ממרח מיסו;16112;g,oz,teaspoon,cup,tablespoon
 cooked spaghettini;ספגטיני מבושל;11420421;g,oz,cup,serving
 pickle relish;רליש מלפפון חמוץ;11944;g,oz,teaspoon,cup,tablespoon
 colored sprinkles;פזז'ונים צבעוני;93645;g,oz,teaspoon,cup,serving,tablespoon
@@ -3087,6 +3088,7 @@ flounder;פלטה;15028;steak,piece,g,ounce,fillet,oz,serving
 cilantro;כוסברה;11165;handful,piece,g,sprig,bunch,oz,teaspoon,cup,serving,tablespoon
 coca cola;קולה קוקה;14400;can,g,tin,oz,fluid ounce,cup
 mushrooms;פטריות;11260;small,package,large,piece,slice,g,medium,oz,cup piece,cup
+mushroom;פטריות;11260;small,package,large,piece,slice,g,medium,oz,cup piece,cup
 raw honey;דבש נא;10319296;g,jar,oz,packet,teaspoon,cup,serving,tablespoon
 taro root;שורש טארו;11518;piece,g,oz,cup
 suet;שומן כליות;13335;g,ounce,oz
