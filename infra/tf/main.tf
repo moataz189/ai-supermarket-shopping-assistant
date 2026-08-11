@@ -61,6 +61,11 @@ module "vpc" {
   enable_nat_gateway = false
   enable_vpn_gateway = false
 
+  # Required for the "public IP directly on the node" design above — the module's own
+  # default (false) means EC2 instances launched into these subnets get no public IP at
+  # all unless this is set, regardless of the subnets being "public" by routing.
+  map_public_ip_on_launch = true
+
   public_subnet_tags = {
     "kubernetes.io/role/elb" = "1"
   }
