@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingestion-delta
+  namespace: prod
+spec:
+  # Hourly — the "Price → poll for the newest incremental delta" half of live ingestion.
+  # Never an always-running Deployment: each run is a one-shot batch download+ingest,
+  # exiting when done (app/ingestion/run.py's run_live()).
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ingestion-delta
+              image: moataz189/supermarket-ingestion:latest
+              # already_processed() (app/ingestion/pipeline.py) makes re-running this against
+              # an unchanged upstream file a safe no-op — the newest Price file doesn't
+              # necessarily change every hour.
+              command: ["python", "-m", "app.ingestion.run", "--source", "live-delta"]
+
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: DATABASE_URL
+
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"

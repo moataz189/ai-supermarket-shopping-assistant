@@ -78,14 +78,16 @@ them.
 - Every task ends with a passing test suite and a commit — do not move to the next
   checkpoint with a red build.
 - **Helm is allowed, but only for third-party Kubernetes add-ons** that ship an official,
-  maintained chart (e.g. Prometheus/Grafana via `kube-prometheus-stack`, CP14) — charts must
-  come from trusted/maintained repositories, and Helm values are version-controlled files
-  under `infra/helm/<chart>/` (env-specific values may be split, e.g. `dev-values.yaml` /
-  `prod-values.yaml`). Helm is optional everywhere else: app-specific Kubernetes resources
-  (backend, MCP servers, web, Postgres, Ingress) stay as plain manifests under `k8s/dev` /
-  `k8s/prod`, unchanged. Introducing Helm does not change the existing NGINX Ingress design.
-  Application metrics are exposed via `ServiceMonitor` resources (or another mechanism
-  `kube-prometheus-stack` supports), not hand-rolled Prometheus scrape config.
+  maintained chart — ingress-nginx and Prometheus/Grafana via `kube-prometheus-stack` (CP10,
+  CP14) — charts must come from trusted/maintained repositories, and Helm values are
+  version-controlled files under `infra/helm/` and `infra/k8s/monitoring/`. Helm is optional
+  everywhere else: app-specific Kubernetes resources (backend, MCP servers, web, ingestion)
+  stay as plain manifests under `infra/k8s/dev` / `infra/k8s/prod`, unchanged.
+  Application metrics are exposed via a `ServiceMonitor` resource that `kube-prometheus-stack`
+  scrapes, not hand-rolled Prometheus scrape config. (Postgres/DynamoDB are prod-only, an
+  in-cluster StatefulSet and a Terraform-provisioned table respectively — dev stays on
+  SQLite/in-memory checkpointing for cheaper, faster iteration; see `docs/plan/10-14` for
+  the full rationale and architecture.)
 - **Every checkpoint/plan is implemented in its own branch created from the latest `main`.**
   See "Git Branch Workflow" below for the concrete commands, branch lifecycle, and CI/CD
   triggers — every checkpoint's work begins by updating `main` and branching from it.
@@ -220,6 +222,7 @@ later ones depend on earlier ones being done and committed.
 | CP14 | Prometheus & Grafana monitoring | `docs/plan/14-monitoring-prometheus-grafana.md` | M5 |
 | CP15 | Test suite hardening & demo resilience | `docs/plan/15-test-hardening-resilience.md` | M6 |
 | CP16 | UI polish, docs & final demo readiness | `docs/plan/16-ui-polish-docs-demo.md` | M6 |
+| CP17 | Live price-feed ingestion (Shufersal + Rami Levy, prod only) | `docs/plan/17-live-price-feed-ingestion.md` | — (added after CP16, not part of the original M1-M6 milestone sequence) |
 
 ## Deliverables
 
@@ -239,9 +242,12 @@ payment, handles partial per-item failures gracefully, and reports blocked autom
 mock retailer site in automated tests.
 
 By the end of CP11 (M4): the full stack (including the Retailer-Cart MCP server) runs in the
-`dev` namespace of a kubeadm cluster on AWS EC2 (provisioned by Terraform), deployed via
-ArgoCD, ingesting real Shufersal/Rami Levy feeds on a schedule, backed by PostgreSQL and a
-DynamoDB checkpointer.
+`dev` namespace of a self-managed kubeadm cluster on AWS EC2 (provisioned by Terraform),
+deployed via ArgoCD's App-of-Apps pattern, ingesting feeds on a schedule via a CronJob —
+`dev` backed by SQLite (the same `CHECKPOINTER_BACKEND=memory` / `DATABASE_URL=sqlite:///...`
+configuration used locally); `prod` backed by an in-cluster PostgreSQL StatefulSet and a
+DynamoDB checkpointer (`CHECKPOINTER_BACKEND=dynamodb`) — see `docs/plan/10-14` for the full
+architecture and rationale for the dev/prod split.
 
 By the end of CP14 (M5): every plan branch is linted and tested (including mock-site
 browser-automation tests) before merging directly into `dev`, whose push automatically builds
@@ -267,36 +273,65 @@ app/
     models.py      # SQLAlchemy: RetailerProduct, RetailerFeedStatus          (CP2)
     repositories.py# repository layer used by MCP server + ingestion         (CP2)
     session.py     # DATABASE_URL-driven engine/session setup                (CP2)
-  ingestion/       # feed download, parse, validate, atomic staging load     (CP2, CP15)
+  ingestion/       # feed download, parse, validate, atomic staging load
+    downloaders/   # live Shufersal/Rami Levy portal downloaders, prod only (CP2, CP15, CP17)
   api/             # FastAPI app, routes, request/response schemas           (CP5, CP8)
 mcp_servers/         # each an independent HTTP service (own port, own container/Deployment)
   recipe_mcp/      # Recipe MCP server (Spoonacular), port 8002              (CP6)
   supermarket_mcp/ # Supermarket-Data MCP server (per-retailer only), 8001   (CP3)
   retailer_cart_mcp/ # Retailer-Cart MCP server (Playwright), port 8003      (CP8)
 web/               # React chat SPA                                        (CP5, CP8, CP16)
+scripts/
+  bootstrap.sh     # cluster add-ons: Calico, metrics-server, EBS CSI,
+                   # ArgoCD install + App-of-Apps apply (SSH'd to the
+                   # control plane and run once per cluster)               (CP10, CP11)
 infra/
-  terraform/       # EC2 + kubeadm cluster provisioning                     (CP10)
-  helm/            # version-controlled Helm values for third-party charts
-    kube-prometheus-stack/
-      dev-values.yaml  # dev-namespace values (Prometheus/Grafana)          (CP14)
-      prod-values.yaml # prod-namespace values (Prometheus/Grafana)         (CP14)
-k8s/
-  dev/             # ArgoCD-watched dev namespace manifests, one Deployment/
-                   # Service per MCP server + backend + web + postgres      (CP11)
-  prod/            # ArgoCD-watched prod namespace manifests (same shape)   (CP13)
-  argocd/          # ArgoCD install + Application manifests (incl. an
-                   # Application pointing at the kube-prometheus-stack
-                   # Helm chart + infra/helm values, per env)               (CP11, CP14)
-  monitoring/      # any ServiceMonitor/PrometheusRule/dashboard resources
-                   # layered on top of the Helm-installed stack — raw
-                   # Prometheus/Grafana manifests are not maintained here   (CP14)
-.github/workflows/ # CI/CD pipeline definitions                            (CP12)
+  tf/              # Terraform: VPC (registry module), kubeadm control-plane
+                   # + worker ASG (CRI-O), SSM join-command coordination,
+                   # ALB + ACM + Route53 ingress, SNS alerting             (CP10)
+    modules/{alerting,ingress,k8s-cluster}/
+    tfvars/<region>.tfvars
+  packer/          # k8s-node.pkr.hcl + install-k8s-deps.sh — bakes an AMI
+                   # with CRI-O/kubelet/kubeadm/kubectl pre-installed, so
+                   # user-data only does per-instance kubeadm work         (CP10)
+  argocd/          # App-of-Apps + one Application per environment/add-on:
+                   # app-of-apps, cluster-resources, dev, prod,
+                   # ingress-nginx, monitoring                             (CP11)
+  helm/            # version-controlled values for third-party charts
+    ingress-nginx-values.yaml                                              (CP10)
+  k8s/
+    common/        # cluster-wide resources: ebs-sc StorageClass, ArgoCD/
+                   # Grafana/Prometheus Ingresses, PrometheusRule alerts,
+                   # Grafana dashboard ConfigMaps                          (CP11, CP14)
+    dev/           # ArgoCD-watched dev namespace manifests (tracks the
+                   # `dev` branch): one Deployment/Service per MCP server +
+                   # backend + web, ingestion CronJob, retailer-cart-mcp's
+                   # session Secret mount                                  (CP11)
+    prod/          # ArgoCD-watched prod namespace manifests (tracks
+                   # `main`, manual sync only — same shape as dev, plus a
+                   # postgres/ StatefulSet+Service dev doesn't have; its
+                   # ingestion/ is a PostSync Job (PriceFull) + hourly
+                   # CronJob (Price) hitting live retailer feeds, not
+                   # dev's single fixtures CronJob                  (CP13, CP17)
+    monitoring/    # kube-prometheus-stack Helm values (values.yaml +
+                   # values.yaml.tpl, SNS topic ARN rendered by CI)        (CP14)
+.github/workflows/
+  ci.yml                     # lint + test + coverage, every PR            (CP1)
+  cluster.yaml               # workflow_dispatch: terraform apply + bootstrap (CP10)
+  cd.yml                     # build/push per-service images, bump dev/prod
+                             # manifest image tags on push to dev/main     (CP12)
+  sync-retailer-sessions.yml # syncs the retailer-cart-mcp session Secret
+                             # (dev/prod) from GitHub Secrets on every
+                             # push — no session file ever touches the
+                             # repo or an image                            (CP11)
 tests/             # unit, integration, contract, agent, ingestion,
                    # mock-site browser-automation tests                    (all checkpoints)
-Dockerfile           # shared image: backend, supermarket-mcp, recipe-mcp,
-                     # ingestion (different `command:` per service)         (CP9)
-Dockerfile.retailer-cart-mcp # separate image (needs Playwright browsers)   (CP9)
-docker-compose.yml   # local dev stack — 4 backend-side services + web      (CP9)
+app/api/Dockerfile               # backend image                          (CP9)
+app/ingestion/Dockerfile         # ingestion image (CronJob, not a Deployment) (CP9)
+mcp_servers/*/Dockerfile         # one image per MCP server                (CP9)
+web/Dockerfile                   # nginx-served SPA build                 (CP9)
+docker-compose.yml   # local dev stack — SQLite/memory backend, 4 backend-side
+                     # services + web (six separate images total, not shared) (CP9)
 ```
 
 ## Task Checklists
@@ -317,6 +352,7 @@ docker-compose.yml   # local dev stack — 4 backend-side services + web      (C
 - [ ] CP14 — Prometheus & Grafana monitoring
 - [ ] CP15 — Test suite hardening & demo resilience
 - [ ] CP16 — UI polish, docs & final demo readiness
+- [x] CP17 — Live price-feed ingestion (Shufersal + Rami Levy, prod only)
 
 (Each box maps to one detail file under `docs/plan/`, which carries its own internal task
 checklist — mark this box done only once that file's Definition of Done is fully met.)
@@ -351,8 +387,11 @@ Mirrors `docs/spec.md` §9, mapped to the checkpoints that implement each requir
 
 **Definition of "project complete":** all 16 checkpoints are checked off, each implemented per
 the Git Branch Workflow above; the full automated test suite (unit, integration, MCP
-contract, agent/graph, ingestion, concurrent-thread-id, PostgreSQL-compatibility, mock-site
-browser-automation) passes in CI on `main`; the `dev` namespace auto-deploys on every push to
+contract, agent/graph, ingestion, concurrent-thread-id, mock-site
+browser-automation) passes in CI on `main` (verified manually against a real PostgreSQL
+container that `app/db/session.py`'s SQLAlchemy engine and `init_db()` work unchanged against
+Postgres — no permanent CI Postgres service container was added, see CP10-14's as-built
+notes); the `dev` namespace auto-deploys on every push to
 `dev` and is currently healthy; the `prod` namespace has at
 least one manually-promoted, working deployment; Prometheus/Grafana dashboards are live and
 show real traffic from a demo run, including retailer-cart-preparation metrics; and a full

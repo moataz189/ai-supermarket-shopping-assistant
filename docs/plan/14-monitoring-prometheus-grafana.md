@@ -2,264 +2,150 @@
 
 Spec milestone: M5 (completes M5). Depends on: CP11, CP13.
 
+> **As-built note (2026-08-11):** implemented as a structural migration of a separate,
+> already-working infrastructure project (`polyaifursa`)'s `kube-prometheus-stack` Helm
+> deployment, ServiceMonitor/PrometheusRule/Grafana-dashboard-sidecar pattern, and SNS
+> Alertmanager wiring — not the raw hand-rolled Prometheus/Grafana Deployments originally
+> sketched below (which were never implemented as written). This resolves a pre-existing
+> inconsistency in this repo's own docs: `docs/plan.md`'s overview already anticipated
+> `kube-prometheus-stack`/`ServiceMonitor` (not raw manifests); this checkpoint's original
+> detailed steps disagreed with that overview. The actual implementation follows the
+> overview.
+
 ## Goal
 
-Instrument the backend with the metrics spec §7 calls for (request latency, MCP call
-success/failure rates, per-retailer ingestion success/staleness, error-code counts, and
-retailer-cart-preparation success/failure/blocked rates), and deploy Prometheus + Grafana
-into the cluster to scrape and visualize them across both `dev` and `prod`.
+Instrument the backend with metrics that are genuinely measurable from this codebase (chat
+request count/duration/status, MCP call outcomes by service, request-type breakdown,
+clarification count, retailer choice count, cart-preparation outcomes, token usage), and
+deploy `kube-prometheus-stack` (Prometheus + Grafana + Alertmanager) via Helm/ArgoCD to
+scrape and visualize them across both `dev` and `prod`, with alerting to SNS.
 
-## Scope
+## Application instrumentation (`app/metrics.py`)
 
-Application-side metrics instrumentation, a `monitoring` namespace with Prometheus +
-Grafana, and one dashboard covering the metrics above. Does not add alerting/paging (out of
-scope for MVP — dashboards only).
+All metrics live in one module (`app/metrics.py`, not `app/api/metrics.py` — it's imported
+by both `app/agent/*` and `app/api/*`, so it can't live under the `api` package without an
+`agent`-depends-on-`api` layering inversion):
 
-## Deliverables
+| Metric | Type | Labels | Recorded in |
+|---|---|---|---|
+| `agent_chat_requests_total` | Counter | `status` (`success`/`clarification`/`retailer_choice`/`error`) | `app/api/routes/chat.py` |
+| `agent_chat_request_duration_seconds` | Histogram | — | `app/api/routes/chat.py` |
+| `agent_input_tokens_total` / `agent_output_tokens_total` | Counter | — | `app/agent/nodes/parse_request.py` (from `ChatBedrockConverse`'s `usage_metadata`, the only LLM call site in the graph) |
+| `agent_request_type_total` | Counter | `request_type` (`recipe`/`grocery_list`/`general_chat`) | `app/agent/nodes/parse_request.py` |
+| `mcp_call_total` | Counter | `mcp_service` (`supermarket`/`recipe`/`retailer_cart`), `status` | `app/agent/mcp_clients.py` (each client's `_call`) |
+| `retailer_choice_total` | Counter | `retailer` | `app/api/routes/chat.py` |
+| `cart_preparation_total` | Counter | `status` (`success`/`partial`/`blocked`) | `app/api/routes/chat.py` |
+| `http_requests_total` / `http_request_duration_seconds_*` | Counter/Histogram | `handler`, `method`, `status` | `prometheus_fastapi_instrumentator` (generic per-route HTTP metrics, wired in `app/api/main.py`) |
 
-- `GET /metrics` on the backend exposes Prometheus-format metrics, including custom
-  counters/gauges beyond the standard HTTP ones.
-- Prometheus (in-cluster) scrapes both the `dev` and `prod` backend services.
-- A Grafana dashboard shows request latency, MCP call outcomes, ingestion freshness per
-  retailer, retailer-cart-preparation outcomes, and error-code counts.
+`agent_input_tokens_total`/`agent_output_tokens_total` were not in the original CP14 sketch
+(which used a hand-rolled `app_error_codes_total`/`ingestion_stale`/`retailer_cart_items_total`
+metric set based on a Postgres-ingestion architecture this project never built) — they're the
+metrics the migrated reference infrastructure's own Agent dashboard already expects, and this
+backend's LLM does expose real `usage_metadata`, so they're genuinely measurable. Conversely,
+`ingestion_stale`/`app_error_codes_total` were **not** implemented — they depend on ingestion
+freshness tracking and a typed warning-code taxonomy this project's ingestion/finalize code
+doesn't currently expose in a form worth instrumenting; adding real metrics only for what the
+code genuinely measures, not for what would be nice to have, was a deliberate choice.
 
-## Files to Create
+`GET /metrics` (`app/metrics.py`'s router, included in `app/api/main.py`) serves
+`prometheus_client`'s whole default registry in Prometheus text format — verified live via a
+built Docker image (`curl /metrics` returns both the custom counters above and the generic
+`http_requests_total`/`http_request_duration_seconds_*` family).
 
-```
-app/api/metrics.py
-k8s/monitoring/namespace.yaml
-k8s/monitoring/prometheus-configmap.yaml
-k8s/monitoring/prometheus-deployment.yaml
-k8s/monitoring/prometheus-service.yaml
-k8s/monitoring/grafana-datasource-configmap.yaml
-k8s/monitoring/grafana-dashboard-configmap.yaml
-k8s/monitoring/grafana-deployment.yaml
-k8s/monitoring/grafana-service.yaml
-```
+## Cluster monitoring stack
 
-## Files to Modify
+- **Helm chart:** `prometheus-community/kube-prometheus-stack` (pinned `88.0.1` in
+  `infra/argocd/monitoring.yaml`), values at `infra/k8s/monitoring/values.yaml` (committed,
+  with a placeholder SNS ARN) and `values.yaml.tpl` (the `envsubst` template
+  `.github/workflows/cluster.yaml` renders from Terraform's real SNS topic ARN output on
+  every cluster provisioning run). `fullnameOverride: monitoring`; Prometheus retains 30d /
+  2GiB (below its 3Gi PVC to leave WAL/compaction headroom); Grafana persists 1Gi; the
+  dashboard sidecar auto-loads any ConfigMap labeled `grafana_dashboard: "1"`.
+- **ServiceMonitor** (`infra/k8s/dev/backend/backend-servicemonitor.yaml`, and the `prod`
+  equivalent): scrapes the `backend-svc` Service's `/metrics` port every 15s, following
+  `kube-prometheus-stack`'s default `serviceMonitorSelector: {}` (select everything)
+  convention — works identically in both namespaces without per-namespace RBAC wiring.
+- **PrometheusRule** (`infra/k8s/common/monitoring/prometheus-rules.yaml`, cluster-scoped —
+  applies to both `dev` and `prod`):
+  - `BackendHighErrorRate`/`BackendCriticalErrorRate` (>5%/>25% of `agent_chat_requests_total`
+    over 5m) — same PromQL shape as the migrated reference infrastructure's
+    `AgentHighErrorRate`/`AgentCriticalErrorRate`, renamed to match this project's own
+    metric/service names.
+  - `BackendDown` (`up{job="backend-svc"} == 0` for 2m).
+  - `MCPServiceHighFailureRate`/`MCPServiceUnavailable` — derived from the backend's own
+    `mcp_call_total` counter, not from scraping each MCP server directly (none of the three
+    expose their own `/metrics`, so "an MCP server is unavailable" is only observable through
+    the backend's call outcomes).
+  - `PodCrashLooping`/`PodNotReady` — generic, `kube-state-metrics`-based (ships with the
+    chart already), new relative to the reference infrastructure's own rule set,
+    satisfying the "pod not ready / excessive restart" requirement.
+- **Alertmanager → SNS:** unchanged from the migrated reference's config (same inhibit rules,
+  same `sns_configs` receiver) — comment updated to reference this project's own alert names.
+  **Manual step required:** SNS email subscriptions cannot be auto-confirmed; whoever's email
+  is in `alert_email` (`infra/tf/tfvars/<region>.tfvars`) must click the confirmation link
+  AWS sends after the first `terraform apply`.
+- **Grafana dashboards** (`infra/k8s/common/monitoring/`, ConfigMap-sidecar pattern):
+  - `grafana-backend-dashboard.yaml` — new, this project's own: 9 panels covering chat error
+    rate, request-latency percentiles (p50/p95/p99), chat requests/min by status, input/output
+    tokens/min, MCP call failure rate by service, MCP calls/min by service+status, cart
+    preparation results, retailer choice count, and requests by type (recipe/grocery-list/
+    general). Built by adapting the reference's own Agent dashboard JSON (same panel
+    structure/style) and appending 5 new panels for this project's own metrics.
+  - `grafana-fastapi-observability-dashboard.yaml` — reused verbatim (generic, applies to any
+    `prometheus_fastapi_instrumentator`-instrumented service; now genuinely populated since
+    `app/api/main.py` wires the instrumentator — see "Application instrumentation" above).
+  - `grafana-nginx-ingress-dashboard.yaml` — reused verbatim (upstream ingress-nginx
+    dashboard, pinned to the same chart version as `infra/helm/ingress-nginx-values.yaml`).
+- **Ingresses:** `grafana.<zone>` and `prometheus.<zone>` (`infra/k8s/common/monitoring/`),
+  matching the same hostname-locals pattern as `argocd.<zone>` (CP10/CP11) and the
+  `supermarket-{dev,prod}.<zone>` app hostnames.
 
-- `app/api/main.py` — wire `prometheus-fastapi-instrumentator` for HTTP metrics and expose
-  `/metrics`.
-- `app/agent/mcp_clients.py` — record `mcp_calls_total{server, status}` around each `_call`.
-- `app/ingestion/pipeline.py` — record `ingestion_last_success_timestamp{retailer}` and
-  `ingestion_stale{retailer}`.
-- `app/agent/nodes/finalize.py` — record `app_error_codes_total{code}` for each warning code
-  produced.
-- `mcp_servers/retailer_cart_mcp/automation.py` — record `retailer_cart_items_total{status}`
-  and `retailer_cart_runs_blocked_total{reason}`.
-- `requirements.txt` — add `prometheus-client` and `prometheus-fastapi-instrumentator`
-  (both runtime: the backend imports and serves them directly).
+## Validation performed (code + static validation only)
 
-## Detailed Implementation Steps
-
-### Application instrumentation
-
-1. Write `app/api/metrics.py`:
-   ```python
-   from prometheus_client import Counter, Gauge
-
-   MCP_CALLS = Counter(
-       "mcp_calls_total", "MCP tool calls by server and outcome", ["server", "status"]
-   )
-   INGESTION_LAST_SUCCESS = Gauge(
-       "ingestion_last_success_timestamp", "Unix timestamp of last successful ingestion", ["retailer"]
-   )
-   INGESTION_STALE = Gauge(
-       "ingestion_stale", "1 if this retailer's data is currently considered stale, else 0", ["retailer"]
-   )
-   RETAILER_CART_ITEMS = Counter(
-       "retailer_cart_items_total", "Retailer-cart automation outcomes per item", ["status"]
-   )
-   RETAILER_CART_RUNS_BLOCKED = Counter(
-       "retailer_cart_runs_blocked_total", "Retailer-cart automation runs stopped by a site block", ["reason"]
-   )
-   ERROR_CODES = Counter(
-       "app_error_codes_total", "Typed application error/warning codes", ["code"]
-   )
-   ```
-2. Modify `app/api/main.py`:
-   ```python
-   from prometheus_fastapi_instrumentator import Instrumentator
-   ...
-   Instrumentator().instrument(app).expose(app)
-   ```
-3. Modify `app/agent/mcp_clients.py`'s `_call` methods on each client class to wrap the
-   existing logic:
-   ```python
-   from app.api.metrics import MCP_CALLS
-
-   async def _call(self, tool_name: str, arguments: dict) -> dict:
-       try:
-           async with streamablehttp_client(self.base_url) as (read, write, _):
-               async with ClientSession(read, write) as session:
-                   await session.initialize()
-                   result = await session.call_tool(tool_name, arguments)
-                   MCP_CALLS.labels(server=self._server_label, status="success").inc()
-                   return result.structuredContent or {}
-       except Exception:
-           MCP_CALLS.labels(server=self._server_label, status="error").inc()
-           raise
-   ```
-   Add a `_server_label` class attribute (`"recipe"`, `"supermarket_data"`,
-   `"retailer_cart"`) to each of the three client classes.
-4. Modify `app/ingestion/pipeline.py`'s `ingest_retailer_feed` to set
-   `INGESTION_LAST_SUCCESS.labels(retailer=retailer).set(time.time())` on successful
-   activation, and extend the existing `is_stale` helper (CP2) to also call
-   `INGESTION_STALE.labels(retailer=retailer).set(1 if stale else 0)`.
-5. Modify `app/agent/nodes/finalize.py` to increment `ERROR_CODES` for each warning code it
-   appends (`product_not_found`, `budget_exceeded`, `dietary_conflict`, etc.):
-   ```python
-   from app.api.metrics import ERROR_CODES
-   ...
-   for warning in warnings:
-       ERROR_CODES.labels(code=warning["code"]).inc()
-   ```
-6. Modify `mcp_servers/retailer_cart_mcp/automation.py`'s `prepare_cart_for_retailer` to
-   increment `RETAILER_CART_ITEMS.labels(status=...)` for each `added`/`failed` item, and
-   `RETAILER_CART_RUNS_BLOCKED.labels(reason=blocked_reason).inc()` when a block occurs.
-7. Run the full existing test suite to confirm instrumentation didn't break any behavior
-   (metrics calls are side effects and shouldn't affect assertions); add one small test,
-   `tests/api/test_metrics_endpoint.py`, asserting `GET /metrics` returns 200 and contains
-   `mcp_calls_total` after at least one MCP call has been made in the test.
-
-### Cluster monitoring stack
-
-8. Write `k8s/monitoring/namespace.yaml` (`monitoring` namespace).
-9. Write `k8s/monitoring/prometheus-configmap.yaml` — scrapes both environments by static
-   target (simplest option for a two-namespace cluster; full Kubernetes service-discovery
-   RBAC is unnecessary complexity here):
-   ```yaml
-   apiVersion: v1
-   kind: ConfigMap
-   metadata:
-     name: prometheus-config
-     namespace: monitoring
-   data:
-     prometheus.yml: |
-       global:
-         scrape_interval: 15s
-       scrape_configs:
-         - job_name: supermarket-backend
-           metrics_path: /metrics
-           static_configs:
-             - targets: ["backend.supermarket-dev.svc.cluster.local:8000"]
-               labels: { environment: dev }
-             - targets: ["backend.supermarket-prod.svc.cluster.local:8000"]
-               labels: { environment: prod }
-   ```
-10. Write `k8s/monitoring/prometheus-deployment.yaml` (`prom/prometheus` image, mounting the
-    ConfigMap above at `/etc/prometheus/prometheus.yml`) and `prometheus-service.yaml`
-    (`type: NodePort`, port `9090`).
-11. Write `k8s/monitoring/grafana-datasource-configmap.yaml`:
-    ```yaml
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: grafana-datasources
-      namespace: monitoring
-    data:
-      datasource.yaml: |
-        apiVersion: 1
-        datasources:
-          - name: Prometheus
-            type: prometheus
-            access: proxy
-            url: http://prometheus:9090
-            isDefault: true
-    ```
-12. Write `k8s/monitoring/grafana-dashboard-configmap.yaml` — a small but real dashboard
-    covering every metric from step 1:
-    ```yaml
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: grafana-dashboards
-      namespace: monitoring
-    data:
-      supermarket-assistant.json: |
-        {
-          "title": "Supermarket Assistant",
-          "panels": [
-            {
-              "title": "Request latency (p95)",
-              "type": "graph",
-              "targets": [{"expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))"}]
-            },
-            {
-              "title": "MCP calls by server/outcome",
-              "type": "graph",
-              "targets": [{"expr": "sum by (server, status) (rate(mcp_calls_total[5m]))"}]
-            },
-            {
-              "title": "Retailer feed staleness",
-              "type": "stat",
-              "targets": [{"expr": "ingestion_stale"}]
-            },
-            {
-              "title": "Retailer-cart item outcomes",
-              "type": "graph",
-              "targets": [{"expr": "sum by (status) (rate(retailer_cart_items_total[15m]))"}]
-            },
-            {
-              "title": "Retailer-cart runs blocked by reason",
-              "type": "graph",
-              "targets": [{"expr": "sum by (reason) (rate(retailer_cart_runs_blocked_total[15m]))"}]
-            },
-            {
-              "title": "Error codes",
-              "type": "graph",
-              "targets": [{"expr": "sum by (code) (rate(app_error_codes_total[15m]))"}]
-            }
-          ]
-        }
-    ```
-13. Write `k8s/monitoring/grafana-deployment.yaml` (`grafana/grafana` image, mounting both
-    ConfigMaps above into `/etc/grafana/provisioning/datasources` and
-    `/etc/grafana/provisioning/dashboards` respectively, admin password from a small
-    `grafana-admin` Secret created manually like the app secrets in CP11) and
-    `grafana-service.yaml` (`type: NodePort`, port `3000`).
-14. Since `k8s/monitoring/` isn't watched by either ArgoCD `Application` from CP11 (those
-    watch `k8s/dev` and `k8s/prod` only), apply this stack directly:
-    `kubectl apply -f k8s/monitoring/`. (A third ArgoCD `Application` for `k8s/monitoring`
-    is a reasonable future enhancement; not required by spec §7, which only requires dev/prod
-    GitOps.)
-15. `kubectl -n monitoring get pods` — confirm Prometheus and Grafana are running.
-16. Open Grafana's NodePort in a browser, confirm the "Supermarket Assistant" dashboard
-    loads with the Prometheus datasource already provisioned (no manual setup).
-17. Generate some real traffic (a few chat requests, an ingestion run, an approved cart) and
-    confirm the dashboard's panels populate with real, non-empty data within Prometheus's
-    scrape interval.
-18. Commit all files.
-
-## Testing Tasks
-
-- [ ] `test_metrics_endpoint.py` passes.
-- [ ] `kubectl -n monitoring get pods` shows Prometheus and Grafana `Running`.
-- [ ] Grafana dashboard loads and all six panels show real data after generating traffic.
-- [ ] Confirm Prometheus successfully scrapes **both** the dev and prod backend targets
-      (`kubectl -n monitoring port-forward svc/prometheus 9090:9090` then check
-      `/targets` shows both as `UP`).
-
-## Acceptance Criteria
-
-Prometheus scrapes both environments; Grafana shows request latency, MCP call
-success/failure rates, per-retailer data freshness, retailer-cart-preparation outcomes, and
-error-code counts, all populated from real traffic.
+- [x] `helm template kube-prometheus-stack --version 88.0.1 -f
+      infra/k8s/monitoring/values.yaml` — renders successfully; `ebs-sc` storageClassName,
+      `retentionSize: 2GiB`, and the SNS receiver config all confirmed present in the
+      rendered output.
+- [x] `kubeconform` — `ServiceMonitor`/`PrometheusRule` (both dev and prod) and all three
+      Grafana dashboard `ConfigMap`s validate against their CRD schemas (included in the
+      48-manifest run reported under CP11).
+- [x] Python: embedded dashboard JSON parses (`json.loads`), 9 panels present in the new
+      backend dashboard.
+- [x] `pytest` — 357 tests pass, including 6 new tests
+      (`tests/api/test_metrics_endpoint.py`, `tests/agent/test_mcp_clients_metrics.py`)
+      covering `/metrics`'s existence, `agent_chat_requests_total`/`agent_request_type_total`
+      incrementing on a real chat turn, `retailer_choice_total`/`cart_preparation_total`
+      incrementing after a cart is prepared, and `mcp_call_total` incrementing on both the
+      success and error paths of each of the three MCP client classes.
+- [x] `ruff check` — clean.
+- [x] Live Docker smoke test: built `app/api/Dockerfile`, ran the container, confirmed
+      `/health` and `/metrics` both respond and `/metrics` contains both the custom counters
+      and the generic `http_requests_total`/`http_request_duration_seconds_*` family.
 
 ## Risks
 
-- Static scrape targets (rather than Kubernetes service discovery) mean adding a third
-  environment later would require a manual Prometheus config change — acceptable for a
-  fixed two-namespace MVP.
+- No cluster was actually bootstrapped in this environment (code + static validation only,
+  per the same product decision as CP10/CP11) — real scrape behavior, dashboard rendering
+  against live data, and SNS alert delivery are all unverified against a live stack.
+- `agent_input_tokens_total`/`agent_output_tokens_total` only increment on the first turn of
+  a conversation (`parse_request` is the only node that calls the LLM, and it doesn't re-run
+  on a resumed/interrupted turn) — this is correct behavior (tokens really are only spent
+  once per classification), not a bug, but worth noting so the dashboard's token panel isn't
+  misread as "missing data" on multi-turn conversations.
 
 ## Notes
 
-This checkpoint deliberately stops at dashboards — no alerting/paging is built, since spec
-§7 only requires "operational visibility," not incident response.
+Alerting (SNS-backed, via Alertmanager) is included, unlike the original CP14 sketch which
+deliberately stopped at dashboards-only — this follows the migrated reference
+infrastructure's own alerting design, which was already available to reuse rather than
+needing to be built from scratch.
 
 ## Definition of Done
 
-- [ ] Application instrumentation complete and tested.
-- [ ] Monitoring stack deployed and dashboard verified against real traffic.
-- [ ] Committed with message referencing CP14. **M5 milestone complete at this point.**
+- [x] Application instrumentation complete (`app/metrics.py`, wired into
+      `app/api/routes/chat.py`, `app/agent/nodes/parse_request.py`,
+      `app/agent/mcp_clients.py`, `app/api/main.py`) and tested (357 tests passing, 6 new).
+- [x] `infra/k8s/monitoring/`, `infra/k8s/common/monitoring/`, `infra/argocd/monitoring.yaml`
+      created and statically validated.
+- [x] Committed with message referencing CP14. **M5 milestone complete at this point** (code
+      + static validation; live cluster verification deferred per the product decision above).

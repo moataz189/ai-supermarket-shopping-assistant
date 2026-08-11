@@ -27,25 +27,48 @@ class FeedValidationError(Exception):
     pass
 
 
+def already_processed(
+    session: Session, retailer: str, feed_type: FeedType, source_filename: str
+) -> bool:
+    """True if this exact source file was already the last one successfully ingested for
+    this retailer/feed_type — lets a caller skip re-downloading/re-parsing/re-ingesting a
+    file it's already processed (the hourly Price delta poll runs more often than the
+    upstream file necessarily changes)."""
+    status = session.get(RetailerFeedStatus, retailer)
+    if status is None:
+        return False
+    last_filename = (
+        status.last_full_filename if feed_type is FeedType.PRICE_FULL else status.last_delta_filename
+    )
+    return last_filename == source_filename
+
+
 def ingest_retailer_feed(
     session: Session,
     retailer: str,
     parsed_products: list,
     feed_type: FeedType = FeedType.PRICE_FULL,
+    source_filename: str | None = None,
 ) -> None:
     """Ingest one already-parsed feed for one retailer.
 
-    This is the single reusable ingestion entry point for both feed types;
-    CP11's hourly CronJob calls it directly for each newly downloaded `Price`
-    file — no separate scheduler exists yet (deliberately out of scope here).
+    This is the single reusable ingestion entry point for both feed types; the hourly
+    live-delta run calls it directly for each newly downloaded `Price` file.
+    `source_filename` (the feed's origin filename, e.g.
+    "PriceFull7290027600007-002-413-20260811-034000.gz") is recorded on
+    `RetailerFeedStatus` only if this call succeeds — never on a failed/rolled-back
+    transaction — so `already_processed` can reliably detect a duplicate. `None` for
+    fixture-loaded data, which has no real source filename to track.
     """
     if feed_type is FeedType.PRICE_FULL:
-        _ingest_price_full(session, retailer, parsed_products)
+        _ingest_price_full(session, retailer, parsed_products, source_filename)
     else:
-        _ingest_price_delta(session, retailer, parsed_products)
+        _ingest_price_delta(session, retailer, parsed_products, source_filename)
 
 
-def _ingest_price_full(session: Session, retailer: str, parsed_products: list) -> None:
+def _ingest_price_full(
+    session: Session, retailer: str, parsed_products: list, source_filename: str | None
+) -> None:
     """Validate, then atomically replace the retailer's entire active catalog."""
     if not parsed_products:
         raise FeedValidationError(f"{retailer}: feed produced zero products, refusing to activate")
@@ -54,10 +77,12 @@ def _ingest_price_full(session: Session, retailer: str, parsed_products: list) -
         session.query(RetailerProduct).filter_by(retailer=retailer).delete()
         for item in parsed_products:
             session.add(_new_product(retailer, item))
-        _touch_freshness(session, retailer)
+        _touch_freshness(session, retailer, FeedType.PRICE_FULL, source_filename)
 
 
-def _ingest_price_delta(session: Session, retailer: str, parsed_products: list) -> None:
+def _ingest_price_delta(
+    session: Session, retailer: str, parsed_products: list, source_filename: str | None
+) -> None:
     """Upsert only the products present in the delta; leave the rest of the catalog alone.
 
     Runs as one transaction: any failure (a bad item, a DB constraint
@@ -87,7 +112,7 @@ def _ingest_price_delta(session: Session, retailer: str, parsed_products: list) 
                 existing.store_id = item.store_id
                 existing.listed_in_feed = True
                 existing.last_updated_at = datetime.now(timezone.utc)
-        _touch_freshness(session, retailer)
+        _touch_freshness(session, retailer, FeedType.PRICE, source_filename)
 
 
 def _new_product(retailer: str, item) -> RetailerProduct:
@@ -105,9 +130,25 @@ def _new_product(retailer: str, item) -> RetailerProduct:
     )
 
 
-def _touch_freshness(session: Session, retailer: str) -> None:
+def _touch_freshness(
+    session: Session, retailer: str, feed_type: FeedType, source_filename: str | None
+) -> None:
+    existing = session.get(RetailerFeedStatus, retailer)
+    last_full_filename = existing.last_full_filename if existing else None
+    last_delta_filename = existing.last_delta_filename if existing else None
+    if feed_type is FeedType.PRICE_FULL:
+        last_full_filename = source_filename
+    else:
+        last_delta_filename = source_filename
+
     session.merge(
-        RetailerFeedStatus(retailer=retailer, last_updated_at=datetime.now(timezone.utc), stale=False)
+        RetailerFeedStatus(
+            retailer=retailer,
+            last_updated_at=datetime.now(timezone.utc),
+            stale=False,
+            last_full_filename=last_full_filename,
+            last_delta_filename=last_delta_filename,
+        )
     )
 
 

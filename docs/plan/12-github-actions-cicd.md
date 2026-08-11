@@ -2,286 +2,96 @@
 
 Spec milestone: M5 (starts). Depends on: CP9, CP11.
 
-## Note: early basic CI already exists
-
-A minimal `.github/workflows/ci.yml` was added ahead of this checkpoint (branch
-`feature/basic-ci-workflow`) so lint and test coverage run on every PR from the earliest
-checkpoints, instead of waiting until M5. It runs on an `ubuntu-latest` runner with Python
-3.11 and pip caching, installs deps via `make install`, lints via `make lint`, runs the full
-suite with coverage via `make coverage` (`pytest-cov`, terminal + `coverage.xml` output), and
-uploads `coverage.xml` to Codecov (`secrets.CODECOV_TOKEN`, upload failure fails the job). It
-has no Postgres service container, no Alembic migration check, no coverage threshold gate, and
-no CD job — this checkpoint is what extends that basic workflow with the real-PostgreSQL
-compatibility check (via the Alembic retrofit below) and adds the separate CD pipeline
-(`build-and-deploy-dev.yml`: container image builds, image publishing, `k8s/dev/` manifest
-tag bumps, and the ArgoCD-driven deployment those bumps trigger). Steps 8–10 below describe
-the fuller `ci.yml` this checkpoint should evolve the basic one into.
+> **As-built note (2026-08-11):** implemented as a structural migration of a separate,
+> already-working infrastructure project (`polyaifursa`)'s `cd.yml` (paths-filter build
+> matrix + manifest-bump pattern), adapted to this project's six real services. The original
+> design below (a single shared `Dockerfile` + an Alembic-migration-based CI compatibility
+> gate) was never implemented as written — this project has six separate per-service
+> Dockerfiles (CP9), and no Alembic/migration tooling was introduced (see CP11's as-built
+> note: `supermarket-mcp`'s existing `init_db()`/`create_all()` already works unchanged
+> against prod's real Postgres, verified with a live smoke test, not a permanent CI gate).
 
 ## Goal
 
-Wire up the CI pipeline (lint, full test suite including a real-PostgreSQL compatibility
-check, on every PR) and the CD pipeline (build + push immutably-tagged images, bump
-`k8s/dev/` image tags on merge to `main`) that ArgoCD's dev `Application` (CP11) picks up
-automatically.
+Wire up the existing lint+test CI (`ci.yml`, already in place ahead of this checkpoint — see
+below) and a new CD pipeline (`cd.yml`) that builds and pushes per-service, Git-SHA-tagged
+images and bumps the matching `infra/k8s/{dev,prod}/` manifest on every push to `dev`/`main`,
+which ArgoCD's `dev`/`prod` Applications (CP11) then pick up.
 
-## Scope
+## `ci.yml` (already existed before this checkpoint)
 
-GitHub Actions workflows, Alembic migration setup (retrofitting CP2's SQLAlchemy models into
-versioned migrations so there's something meaningful for the Postgres compatibility check to
-run), and the manifest-bump mechanics. Does not touch `k8s/prod/` (CP13).
+Runs on every PR/push to `main`: Python setup, `make install`, `ruff check`, `pytest` with
+coverage, Codecov upload. Unchanged by this checkpoint — no Postgres service container was
+added (prod's Postgres path was verified with one live manual smoke test instead, see CP11),
+no coverage-threshold gate.
 
-## Deliverables
-
-- Every PR runs lint + the full test suite (including a job that runs migrations and a
-  smoke query against a real PostgreSQL service container) and must pass before merge.
-- Every merge to `main` builds and pushes Git-SHA-tagged images for the backend and web
-  services, then commits the new tags into `k8s/dev/`, which ArgoCD auto-syncs.
-
-## Files to Create
+## `cd.yml` (new)
 
 ```
-.github/workflows/ci.yml
-.github/workflows/build-and-deploy-dev.yml
-migrations/env.py
-migrations/versions/0001_initial.py
-alembic.ini
-tests/db/test_postgres_compatibility.py
+detect (dorny/paths-filter)  -->  build (matrix, 6 services)  -->  update-manifests
 ```
 
-## Files to Modify
+- **`detect`** — `dorny/paths-filter` against `github.event.before`..`github.sha`, one
+  filter per service: `backend` (`app/agent/**`, `app/api/**`, `app/dietary/**`), `web`
+  (`web/**`), `supermarket_mcp` (`mcp_servers/supermarket_mcp/**`, `app/db/**`), `recipe_mcp`
+  (`mcp_servers/recipe_mcp/**`), `retailer_cart_mcp` (`mcp_servers/retailer_cart_mcp/**`),
+  `ingestion` (`app/ingestion/**`, `app/db/**`, `tests/fixtures/feeds/**`). `app/db/**` is
+  listed under both `supermarket_mcp` and `ingestion` since both Dockerfiles `COPY` it.
+- **`build`** — a 6-way matrix (`backend`, `web`, `supermarket-mcp`, `recipe-mcp`,
+  `retailer-cart-mcp`, `ingestion`), each building `context: .` with its own `dockerfile:`
+  path (matching `docker-compose.yml`'s own convention — every Dockerfile here `COPY`s
+  shared modules like `app/db`, so a per-service subdirectory context wouldn't work), pushed
+  to Docker Hub as `<image>:${{ github.sha }}` only when that service's `detect` output is
+  `true`.
+- **`update-manifests`** — picks `ENV_DIR=dev` or `prod` from the branch, `sed`-replaces each
+  changed service's `image:` line in `infra/k8s/${ENV_DIR}/<service>/*.yaml` with the new
+  SHA tag, and pushes the commit with the default `GITHUB_TOKEN` (not a PAT) — GitHub does
+  not trigger new workflow runs for pushes made with the default token, so this commit does
+  not re-trigger CI/CD and cause a loop. Six images, six possible manifest files
+  (`ingestion` bumps `ingestion-cronjob.yaml`, the rest bump `*-deployment.yaml`).
 
-- `app/db/session.py` — no functional change, but confirm it still reads `DATABASE_URL` the
-  same way now that schema creation goes through Alembic instead of `Base.metadata.create_all`.
-- `requirements.txt` — add `psycopg[binary]` (runtime: the deployed app connects to
-  Postgres with it, per `DATABASE_URL=postgresql+psycopg://...`).
-- `requirements-dev.txt` — add `alembic` (migrations are run manually/via CI, never
-  imported by the running app itself).
+## `sync-retailer-sessions.yml` (new, see CP11)
 
-## Detailed Implementation Steps
+Not a build/deploy workflow — keeps the `retailer-cart-sessions` Kubernetes Secret current
+from GitHub Secrets on every push. Documented in full under CP11.
 
-### Alembic retrofit (needed for a meaningful Postgres compatibility check)
+## `cluster.yaml` (new, see CP10)
 
-1. `pip install alembic psycopg[binary]`; add `psycopg[binary]` to `requirements.txt` and
-   `alembic` to `requirements-dev.txt`.
-2. `alembic init migrations` from the repo root; edit `alembic.ini`'s
-   `sqlalchemy.url` to read from the `DATABASE_URL` environment variable at runtime instead
-   of a hardcoded value (set it to a placeholder and override in `migrations/env.py`).
-3. Edit `migrations/env.py` to import `app.db.models.Base` and set `target_metadata =
-   Base.metadata`, and to read the connection URL via `os.environ["DATABASE_URL"]`.
-4. Generate the initial migration from CP2's existing models:
-   `alembic revision --autogenerate -m "initial"`; review the generated
-   `migrations/versions/0001_initial.py` against `app/db/models.py`'s
-   `RetailerProduct`/`RetailerFeedStatus` tables (including the `(retailer, item_code)`
-   unique constraint) and fix anything the autogenerate step got wrong (index names,
-   nullability).
-5. Run `alembic upgrade head` against local SQLite and confirm the schema matches what CP2's
-   `init_db()` produced; run the CP2 test suite against it to confirm nothing broke.
-6. Remove the `init_db()` call from `app/api/main.py` (CP2/CP5) now that Alembic is the
-   permanent schema-management mechanism — from this point on, schema changes are made only
-   via new Alembic revisions, never by relying on `create_all` again.
-7. The `dev` and `prod` Postgres databases (CP11) already have their schema from
-   `init_db()` having run there before this checkpoint existed. Reconcile them with Alembic
-   by running `alembic stamp head` (which marks the database as up to date **without**
-   re-running the `CREATE TABLE` statements `init_db()` already executed) against each,
-   rather than `alembic upgrade head` (which would try to create tables that already exist
-   and fail). Do this once, manually, against `dev` and `prod` before relying on future
-   `alembic upgrade head` runs for schema changes there.
+`workflow_dispatch`-only (infrastructure changes are never applied automatically on a normal
+push) — `terraform fmt -check` + `validate` + `plan` + `apply`, persists `CONTROL_PLANE_IP`
+as a repo variable (needed since Terraform state is local — no other workflow run could
+otherwise learn the cluster's address), renders `infra/k8s/monitoring/values.yaml` from
+Terraform's SNS topic ARN output via `envsubst`, and bootstraps the cluster over SSH.
 
-### CI workflow
+## Validation performed (code + static validation only)
 
-8. Write `.github/workflows/ci.yml`:
-   ```yaml
-   name: CI
-
-   on:
-     pull_request:
-       branches: [main]
-     push:
-       branches: [main]
-
-   jobs:
-     lint-and-test:
-       runs-on: ubuntu-latest
-       services:
-         postgres:
-           image: postgres:16
-           env:
-             POSTGRES_USER: app
-             POSTGRES_PASSWORD: app
-             POSTGRES_DB: supermarket_test
-           ports: ["5432:5432"]
-           options: >-
-             --health-cmd="pg_isready -U app"
-             --health-interval=5s --health-timeout=5s --health-retries=10
-       steps:
-         - uses: actions/checkout@v4
-         - uses: actions/setup-python@v5
-           with:
-             python-version: "3.11"
-         - run: pip install -r requirements.txt -r requirements-dev.txt
-         - run: playwright install --with-deps chromium
-         - run: ruff check app tests mcp_servers
-         - name: Unit, integration, MCP contract, agent, and mock-site browser-automation tests
-           run: pytest --maxfail=1
-           env:
-             DATABASE_URL: sqlite:///./app.db
-             CHECKPOINTER_BACKEND: memory
-         - name: PostgreSQL migration & compatibility check
-           run: |
-             alembic upgrade head
-             pytest tests/db/test_postgres_compatibility.py -v
-           env:
-             DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/supermarket_test
-   ```
-9. Write `tests/db/test_postgres_compatibility.py` — runs the same `ProductRepository`
-   operations from CP2's tests, but against the real Postgres service container instead of
-   SQLite, to catch SQLite-only-compatible queries:
-   ```python
-   import os
-
-   import pytest
-   from sqlalchemy import create_engine
-   from sqlalchemy.orm import sessionmaker
-
-   from app.db.models import RetailerProduct
-   from app.db.repositories import ProductRepository
-
-   pytestmark = pytest.mark.skipif(
-       "postgresql" not in os.environ.get("DATABASE_URL", ""),
-       reason="only meaningful against a real PostgreSQL instance",
-   )
-
-
-   def test_search_and_get_product_against_postgres():
-       engine = create_engine(os.environ["DATABASE_URL"])
-       Session = sessionmaker(bind=engine)
-       with Session() as session:
-           session.add(RetailerProduct(
-               retailer="shufersal", store_id="413", item_code="rp1", name="Milk 1L",
-               category="dairy", package_size=1.0, package_unit="l", price=6.9,
-               listed_in_feed=True, last_updated_at=__import__("datetime").datetime.now(),
-           ))
-           session.commit()
-
-           repo = ProductRepository(session)
-           assert repo.search_candidates("Milk", "shufersal")
-           product = repo.get_product("shufersal", "rp1")
-           assert product.price == 6.9
-   ```
-10. Run this locally against a `docker run -p 5432:5432 -e POSTGRES_PASSWORD=app -e
-    POSTGRES_USER=app -e POSTGRES_DB=supermarket_test postgres:16` container to confirm it
-    passes before relying on CI to catch issues.
-
-### CD workflow
-
-11. Write `.github/workflows/build-and-deploy-dev.yml` — builds and pushes immutable,
-   Git-SHA-tagged images, then bumps `k8s/dev/`'s image references. The manifest-bump commit
-   is pushed using the workflow's default `GITHUB_TOKEN` (not a personal access token) —
-   GitHub does not trigger new workflow runs for pushes made with the default token, so this
-   commit does not re-trigger CI/CD and cause a loop:
-   ```yaml
-   name: Build and Deploy Dev
-
-   on:
-     push:
-       branches: [main]
-
-   jobs:
-     build-and-push:
-       runs-on: ubuntu-latest
-       outputs:
-         sha: ${{ steps.sha.outputs.sha }}
-       steps:
-         - uses: actions/checkout@v4
-         - id: sha
-           run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-         - uses: docker/login-action@v3
-           with:
-             username: ${{ secrets.DOCKERHUB_USERNAME }}
-             password: ${{ secrets.DOCKERHUB_TOKEN }}
-         - name: Build and push shared app image (backend, supermarket-mcp, recipe-mcp, ingestion)
-           run: |
-             docker build -f Dockerfile \
-               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-app:${{ steps.sha.outputs.sha }} .
-             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-app:${{ steps.sha.outputs.sha }}
-         - name: Build and push retailer-cart-mcp image
-           run: |
-             docker build -f Dockerfile.retailer-cart-mcp \
-               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-retailer-cart-mcp:${{ steps.sha.outputs.sha }} .
-             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-retailer-cart-mcp:${{ steps.sha.outputs.sha }}
-         - name: Build and push web image
-           run: |
-             docker build -f web/Dockerfile \
-               -t ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-web:${{ steps.sha.outputs.sha }} .
-             docker push ${{ secrets.DOCKERHUB_USERNAME }}/supermarket-web:${{ steps.sha.outputs.sha }}
-
-     update-dev-manifests:
-       needs: build-and-push
-       runs-on: ubuntu-latest
-       steps:
-         - uses: actions/checkout@v4
-           with:
-             token: ${{ secrets.GITHUB_TOKEN }}
-         - name: Bump image tags in k8s/dev
-           run: |
-             SHA=${{ needs.build-and-push.outputs.sha }}
-             USER=${{ secrets.DOCKERHUB_USERNAME }}
-             # backend, supermarket-mcp, recipe-mcp, and ingestion all run the *same*
-             # shared app image (CP9) — one tag bump covers all four manifests.
-             sed -i "s|image: .*/supermarket-app:.*|image: ${USER}/supermarket-app:${SHA}|" \
-               k8s/dev/backend-deployment.yaml k8s/dev/supermarket-mcp-deployment.yaml \
-               k8s/dev/recipe-mcp-deployment.yaml k8s/dev/ingestion-cronjob.yaml
-             sed -i "s|image: .*/supermarket-retailer-cart-mcp:.*|image: ${USER}/supermarket-retailer-cart-mcp:${SHA}|" \
-               k8s/dev/retailer-cart-mcp-deployment.yaml
-             sed -i "s|image: .*/supermarket-web:.*|image: ${USER}/supermarket-web:${SHA}|" \
-               k8s/dev/web-deployment.yaml
-         - name: Commit manifest bump
-           run: |
-             git config user.name "github-actions[bot]"
-             git config user.email "github-actions[bot]@users.noreply.github.com"
-             git add k8s/dev/*.yaml
-             git commit -m "deploy: bump dev images to ${{ needs.build-and-push.outputs.sha }}" || echo "no changes to commit"
-             git push
-   ```
-12. Add the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets in GitHub's
-    repo settings (manual, one-time, outside version control).
-13. Open a trivial PR (e.g. a comment change), confirm `ci.yml` runs and passes, merge it,
-    and confirm `build-and-deploy-dev.yml` runs, pushes new images, and commits a manifest
-    bump to `main` — then confirm that bump commit does **not** itself trigger another CI/CD
-    run (verifying the `GITHUB_TOKEN` loop-prevention behavior).
-14. Confirm ArgoCD (CP11) picks up the bumped `k8s/dev/` manifests within its sync interval
-    and the dev deployment updates to the new image.
-15. Commit all workflow/migration files.
-
-## Testing Tasks
-
-- [ ] `ci.yml` passes on a PR: lint, full test suite, and the Postgres migration/compatibility
-      check.
-- [ ] `build-and-deploy-dev.yml` builds, pushes, and bumps `k8s/dev/` on merge to `main`.
-- [ ] Confirmed manifest-bump commit does not retrigger the workflow (no loop).
-- [ ] ArgoCD dev `Application` reflects the new image tag after the bump.
-
-## Acceptance Criteria
-
-A PR cannot merge unless lint, the full test suite, and the Postgres compatibility check all
-pass; a merge to `main` results in new images being built, pushed, and automatically deployed
-to the dev namespace via ArgoCD, without any manual step beyond the merge itself.
+- [x] `actionlint` on all four workflow files — clean except one expected, intentional
+      shellcheck note on `cluster.yaml`'s `envsubst '${SNS_TOPIC_ARN}'` line (the single
+      quotes are deliberate — `envsubst` needs the literal variable-list string, not a
+      shell-expanded one; the identical line exists in the migrated reference
+      infrastructure's own `cluster.yaml`).
+- [x] Ruby `YAML.load_file` on all four workflow files — parse successfully.
+- [x] `docker build` of the backend image (one of the six `cd.yml` would build) — succeeds,
+      confirming the Dockerfile paths `cd.yml` references are correct.
 
 ## Risks
 
-- Alembic's autogenerated migration (step 4) may not perfectly capture every constraint from
-  the hand-written CP2 models — review it manually rather than trusting autogenerate blindly.
-- `DOCKERHUB_TOKEN`/`DOCKERHUB_USERNAME` must be kept as GitHub secrets, never committed —
-  confirm `.gitignore`/repo scan has no accidental leakage before the first push.
+- `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`, `SSH_PRIVATE_KEY`, `DEPLOY_KEY`, and the four
+  `RETAILER_SESSION_*` secrets must all be configured as GitHub repo secrets before any of
+  these workflows can run end-to-end — none of that was done in this environment (code +
+  static validation only), so `cd.yml`/`cluster.yaml`/`sync-retailer-sessions.yml` are
+  untested against a real GitHub Actions run.
+- `gh variable set` in `cluster.yaml` needs the default `GITHUB_TOKEN` to have "Read and
+  write permissions" for Actions enabled (repo Settings → Actions → General), or a PAT in
+  `secrets.VARS_PAT` as a documented fallback.
 
 ## Notes
 
-CP13 introduces the `k8s/prod/` promotion flow, which reuses this same CI-built image tags —
-it does not add a separate build step.
+CP13 reuses these same CI-built image tags for its promotion flow — no separate build step.
 
 ## Definition of Done
 
-- [ ] Alembic wired in; initial migration matches CP2's schema.
-- [ ] `ci.yml` and `build-and-deploy-dev.yml` implemented and verified end-to-end on a real
-      PR/merge.
-- [ ] Committed with message referencing CP12.
+- [x] `ci.yml` unchanged and confirmed still passing (357 tests, ruff clean) after all of
+      this checkpoint's application-side changes (Prometheus metrics instrumentation, CP14).
+- [x] `cd.yml`, `cluster.yaml`, `sync-retailer-sessions.yml` created, statically validated.
+- [x] Committed with message referencing CP12.

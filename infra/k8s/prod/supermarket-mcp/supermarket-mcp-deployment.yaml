@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: supermarket-mcp
+  namespace: prod
+  labels:
+    app: supermarket-mcp
+
+spec:
+  # Fixed at 1 replica, no HPA — unlike dev's SQLite-backed supermarket-mcp, Postgres itself
+  # supports concurrent access from multiple pods, but scaling this out isn't requested;
+  # kept at the same replica count as every other MCP server for now.
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: supermarket-mcp
+
+  template:
+    metadata:
+      labels:
+        app: supermarket-mcp
+
+    spec:
+      containers:
+        - name: supermarket-mcp
+          image: moataz189/supermarket-mcp:latest
+
+          ports:
+            - containerPort: 8001
+
+          env:
+            # Points at the in-cluster Postgres StatefulSet (infra/k8s/prod/postgres/),
+            # unlike dev's DATABASE_URL=sqlite:////data/app.db — the postgres-credentials
+            # Secret (created out-of-band, never committed — see infra/k8s/prod/postgres/)
+            # stores the full URL directly so no in-pod string assembly is needed:
+            # postgresql+psycopg://<user>:<password>@postgres:5432/<db>
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DATABASE_URL
+
+            - name: PORT
+              value: "8001"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

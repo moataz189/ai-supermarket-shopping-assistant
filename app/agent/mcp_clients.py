@@ -3,6 +3,8 @@ from typing import Protocol
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from app.metrics import mcp_call_total
+
 
 class SupermarketDataClient(Protocol):
     async def search_product(self, query: str, retailer: str) -> list[dict]: ...
@@ -14,13 +16,18 @@ class McpSupermarketDataClient:
         self.base_url = base_url  # e.g. "http://supermarket-mcp:8001/mcp"
 
     async def _call(self, tool_name: str, arguments: dict) -> dict | None:
-        async with (
-            streamablehttp_client(self.base_url) as (read, write, _),
-            ClientSession(read, write) as session,
-        ):
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments)
-            return result.structuredContent
+        try:
+            async with (
+                streamablehttp_client(self.base_url) as (read, write, _),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+        except Exception:
+            mcp_call_total.labels(mcp_service="supermarket", status="error").inc()
+            raise
+        mcp_call_total.labels(mcp_service="supermarket", status="success").inc()
+        return result.structuredContent
 
     async def search_product(self, query: str, retailer: str) -> list[dict]:
         result = await self._call("search_product", {"query": query, "retailer": retailer})
@@ -46,13 +53,18 @@ class McpRecipeClient:
         self.base_url = base_url  # e.g. "http://recipe-mcp:8002/mcp"
 
     async def _call(self, tool_name: str, arguments: dict) -> dict | None:
-        async with (
-            streamablehttp_client(self.base_url) as (read, write, _),
-            ClientSession(read, write) as session,
-        ):
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments)
-            return result.structuredContent
+        try:
+            async with (
+                streamablehttp_client(self.base_url) as (read, write, _),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+        except Exception:
+            mcp_call_total.labels(mcp_service="recipe", status="error").inc()
+            raise
+        mcp_call_total.labels(mcp_service="recipe", status="success").inc()
+        return result.structuredContent
 
     async def search_recipes(self, query: str) -> list[dict]:
         result = await self._call("search_recipes", {"query": query})
@@ -78,13 +90,18 @@ class McpRetailerCartClient:
         self.base_url = base_url  # e.g. "http://retailer-cart-mcp:8003/mcp"
 
     async def _call(self, tool_name: str, arguments: dict) -> dict | None:
-        async with (
-            streamablehttp_client(self.base_url) as (read, write, _),
-            ClientSession(read, write) as session,
-        ):
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments)
-            return result.structuredContent
+        try:
+            async with (
+                streamablehttp_client(self.base_url) as (read, write, _),
+                ClientSession(read, write) as session,
+            ):
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+        except Exception:
+            mcp_call_total.labels(mcp_service="retailer_cart", status="error").inc()
+            raise
+        mcp_call_total.labels(mcp_service="retailer_cart", status="success").inc()
+        return result.structuredContent
 
     async def prepare_retailer_cart(self, retailer: str, items: list[dict]) -> dict:
         # `prepare_retailer_cart` returns a plain `PrepareRetailerCartResponse` (no union),

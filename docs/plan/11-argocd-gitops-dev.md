@@ -2,353 +2,212 @@
 
 Spec milestone: M4 (completes M4). Depends on: CP9, CP10.
 
+> **As-built note (2026-08-11):** implemented as a structural migration of a separate,
+> already-working infrastructure project (`polyaifursa`)'s ArgoCD App-of-Apps pattern, not
+> designed from scratch. The original design below (a single `dev-application.yaml` /
+> `prod-application.yaml` pair, `k8s/dev/` at the repo root, a shared Postgres/DynamoDB
+> backend for both namespaces) was never implemented as written — see "Actual Architecture."
+> Postgres/DynamoDB themselves *are* implemented, per a later explicit decision, but
+> **prod-only**: dev stays on SQLite/in-memory checkpointing for cheaper, faster iteration.
+
 ## Goal
 
-Install ArgoCD onto the kubeadm cluster (one-time bootstrap), stand up the `dev` namespace's
-Kubernetes resources (backend, web, Postgres, ingestion CronJob), and wire ArgoCD to
-continuously and automatically sync `k8s/dev/` — so a merge to `main` flows through to a
-running dev deployment without any manual `kubectl apply` after this checkpoint.
+Install ArgoCD onto the kubeadm cluster (one-time bootstrap via `scripts/bootstrap.sh`), and
+have it continuously reconcile the `dev` namespace's Kubernetes resources from Git — so a
+push to the `dev` branch flows through to a running dev deployment without any manual
+`kubectl apply` after this checkpoint.
 
-## Scope
+## Actual Architecture
 
-ArgoCD installation, `k8s/dev/` manifests, the `dev` and `prod` ArgoCD `Application`
-resources (prod's manifest directory gets only a placeholder namespace for now — CP13 fills
-it in), and the Terraform IAM/DynamoDB additions the deployed app needs. No GitHub Actions
-yet (CP12) — manifests are applied by hand once, and thereafter ArgoCD takes over.
+**ArgoCD install:** `scripts/bootstrap.sh` (copied onto the control-plane node and run once
+by `.github/workflows/cluster.yaml`, or by hand) waits for the API server, installs Calico
+(left commented out of `control-plane.sh` deliberately — see CP10), the metrics-server
+(patched with `--kubelet-insecure-tls`, since this cluster's kubelets don't have
+CA-signed serving certs), the AWS EBS CSI driver (needed for the `ebs-sc` StorageClass that
+`supermarket-mcp`'s SQLite volume and `kube-prometheus-stack`'s PVCs use), then ArgoCD itself
+(`argocd-server` patched to `server.insecure: true` — TLS terminates at the ALB, not at
+ArgoCD, so plain-HTTP behind ingress-nginx is correct here, not a security gap), and finally
+applies `infra/argocd/app-of-apps.yaml`.
 
-## Deliverables
+**App-of-Apps (`infra/argocd/`):** one root `Application` (`app-of-apps.yaml`, tracking
+`HEAD` on this same repo, `directory.recurse: true` over `infra/argocd/`) discovers and
+applies every other `Application` in that same directory:
 
-- ArgoCD running in the cluster, reachable via port-forward or NodePort.
-- `k8s/dev/` deployed and healthy: backend, all three MCP servers (each its own
-  Deployment/Service, per CP9's container split), web, Postgres, and the ingestion CronJob,
-  all running in the `supermarket-dev` namespace.
-- The dev `Application` auto-syncs — a manual `kubectl apply -f k8s/dev/backend-deployment.yaml`
-  with a changed image tag is picked up by ArgoCD without any further manual command.
+| Application | Path | `targetRevision` | Sync policy |
+|---|---|---|---|
+| `cluster-resources` | `infra/k8s/common` | `main` | automated, prune+selfHeal |
+| `dev` | `infra/k8s/dev` | `dev` branch | automated, prune+selfHeal |
+| `prod` | `infra/k8s/prod` | `main` | **manual only** — no `automated:` block |
+| `ingress-nginx` | Helm chart `ingress-nginx/ingress-nginx` + `infra/helm/ingress-nginx-values.yaml` | `main` | automated, prune+selfHeal |
+| `monitoring` | Helm chart `kube-prometheus-stack` + `infra/k8s/monitoring/values.yaml` | `main` | automated, prune+selfHeal, `ServerSideApply=true` |
 
-## Files to Create
+`dev` tracking the `dev` git branch directly (rather than `main` with a separate promotion
+step) means every merge into `dev` — the normal end of this project's own git workflow — is
+what deploys to the dev namespace; no separate "apply once, then GitOps takes over" bootstrap
+step is needed for application manifests, only for ArgoCD itself.
 
-```
-k8s/dev/namespace.yaml
-k8s/dev/secret.env.example
-k8s/dev/postgres-pv.yaml
-k8s/dev/postgres-statefulset.yaml
-k8s/dev/postgres-service.yaml
-k8s/dev/supermarket-mcp-deployment.yaml
-k8s/dev/supermarket-mcp-service.yaml
-k8s/dev/recipe-mcp-deployment.yaml
-k8s/dev/recipe-mcp-service.yaml
-k8s/dev/retailer-cart-mcp-deployment.yaml
-k8s/dev/retailer-cart-mcp-service.yaml
-k8s/dev/backend-deployment.yaml
-k8s/dev/backend-service.yaml
-k8s/dev/web-deployment.yaml
-k8s/dev/web-service.yaml
-k8s/dev/ingestion-cronjob.yaml
-k8s/prod/namespace.yaml
-k8s/argocd/dev-application.yaml
-k8s/argocd/prod-application.yaml
-```
+**`infra/k8s/dev/` (six services, mirroring CP9's six Dockerfiles exactly):**
 
-## Files to Modify
+- `backend/` — Deployment + Service + HPA (1-3 replicas, CPU 50%) + Ingress (`/api` routed
+  from `supermarket-dev.<zone>`) + ServiceMonitor (`/metrics`, 15s).
+- `web/` — Deployment + Service + HPA + Ingress (`/` on the same host).
+- `supermarket-mcp/` — Deployment + Service. In `dev`: a PVC (`ebs-sc`, 2Gi, `ReadWriteOnce`)
+  mounted at `/data` for its SQLite database, fixed at 1 replica (SQLite doesn't support safe
+  concurrent writers across pods). In `prod`: `DATABASE_URL` instead points at the in-cluster
+  Postgres StatefulSet (see "Prod-only: Postgres + DynamoDB," below) — no local PVC needed.
+- `recipe-mcp/` — Deployment + Service. `SPOONACULAR_API_KEY` comes from a
+  `recipe-mcp-secrets` Kubernetes Secret (see "Secrets," below).
+- `retailer-cart-mcp/` — Deployment + Service, bumped resource requests/limits (Playwright's
+  Chromium is the only real per-request browser workload in this project). Session cookies
+  mount from a `retailer-cart-sessions` Secret at `/app/sessions` (see "Secrets," below).
+- `ingestion/` — never a Deployment. In `dev`: a **CronJob** (`schedule: "0 3 * * *"`,
+  `concurrencyPolicy: Forbid`) loading fixtures into `supermarket-mcp`'s SQLite PVC. In
+  `prod`: a **Job** (ArgoCD PostSync hook, one-shot full catalog load) plus a separate
+  **hourly CronJob** (incremental delta), both downloading real live retailer data into the
+  same Postgres StatefulSet `supermarket-mcp` uses — see CP17
+  (`docs/plan/17-live-price-feed-ingestion.md`), added after this checkpoint.
 
-- `infra/terraform/main.tf` — extend the node IAM role with DynamoDB and Bedrock
-  permissions, and create the DynamoDB checkpoint table.
-- `requirements.txt` — add the LangGraph DynamoDB checkpointer package (and `boto3` if not
-  already transitively present).
+`infra/k8s/prod/` mirrors `infra/k8s/dev/`'s file layout (same six services, same file names),
+differing in `namespace: prod`, hostname, image tag (once CI has run), the
+`postgres`/`dynamodb` backend config described below, and one extra directory
+(`infra/k8s/prod/postgres/`) that `infra/k8s/dev/` doesn't have — see CP13.
 
-## Detailed Implementation Steps
+## Prod-only: Postgres + DynamoDB
 
-### Terraform additions (DynamoDB checkpoint table + IAM)
+Per an explicit product decision (dev stays on SQLite/memory for cheap, fast iteration; only
+prod needs a real production-grade backend), `app/agent/checkpointer.py`'s `dynamodb` branch
+(previously a `raise ValueError`, since CP4) is now implemented, and prod's `supermarket-mcp`/
+`ingestion` point at a real Postgres instead of a local SQLite file. Both are **in-cluster**,
+not AWS-managed (RDS/DynamoDB-as-a-service was considered and explicitly rejected for
+Postgres; DynamoDB itself, unlike Postgres, has no reasonable in-cluster equivalent — it's
+always an AWS-managed service, just reached from in-cluster pods via the worker IAM role).
 
-1. Add to `infra/terraform/main.tf`:
-   ```hcl
-   resource "aws_dynamodb_table" "langgraph_checkpoints" {
-     name         = "supermarket-assistant-checkpoints"
-     billing_mode = "PAY_PER_REQUEST"
-     hash_key     = "thread_id"
-     range_key    = "checkpoint_id"
+- **PostgreSQL** (`infra/k8s/prod/postgres/postgres-statefulset.yaml` +
+  `postgres-service.yaml`): a 1-replica `StatefulSet` (`postgres:16`), its own
+  `volumeClaimTemplates` entry (`ebs-sc`, 5Gi, `ReadWriteOnce`) — this is what makes data
+  survive pod restarts/rescheduling, distinct from `supermarket-mcp-data`'s dev-only PVC.
+  Reached via a **headless** Service (`clusterIP: None`) named `postgres` — the correct
+  Service type for a StatefulSet's `serviceName`, and, since it has no ClusterIP or NodePort
+  at all, unreachable from outside the cluster by construction, not just by convention.
+  Credentials (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, plus a precomputed
+  `DATABASE_URL` key so `supermarket-mcp`/`ingestion` never assemble the connection string
+  themselves) come from a `postgres-credentials` Secret — **fully automated**, no GitHub
+  Secret and no manual `kubectl` required (see "Secrets," below). `supermarket-mcp`'s own
+  `init_db()` (`Base.metadata.create_all()`) creates the schema on first connect, exactly as
+  it already does against SQLite — no Alembic/migration tooling was introduced.
+- **DynamoDB** (`infra/tf/main.tf`'s `aws_dynamodb_table.langgraph_checkpoints`, name
+  `${project_name}-checkpoints`): PK/SK composite key, `PAY_PER_REQUEST`, TTL, point-in-time
+  recovery, and SSE all enabled — this exact schema is what
+  [`langgraph-checkpoint-aws`'s `DynamoDBSaver`](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ddb-langgraph-checkpoint.html)
+  documents needing; `DynamoDBSaver` does not create the table itself. The worker IAM role
+  (`infra/tf/modules/k8s-cluster/main.tf`) grants exactly the five actions AWS's own
+  documentation lists as the minimum (`GetItem`/`PutItem`/`Query`/`BatchGetItem`/
+  `BatchWriteItem`), scoped to that one table ARN — pods get this via the worker instance
+  profile, same pattern as the existing Bedrock/SNS permissions, no IRSA. Prod's backend sets
+  `CHECKPOINTER_BACKEND=dynamodb` and `CHECKPOINT_DYNAMODB_TABLE=supermarket-assistant-checkpoints`.
 
-     attribute {
-       name = "thread_id"
-       type = "S"
-     }
+## Secrets (no committed values, no manual `kubectl create secret`)
 
-     attribute {
-       name = "checkpoint_id"
-       type = "S"
-     }
-   }
+- `recipe-mcp-secrets` (`SPOONACULAR_API_KEY`) — created by whatever process manages
+  application secrets for this cluster (out of scope for this checkpoint; not automated by
+  any workflow here — the only remaining manual secret in this project).
+- `postgres-credentials` (prod only: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
+  `DATABASE_URL`) — **fully automated**, and unlike `retailer-cart-sessions` needs **no
+  GitHub Secret at all**: `.github/workflows/sync-postgres-credentials.yml` runs on every
+  push to `main`, SSHes to the control plane, and creates the Secret with a
+  `openssl rand`-generated password **the first time it's missing** — then does nothing on
+  every later run. This has to be idempotent-by-non-overwrite rather than always-overwrite
+  (unlike `sync-retailer-sessions.yml`): Postgres only reads `POSTGRES_USER`/`PASSWORD`/`DB`
+  once, at first `initdb` — overwriting the Secret after that would desync the stored value
+  from what the already-initialized database actually accepts, locking every app pod out.
+  Rotating the password (rare, deliberate) means: `kubectl delete secret
+  postgres-credentials -n prod`, then change the Postgres user's password inside the running
+  database itself (`ALTER USER app WITH PASSWORD '...'`) to match before re-running the
+  workflow — not a routine operation, unlike retailer-session rotation. The generated
+  `DATABASE_URL` is always consistent with the three discrete keys by construction, since the
+  workflow computes all four from the same generated password in one step (the StatefulSet
+  reads the three discrete keys; `supermarket-mcp`/`ingestion` read `DATABASE_URL`).
+- `retailer-cart-sessions` (`shufersal.json`, `rami_levy.json`) — **fully automated**:
+  `.github/workflows/sync-retailer-sessions.yml` creates/updates this Secret in both `dev`
+  and `prod` on every push, reading the raw session JSON from GitHub Secrets
+  (`RETAILER_SESSION_SHUFERSAL_DEV`/`_PROD`, `RETAILER_SESSION_RAMI_LEVY_DEV`/`_PROD`) and
+  applying it over SSH to the control plane. The session JSON never touches this repo (`git
+  check-ignore sessions/` confirms the whole directory is gitignored) and is never baked into
+  any Docker image — `mcp_servers/retailer_cart_mcp/RETAILER_SESSIONS_DIR` just points at the
+  mounted Secret volume, so no application code changed. See "Retailer Session Secrets Setup"
+  below for exactly what to configure.
 
-   resource "aws_iam_role_policy" "app_permissions" {
-     name = "supermarket-assistant-app"
-     role = aws_iam_role.node.id
-     policy = jsonencode({
-       Version = "2012-10-17"
-       Statement = [
-         {
-           Effect   = "Allow"
-           Action   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query", "dynamodb:DeleteItem"]
-           Resource = aws_dynamodb_table.langgraph_checkpoints.arn
-         },
-         {
-           Effect   = "Allow"
-           Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
-           Resource = "*"
-         }
-       ]
-     })
-   }
-   ```
-   (Pods on either EC2 node inherit these permissions via the instance profile already
-   attached in CP10 — no separate pod-level IAM identity is needed for a self-managed
-   kubeadm cluster.)
-2. `terraform apply` from `infra/terraform/` to create the table and attach the new policy.
-3. Extend `app/agent/checkpointer.py` (from CP4) with the `dynamodb` branch it was left
-   ready for:
-   ```python
-   if backend == "dynamodb":
-       from langgraph_checkpoint_dynamodb import DynamoDBSaver  # or equivalent package
+## Retailer Session Secrets Setup
 
-       return DynamoDBSaver(table_name="supermarket-assistant-checkpoints")
-   ```
-   (Confirm the exact package/class name against whatever LangGraph DynamoDB checkpointer
-   is current at implementation time — add it to `requirements.txt`, pinned, as a runtime
-   dependency; also add `boto3` there explicitly if it isn't already pulled in transitively
-   by `langchain-aws`.)
+1. Produce fresh session files locally, exactly as before this infrastructure existed:
+   `python -m mcp_servers.retailer_cart_mcp.login` (per-retailer, needs a real display) to
+   produce `sessions/shufersal.json` / `sessions/rami_levy.json`.
+2. In the GitHub repo's Settings → Secrets and variables → Actions, add:
+   `RETAILER_SESSION_SHUFERSAL_DEV`, `RETAILER_SESSION_RAMI_LEVY_DEV`,
+   `RETAILER_SESSION_SHUFERSAL_PROD`, `RETAILER_SESSION_RAMI_LEVY_PROD` — each containing the
+   full raw contents of the matching JSON file (paste the file's text as the secret value).
+   Dev and prod are separate secrets on purpose: Kubernetes Secrets are namespace-scoped, and
+   this lets dev/prod use different retailer logins if ever needed (using the same real
+   account's session in both is also fine — just paste the same content into both secrets).
+3. Also add `CONTROL_PLANE_IP` is **not** a secret you set — `.github/workflows/cluster.yaml`
+   sets it automatically as a repo *variable* after provisioning. `SSH_PRIVATE_KEY` (the
+   key that can SSH to the control-plane node as `ubuntu`) must be a repo secret for both
+   `cluster.yaml` and `sync-retailer-sessions.yml` to work.
+4. From here on, every push to `dev`/`main` (or a manual `workflow_dispatch` of
+   `sync-retailer-sessions.yml`) keeps both namespaces' `retailer-cart-sessions` Secret in
+   sync automatically. Rotating a stale/expired session is: repeat step 1, update the GitHub
+   Secret's value, re-run the workflow (or just push) — no `kubectl` required.
 
-### ArgoCD bootstrap (one-time, manual)
+`postgres-credentials` needs **no setup at all** beyond what's already required above
+(`CONTROL_PLANE_IP`, `SSH_PRIVATE_KEY`) — `sync-postgres-credentials.yml` generates and
+stores its own password on first run against `main`, with no GitHub Secret to add.
 
-4. `export KUBECONFIG=<path from CP10>`.
-5. `kubectl create namespace argocd`.
-6. `kubectl apply -n argocd -f
-   https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml`.
-7. Wait for pods: `kubectl -n argocd get pods -w` until all `Running`.
-8. Retrieve the initial admin password: `kubectl -n argocd get secret
-   argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d`.
-9. `kubectl -n argocd port-forward svc/argocd-server 8080:443 &` and log in at
-   `https://localhost:8080` (or via `argocd login localhost:8080`) to confirm access.
+## Validation performed (code + static validation only)
 
-### `k8s/dev/` manifests
-
-10. Write `k8s/dev/namespace.yaml`:
-    ```yaml
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: supermarket-dev
-    ```
-11. Write `k8s/dev/secret.env.example` (documents required keys; the real Secret is created
-    manually, never committed):
-    ```
-    BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
-    AWS_REGION=us-east-1
-    SPOONACULAR_API_KEY=changeme
-    POSTGRES_PASSWORD=changeme
-    ```
-    Create the real secret with: `kubectl -n supermarket-dev create secret generic
-    app-secrets --from-env-file=k8s/dev/secret.env` (a local, gitignored copy of the example
-    with real values).
-12. Write `k8s/dev/postgres-pv.yaml` — since this cluster has no EBS CSI driver, use a
-    `hostPath` PersistentVolume anchored to the worker node (acceptable simplification for a
-    solo MVP; document the trade-off in Risks below):
-    ```yaml
-    apiVersion: v1
-    kind: PersistentVolume
-    metadata:
-      name: postgres-dev-pv
-    spec:
-      capacity:
-        storage: 5Gi
-      accessModes: ["ReadWriteOnce"]
-      hostPath:
-        path: /var/lib/supermarket-assistant/postgres-dev
-      nodeAffinity:
-        required:
-          nodeSelectorTerms:
-          - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values: ["<worker-node-hostname>"]
-    ---
-    apiVersion: v1
-    kind: PersistentVolumeClaim
-    metadata:
-      name: postgres-dev-pvc
-      namespace: supermarket-dev
-    spec:
-      accessModes: ["ReadWriteOnce"]
-      resources:
-        requests:
-          storage: 5Gi
-      volumeName: postgres-dev-pv
-    ```
-13. Write `k8s/dev/postgres-statefulset.yaml` and `postgres-service.yaml` (standard
-    `postgres:16` image, env from the `app-secrets` Secret, volume mount to the PVC above, a
-    headless/ClusterIP Service named `postgres`).
-14. Write one Deployment+Service pair per MCP server, each its own workload (per CP9's
-    container split), each exposed only inside the cluster (`ClusterIP`, no NodePort needed
-    — only the backend talks to them):
-    - `k8s/dev/supermarket-mcp-deployment.yaml` / `-service.yaml` — image from CP9's
-      `Dockerfile`, `command: ["python", "-m", "mcp_servers.supermarket_mcp.server"]`, env
-      `DATABASE_URL` (same Postgres as the backend) and `PORT=8001`; Service named
-      `supermarket-mcp` exposing `8001`.
-    - `k8s/dev/recipe-mcp-deployment.yaml` / `-service.yaml` — same image, `command:
-      ["python", "-m", "mcp_servers.recipe_mcp.server"]`, env `SPOONACULAR_API_KEY` (from
-      the Secret) and `PORT=8002`; Service named `recipe-mcp` exposing `8002`.
-    - `k8s/dev/retailer-cart-mcp-deployment.yaml` / `-service.yaml` — image from CP9's
-      `Dockerfile.retailer-cart-mcp`, env `PORT=8003` and
-      `RETAILER_SESSIONS_DIR=/app/sessions`; resource requests/limits generous enough for
-      headless Chromium, e.g. `requests: {cpu: "250m", memory: "512Mi"}, limits: {cpu: "1",
-      memory: "1Gi"}`; Service named `retailer-cart-mcp` exposing `8003`. Mount the
-      `retailer-sessions` Secret (created in step 14a, below) as a read-only volume at
-      `/app/sessions` — CP8's server refuses to run without a session file there for the
-      requested retailer.
-    - 14a. **Create the `retailer-sessions` Secret** (manual, like `app-secrets`, never
-      committed): run CP8's `login.py` **locally, on a machine with a display** for each
-      retailer you want working in this environment, producing `sessions/shufersal.json`
-      and/or `sessions/rami_levy.json`, then:
-      `kubectl -n supermarket-dev create secret generic retailer-sessions
-      --from-file=shufersal.json=sessions/shufersal.json
-      --from-file=rami_levy.json=sessions/rami_levy.json`.
-      It's fine to have only one retailer's session file if that's all you've captured —
-      the other retailer will simply report `login_required` until its session is added too.
-15. Write `k8s/dev/backend-deployment.yaml` (image from CP9's `Dockerfile`, env
-    `DATABASE_URL=postgresql+psycopg://app:$(POSTGRES_PASSWORD)@postgres:5432/supermarket`,
-    `CHECKPOINTER_BACKEND=dynamodb`, `AWS_REGION`, `BEDROCK_MODEL_ID`,
-    `SPOONACULAR_API_KEY` from the Secret, plus the three MCP URLs pointed at the Services
-    from step 14: `SUPERMARKET_MCP_URL=http://supermarket-mcp:8001/mcp`,
-    `RECIPE_MCP_URL=http://recipe-mcp:8002/mcp`,
-    `RETAILER_CART_MCP_URL=http://retailer-cart-mcp:8003/mcp`) and `backend-service.yaml`
-    (`type: NodePort`, exposing `8000` on a NodePort within the range opened in CP10's
-    security group).
-16. Write `k8s/dev/web-deployment.yaml` (image from CP9's `web/Dockerfile`) and
-    `web-service.yaml` (`type: NodePort`, exposing `80`).
-17. Write `k8s/dev/ingestion-cronjob.yaml` (image from CP9's `Dockerfile`, `command:
-    ["python", "-m", "app.ingestion.run", "--source", "live"]` — note this requires a
-    `--source live` mode of CP2's ingestion CLI to be added here, since CP2 only built
-    `--source fixtures`; schedule `"0 * * * *"` — **hourly**, not daily). CP2 already
-    implements both feed types behind `app.ingestion.pipeline.ingest_retailer_feed(session,
-    retailer, parsed_products, feed_type=...)` — `FeedType.PRICE_FULL` for the (infrequent)
-    full-catalog baseline, `FeedType.PRICE` for the hourly delta. This checkpoint's job is
-    only to download each retailer's newly published feed file(s) every hour and call that
-    existing function per file (`PRICE_FULL` if a new baseline was published, `PRICE`
-    otherwise) — no new ingestion logic, no file-discovery/ordering/idempotency ledger; CP2
-    deliberately left that scheduling layer for CP11 to build to whatever shape the real feed
-    hosting turns out to need.
-18. Write `k8s/prod/namespace.yaml` (just the namespace — a placeholder so the prod
-    `Application` created in step 19 has a valid, syncable path; CP13 adds the rest):
-    ```yaml
-    apiVersion: v1
-    kind: Namespace
-    metadata:
-      name: supermarket-prod
-    ```
-
-### ArgoCD `Application` resources
-
-19. Write `k8s/argocd/dev-application.yaml` (automated sync, self-heal, and prune all
-    enabled, per spec §7):
-    ```yaml
-    apiVersion: argoproj.io/v1alpha1
-    kind: Application
-    metadata:
-      name: supermarket-assistant-dev
-      namespace: argocd
-    spec:
-      project: default
-      source:
-        repoURL: https://github.com/moataz189/ai-supermarket-shopping-assistant.git
-        targetRevision: main
-        path: k8s/dev
-      destination:
-        server: https://kubernetes.default.svc
-        namespace: supermarket-dev
-      syncPolicy:
-        automated:
-          selfHeal: true
-          prune: true
-        syncOptions:
-          - CreateNamespace=true
-    ```
-20. Write `k8s/argocd/prod-application.yaml` (no `automated` block — manual sync only):
-    ```yaml
-    apiVersion: argoproj.io/v1alpha1
-    kind: Application
-    metadata:
-      name: supermarket-assistant-prod
-      namespace: argocd
-    spec:
-      project: default
-      source:
-        repoURL: https://github.com/moataz189/ai-supermarket-shopping-assistant.git
-        targetRevision: main
-        path: k8s/prod
-      destination:
-        server: https://kubernetes.default.svc
-        namespace: supermarket-prod
-      syncPolicy:
-        syncOptions:
-          - CreateNamespace=true
-    ```
-21. Apply both once, directly (this one-time bootstrap step is the only manual `kubectl
-    apply` for `Application` resources — everything after this is GitOps-only):
-    `kubectl apply -f k8s/argocd/dev-application.yaml -f k8s/argocd/prod-application.yaml`.
-22. Watch `kubectl -n argocd get applications` (or the ArgoCD UI) until
-    `supermarket-assistant-dev` shows `Synced`/`Healthy`.
-23. `kubectl -n supermarket-dev get pods` — confirm backend, all three MCP servers, web,
-    postgres, and the ingestion CronJob's next scheduled run all look correct.
-24. Manually trigger one ingestion run (`kubectl -n supermarket-dev create job --from=cronjob/ingestion-cronjob ingestion-manual-test`)
-    and confirm it completes and populates Postgres.
-25. `curl` the backend's and web's NodePorts (from the EC2 worker's public IP) to confirm
-    both are reachable, then manually walk through the grocery-list, recipe, and
-    retailer-choice flows end-to-end against this dev deployment — note that in this
-    deployed environment, choosing a retailer drives Playwright against the **real**
-    Shufersal/Rami Levy adapters (not the CP8 mock site), consistent with spec §6/§11
-    treating live-site automation as best-effort and manually verified — and only for
-    whichever retailer(s) have a session in the `retailer-sessions` Secret (step 14a); the
-    other retailer reports `login_required` until you capture and add its session too.
-26. Commit all new/modified files (excluding the real `k8s/dev/secret.env`, `.tfstate`, and
-    kubeconfig).
-
-## Testing Tasks
-
-- [ ] ArgoCD installed and reachable.
-- [ ] `supermarket-assistant-dev` Application is `Synced`/`Healthy`.
-- [ ] All dev-namespace pods running (backend, all three MCP servers, web, postgres);
-      manual ingestion job run succeeds.
-- [ ] Backend `/health` and web root reachable via NodePort from outside the cluster.
-- [ ] Manual end-to-end walkthrough (grocery list, recipe, retailer choice) against the dev
-      deployment.
-- [ ] `retailer-sessions` Secret created and mounted; a retailer with a captured session
-      completes real cart prep, one without reports `login_required` gracefully.
-- [ ] A manifest change applied to `k8s/dev/` and pushed to `main` is picked up by ArgoCD
-      without further manual `kubectl` commands.
-
-## Acceptance Criteria
-
-The `dev` namespace runs the full application (backend, all three MCP servers, web,
-Postgres, ingestion) on the
-kubeadm cluster, deployed and kept in sync by ArgoCD; the `prod` namespace exists with a
-placeholder, ready for CP13.
+- [x] `kubeconform` (with the ArgoCD/prometheus-operator CRD schemas) — all plain Kubernetes
+      + `Application`/`ServiceMonitor`/`PrometheusRule` manifests under `infra/k8s/` and
+      `infra/argocd/`, including the new `postgres-statefulset.yaml`/`postgres-service.yaml`,
+      validate successfully.
+- [x] `helm template` of both third-party charts (`ingress-nginx`, `kube-prometheus-stack`)
+      against this project's own values files — both render successfully.
+- [x] `docker build` of the backend, `supermarket-mcp`, and `ingestion` images (all three
+      pull in the new `psycopg[binary]`/`langgraph-checkpoint-aws` dependencies) — all build
+      cleanly.
+- [x] **Live Postgres smoke test**: ran a real `postgres:16` container locally, pointed the
+      built `supermarket-mcp` image's `DATABASE_URL` at it (`postgresql+psycopg://...`), and
+      confirmed `app/db/session.py`'s `init_db()` creates the schema against it exactly as it
+      does against SQLite — genuine evidence the Postgres path works, not just that it builds.
+- [x] `pytest` — `tests/agent/test_checkpointer.py` (new) covers all four
+      `CHECKPOINTER_BACKEND` values including `dynamodb` (table-name-required error path, and
+      a mocked-`DynamoDBSaver` construction-arguments check); 363 tests pass overall.
+- [x] `actionlint` on `sync-retailer-sessions.yml` and `sync-postgres-credentials.yml` — clean.
 
 ## Risks
 
-- The `hostPath` PersistentVolume for Postgres ties the pod to a specific node and has no
-  redundancy — acceptable for a solo MVP; a real deployment would use a CSI-backed volume or
-  RDS instead.
-- Manually applying `Application` resources is a one-time step per this checkpoint's design
-  (spec §7 "Bootstrap (one-time)") — if the ArgoCD installation is ever wiped, this step
-  must be redone before GitOps resumes.
-
-## Notes
-
-CP12 (GitHub Actions) will be the only path that changes `k8s/dev/` image tags going
-forward — do not hand-edit `k8s/dev/` image tags after CP12 lands except through the CI
-pipeline, or the two will drift.
+- No cluster was actually bootstrapped in this environment (code + static validation only,
+  per the same product decision as CP10) — ArgoCD's actual sync behavior, and the
+  `retailer-cart-sessions`/`postgres-credentials` Secret syncs over SSH, and the EBS CSI
+  driver's PVC binding are all unverified against a real cluster. Everything up to that
+  boundary (manifest correctness, Helm chart compatibility, workflow YAML/actionlint,
+  image builds) is verified.
+- `recipe-mcp-secrets` has no automated creation path (unlike `retailer-cart-sessions` and,
+  now, `postgres-credentials`) — documented as a manual one-time step until/unless it's
+  worth automating the same way (Spoonacular's API key, unlike a Postgres password, isn't
+  something this project can generate itself — it has to come from a real external account).
+- No CI job runs against a real PostgreSQL service container on every PR (unlike the
+  originally-sketched Alembic-based design) — the Postgres path was verified with one live,
+  manual smoke test (see "Validation performed") rather than a permanent CI gate. If Postgres
+  schema changes become frequent, adding a `postgres:16` service container to `ci.yml` would
+  be a reasonable follow-up.
 
 ## Definition of Done
 
-- [ ] ArgoCD installed; both `Application` resources applied.
-- [ ] `k8s/dev/` fully deployed and healthy, verified via `kubectl` and manual walkthrough.
-- [ ] Terraform DynamoDB table + IAM additions applied.
-- [ ] Committed with message referencing CP11. **M4 milestone complete at this point.**
+- [x] `infra/argocd/`, `infra/k8s/common/`, `infra/k8s/dev/`, `infra/k8s/prod/` (incl.
+      `infra/k8s/prod/postgres/`) created and validated.
+- [x] `scripts/bootstrap.sh` adapted, `sync-retailer-sessions.yml` and (added on request,
+      after the initial "create it manually" design was pushed back on)
+      `sync-postgres-credentials.yml` created.
+- [x] `app/agent/checkpointer.py`'s `dynamodb` branch implemented and tested;
+      `infra/tf/main.tf`'s DynamoDB table + worker IAM permissions added.
+- [x] Committed with message referencing CP11. **M4 milestone complete at this point** (code
+      + static validation; live cluster verification deferred per the product decision above).

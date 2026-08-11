@@ -2,148 +2,94 @@
 
 Spec milestone: M5. Depends on: CP11, CP12.
 
+> **As-built note (2026-08-11):** implemented as a structural migration of a separate,
+> already-working infrastructure project (`polyaifursa`)'s branch-based promotion model
+> (ArgoCD's `prod` Application tracks the `main` git branch directly), not the
+> script-driven, path-copying design originally sketched below. No `scripts/promote_to_prod.sh`
+> was written — this architecture doesn't need one; promotion is a plain git merge.
+
 ## Goal
 
-Populate `k8s/prod/` with a full, isolated set of resources (mirroring `k8s/dev/`, but its
-own namespace, secrets, and storage), and establish the manual promotion flow: copy the
-exact, already-validated image tags from `k8s/dev/` into `k8s/prod/` via a reviewed PR, then
-trigger a manual ArgoCD sync — so production only ever changes through a deliberate,
-reviewed action, never automatically.
+Populate `infra/k8s/prod/` with a full, isolated set of resources (mirroring
+`infra/k8s/dev/`, same six services, own namespace), and establish the promotion flow: a
+push to `main` (via this project's own established git workflow — PR from a plan branch
+directly into `main`) is what makes new image tags land in `infra/k8s/prod/`, but nothing in
+the `prod` namespace changes until someone explicitly triggers an ArgoCD sync — so production
+only ever changes through a deliberate, reviewed action, never automatically.
 
-## Scope
+## Actual Architecture
 
-`k8s/prod/` manifests and the promotion script/process. No changes to `k8s/dev/`, CI, or
-ArgoCD `Application` definitions (those are already correct from CP11/CP12).
+`infra/k8s/prod/` mirrors `infra/k8s/dev/`'s six services (`backend`, `web`,
+`supermarket-mcp`, `recipe-mcp`, `retailer-cart-mcp`, `ingestion`), differing in
+`namespace: prod`, the `supermarket-prod.<zone>` hostname, image tags (once CI has run at
+least once), and — per an explicit later decision — the data backend: prod's `backend` sets
+`CHECKPOINTER_BACKEND=dynamodb` (dev: `memory`) and prod's `supermarket-mcp`/`ingestion` read
+`DATABASE_URL` from the `postgres-credentials` Secret pointing at an in-cluster Postgres
+StatefulSet (dev: a local SQLite PVC) — see CP11's "Prod-only: Postgres + DynamoDB" for the
+full architecture and rationale. `infra/k8s/prod/` also has one directory `infra/k8s/dev/`
+doesn't: `postgres/` (the StatefulSet + headless Service). `infra/argocd/prod.yaml`'s
+`Application` tracks `targetRevision: main` at `path: infra/k8s/prod`, with **no
+`automated:` sync block** — only `syncOptions: [CreateNamespace=true]`. Compare
+`infra/argocd/dev.yaml`, which tracks the `dev` branch with
+`automated: {prune: true, selfHeal: true}`.
 
-## Deliverables
+**Promotion flow, concretely:**
 
-- `k8s/prod/` fully deployed: backend, all three MCP servers, web, Postgres, ingestion
-  CronJob, all running in `supermarket-prod`, isolated from `supermarket-dev`.
-- A documented, scripted promotion flow: run a script, review the resulting diff, open a
-  PR, merge, then manually sync — never an automatic prod deployment.
+1. A plan/fix branch merges into `dev` (this project's normal workflow) — `dev`'s
+   Application auto-syncs, deploying to the `dev` namespace immediately.
+2. The same branch's PR merges into `main` (also this project's normal workflow) —
+   `.github/workflows/cd.yml`'s `update-manifests` job runs again, this time bumping
+   `infra/k8s/prod/<service>/*.yaml` to the new commit's SHA-tagged images (the images
+   themselves were already built and pushed by the same job, tagged by commit SHA
+   regardless of branch).
+3. `infra/k8s/prod/`'s new image tags now sit in `main`, but the `prod` Application has no
+   automated sync policy, so nothing in the cluster changes yet.
+4. A human explicitly runs `argocd app sync prod` (CLI) or clicks Sync in the ArgoCD UI —
+   only then does production actually change.
 
-## Files to Create
+No separate promotion script, no manual `sed`/tag-copying step, and no separate PR just for
+`infra/k8s/prod/` — the existing "PR into `main`" step in this project's established git
+workflow (`docs/plan.md`'s "Git Branch Workflow") already is the promotion review gate; step
+4 above is the only production-specific manual action.
 
-```
-k8s/prod/secret.env.example
-k8s/prod/postgres-pv.yaml
-k8s/prod/postgres-statefulset.yaml
-k8s/prod/postgres-service.yaml
-k8s/prod/supermarket-mcp-deployment.yaml
-k8s/prod/supermarket-mcp-service.yaml
-k8s/prod/recipe-mcp-deployment.yaml
-k8s/prod/recipe-mcp-service.yaml
-k8s/prod/retailer-cart-mcp-deployment.yaml
-k8s/prod/retailer-cart-mcp-service.yaml
-k8s/prod/backend-deployment.yaml
-k8s/prod/backend-service.yaml
-k8s/prod/web-deployment.yaml
-k8s/prod/web-service.yaml
-k8s/prod/ingestion-cronjob.yaml
-scripts/promote_to_prod.sh
-```
+## Secrets
 
-## Detailed Implementation Steps
+`recipe-mcp-secrets` (manual, not automated) and `retailer-cart-sessions` (fully automated
+via `sync-retailer-sessions.yml`, using the `RETAILER_SESSION_*_PROD` GitHub Secrets — see
+CP11's "Retailer Session Secrets Setup") exist in both namespaces. `postgres-credentials`
+(manual, not automated — see CP11) exists in `prod` only, since `dev` has no Postgres.
 
-1. Copy each `k8s/dev/*.yaml` manifest (from CP11) into the corresponding `k8s/prod/*.yaml`
-   file, changing: `namespace: supermarket-dev` → `supermarket-prod`; the Postgres
-   `hostPath` to a distinct directory (`/var/lib/supermarket-assistant/postgres-prod`, not
-   the dev path, so the two environments never share storage even though they run on the
-   same physical worker node); and the image tags left as **placeholders** initially — they
-   get filled in by the promotion script (step 3), never hand-typed.
-2. Create the prod secret (manual, one-time, not committed): `kubectl -n supermarket-prod
-   create secret generic app-secrets --from-env-file=k8s/prod/secret.env` (a local,
-   gitignored copy of `k8s/prod/secret.env.example` with prod-appropriate values — the
-   `SPOONACULAR_API_KEY` may be shared with dev; `POSTGRES_PASSWORD` should not be).
-2a. Create the prod `retailer-sessions` Secret the same way as CP11 step 14a: run CP8's
-   `login.py` locally (a real display is required — this is never done from inside the
-   cluster) and `kubectl -n supermarket-prod create secret generic retailer-sessions
-   --from-file=shufersal.json=sessions/shufersal.json
-   --from-file=rami_levy.json=sessions/rami_levy.json`. Using the **same** captured session
-   in both dev and prod is fine for a solo MVP (it's the same real retailer account either
-   way); using separate sessions per environment is also fine if you'd rather keep them
-   distinct — either way, mount it into `k8s/prod/retailer-cart-mcp-deployment.yaml` at
-   `/app/sessions`, exactly as CP11 did for dev.
-3. Write `scripts/promote_to_prod.sh`, which reads the currently-deployed image tags out of
-   `k8s/dev/` and writes those exact tags into `k8s/prod/` — this is what makes promotion
-   "copy the exact validated tags," not a fresh build. Three tags matter (per CP9/CP12): the
-   shared app image (backend, supermarket-mcp, recipe-mcp, ingestion all use the same tag),
-   the retailer-cart-mcp image, and the web image:
-   ```bash
-   #!/usr/bin/env bash
-   set -euo pipefail
+## Validation performed (code + static validation only)
 
-   APP_TAG=$(grep -oP '(?<=supermarket-app:)[a-zA-Z0-9._-]+' k8s/dev/backend-deployment.yaml | head -1)
-   RETAILER_CART_TAG=$(grep -oP '(?<=supermarket-retailer-cart-mcp:)[a-zA-Z0-9._-]+' k8s/dev/retailer-cart-mcp-deployment.yaml | head -1)
-   WEB_TAG=$(grep -oP '(?<=supermarket-web:)[a-zA-Z0-9._-]+' k8s/dev/web-deployment.yaml | head -1)
-
-   sed -i "s|supermarket-app:.*|supermarket-app:${APP_TAG}|" \
-     k8s/prod/backend-deployment.yaml k8s/prod/supermarket-mcp-deployment.yaml \
-     k8s/prod/recipe-mcp-deployment.yaml k8s/prod/ingestion-cronjob.yaml
-   sed -i "s|supermarket-retailer-cart-mcp:.*|supermarket-retailer-cart-mcp:${RETAILER_CART_TAG}|" \
-     k8s/prod/retailer-cart-mcp-deployment.yaml
-   sed -i "s|supermarket-web:.*|supermarket-web:${WEB_TAG}|" k8s/prod/web-deployment.yaml
-
-   echo "Promoted app=${APP_TAG} retailer-cart-mcp=${RETAILER_CART_TAG} web=${WEB_TAG} into k8s/prod/."
-   echo "Review with 'git diff k8s/prod', then open a PR — do not push directly to main."
-   ```
-   `chmod +x scripts/promote_to_prod.sh`.
-4. Run the script once with whatever tag is currently live in `k8s/dev/` after CP12's
-   pipeline has run at least once; `git diff k8s/prod` to review the change.
-5. Open a PR with just the `k8s/prod/` diff, get it reviewed (even if self-reviewed, solo),
-   and merge to `main`.
-6. Trigger the manual ArgoCD sync for the prod `Application` (CLI: `argocd app sync
-   supermarket-assistant-prod`, or the equivalent button in the ArgoCD UI) — confirm nothing
-   deploys to prod on its own before this step.
-7. `kubectl -n supermarket-prod get pods` — confirm backend, all three MCP servers, web,
-   postgres, and the ingestion CronJob are all running.
-8. Manually trigger one ingestion run in prod (same pattern as CP11 step 23) to populate
-   prod's Postgres independently of dev's.
-9. `curl` the prod NodePorts and manually walk through the full acceptance-criteria list
-   from `docs/spec.md` §12 against this prod deployment — this doubles as the project's
-   final demo script (per `docs/plan.md`'s Final Milestone).
-10. Commit all `k8s/prod/` files and the promotion script (excluding the real
-    `k8s/prod/secret.env`).
-
-## Testing Tasks
-
-- [ ] `k8s/prod/` resources all come up healthy after the first manual sync.
-- [ ] Confirm merging the promotion PR to `main` does **not** by itself change anything in
-      the `supermarket-prod` namespace — only the manual sync does.
-- [ ] Full manual walkthrough of spec §12's acceptance criteria against prod.
-- [ ] Confirm dev and prod Postgres data are independent (seeding one doesn't affect the
-      other).
-- [ ] `retailer-sessions` Secret exists in `supermarket-prod`; choosing a retailer with a
-      captured session there completes real cart prep.
-
-## Acceptance Criteria
-
-Production runs the same validated images already running in dev, in a fully isolated
-namespace, and only ever changes as the result of a reviewed PR followed by an explicit
-manual sync — never automatically.
+- [x] `kubeconform` — all 18 `infra/k8s/prod/*.yaml` manifests (incl.
+      `postgres-statefulset.yaml`/`postgres-service.yaml`) validate successfully.
+- [x] Confirmed `infra/argocd/prod.yaml` has no `automated:` key (manual-only sync), unlike
+      every other `Application` in `infra/argocd/`.
+- [x] Live Postgres smoke test (see CP11) confirms prod's `supermarket-mcp`/`ingestion`
+      `DATABASE_URL` wiring actually works against a real Postgres, not just that the
+      manifests parse.
 
 ## Risks
 
-- Both namespaces currently share the **same** DynamoDB checkpoint table (from CP11) —
-  acceptable because `thread_id` is a random UUID with effectively no cross-environment
-  collision risk, and provisioning a second table/checkpointer config per environment was
-  judged not worth the added Terraform complexity for a solo MVP. Revisit if this ever
-  becomes a real concern.
-- Both namespaces' Postgres pods are `hostPath`-pinned to the same single worker node (per
-  CP11's simplification) — a worker node failure takes down both dev and prod storage
-  simultaneously. Acceptable for MVP scope; noted as a real production concern if this were
-  ever more than a course project.
+- No cluster was actually bootstrapped in this environment — the real promotion flow (steps
+  1-4 above) is unverified against a live ArgoCD instance. The manifest structure and sync
+  policy are verified statically.
+- Prod's data is genuinely isolated from dev's: dev's `supermarket-mcp` uses its own SQLite
+  PVC (`supermarket-mcp-data`) and the in-memory LangGraph checkpointer (nothing persisted
+  between pod restarts); prod uses its own Postgres StatefulSet PVC and the one DynamoDB
+  checkpoint table Terraform provisions — dev never touches either, so there's no
+  shared-storage collision risk to reason about at all (unlike the original CP13 sketch's own
+  shared-DynamoDB-table trade-off, which doesn't apply here).
 
 ## Notes
 
-Do not add an `automated:` sync policy to the prod `Application` at any point — that would
+Do not add an `automated:` sync policy to `infra/argocd/prod.yaml` at any point — that would
 silently reintroduce automatic production deployments and contradict spec §7's explicit
 manual-promotion requirement.
 
 ## Definition of Done
 
-- [ ] `k8s/prod/` manifests and `scripts/promote_to_prod.sh` created.
-- [ ] First promotion executed end-to-end (script → PR → merge → manual sync → verified
-      running).
-- [ ] Full spec §12 acceptance-criteria walkthrough passes manually against prod.
-- [ ] Committed with message referencing CP13.
+- [x] `infra/k8s/prod/` created (18 manifests: mirrors `infra/k8s/dev/`'s six services, plus
+      `postgres/`, which `infra/k8s/dev/` doesn't have).
+- [x] `infra/argocd/prod.yaml` confirmed manual-sync-only.
+- [x] Committed with message referencing CP13.

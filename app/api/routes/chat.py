@@ -1,4 +1,5 @@
 import json
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends
@@ -6,8 +7,32 @@ from langgraph.types import Command
 
 from app.api.dependencies import get_agent_app
 from app.api.schemas import ChatRequest, ChatResponse
+from app.metrics import (
+    agent_chat_request_duration_seconds,
+    agent_chat_requests_total,
+    cart_preparation_total,
+    retailer_choice_total,
+)
 
 router = APIRouter()
+
+_INTERRUPT_REASON_TO_STATUS = {
+    "retailer_choice": "retailer_choice",
+    "ambiguous_product": "clarification",
+    "ambiguous_recipe": "clarification",
+    "recipe_ingredient_selection": "clarification",
+}
+
+
+def _record_cart_preparation(retailer_cart_result: dict | None) -> None:
+    if retailer_cart_result is None:
+        return
+    if retailer_cart_result.get("blocked"):
+        cart_preparation_total.labels(status="blocked").inc()
+    elif retailer_cart_result.get("failed"):
+        cart_preparation_total.labels(status="partial").inc()
+    else:
+        cart_preparation_total.labels(status="success").inc()
 
 
 def _resume_value(message: str) -> str | dict | list:
@@ -33,17 +58,31 @@ async def chat(request: ChatRequest, agent_app=Depends(get_agent_app)) -> ChatRe
     thread_id = request.thread_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}}
 
-    if is_new:
-        result = await agent_app.ainvoke({"raw_message": request.message}, config=config)
-    else:
-        result = await agent_app.ainvoke(Command(resume=_resume_value(request.message)), config=config)
+    start = time.perf_counter()
+    try:
+        if is_new:
+            result = await agent_app.ainvoke({"raw_message": request.message}, config=config)
+        else:
+            result = await agent_app.ainvoke(Command(resume=_resume_value(request.message)), config=config)
+    except Exception:
+        agent_chat_requests_total.labels(status="error").inc()
+        raise
+    finally:
+        agent_chat_request_duration_seconds.observe(time.perf_counter() - start)
 
     if "__interrupt__" in result:
         payload = result["__interrupt__"][0].value
-        status = "awaiting_retailer_choice" if payload["reason"] == "retailer_choice" else "needs_clarification"
+        reason = payload["reason"]
+        status = "awaiting_retailer_choice" if reason == "retailer_choice" else "needs_clarification"
+        agent_chat_requests_total.labels(status=_INTERRUPT_REASON_TO_STATUS[reason]).inc()
         return ChatResponse(thread_id=thread_id, status=status, clarification=payload)
 
     final = result["final_result"]
+    agent_chat_requests_total.labels(status="success").inc()
+    if final.get("chosen_retailer"):
+        retailer_choice_total.labels(retailer=final["chosen_retailer"]).inc()
+    _record_cart_preparation(final.get("retailer_cart_result"))
+
     return ChatResponse(
         thread_id=thread_id,
         status=result["status"],

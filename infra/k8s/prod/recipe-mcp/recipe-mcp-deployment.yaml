@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: recipe-mcp
+  namespace: prod
+  labels:
+    app: recipe-mcp
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: recipe-mcp
+
+  template:
+    metadata:
+      labels:
+        app: recipe-mcp
+
+    spec:
+      containers:
+        - name: recipe-mcp
+          image: moataz189/recipe-mcp:latest
+
+          ports:
+            - containerPort: 8002
+
+          env:
+            - name: PORT
+              value: "8002"
+
+            # Secret created out-of-band per environment (kubectl create secret generic
+            # recipe-mcp-secrets --from-literal=SPOONACULAR_API_KEY=... -n dev) — never
+            # committed to Git. No equivalent existed in the reference (agent/yolo need no
+            # third-party API key), so this Secret wiring is new, not adapted.
+            - name: SPOONACULAR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: recipe-mcp-secrets
+                  key: SPOONACULAR_API_KEY
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

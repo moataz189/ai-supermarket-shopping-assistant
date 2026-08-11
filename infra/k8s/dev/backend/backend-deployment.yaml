@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: backend
+  namespace: dev
+  labels:
+    app: backend
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: backend
+
+  template:
+    metadata:
+      labels:
+        app: backend
+
+    spec:
+      containers:
+        - name: backend
+          image: moataz189/supermarket-backend:latest
+
+          ports:
+            - containerPort: 8000
+
+          env:
+            # CHECKPOINTER_BACKEND=memory (not sqlite) — no volume mount needed here, same
+            # as the reference agent's stateless deployment. See docker-compose.yml/
+            # app/agent/checkpointer.py for why: only "memory" and "sqlite" backends exist,
+            # and this project's actual current runtime config uses "memory".
+            - name: CHECKPOINTER_BACKEND
+              value: "memory"
+
+            - name: AWS_REGION
+              value: "us-east-1"
+
+            - name: BEDROCK_MODEL_ID
+              value: "openai.gpt-oss-20b-1:0"
+
+            - name: SUPERMARKET_MCP_URL
+              value: "http://supermarket-mcp-svc:8001/mcp"
+
+            - name: RECIPE_MCP_URL
+              value: "http://recipe-mcp-svc:8002/mcp"
+
+            - name: RETAILER_CART_MCP_URL
+              value: "http://retailer-cart-mcp-svc:8003/mcp"
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          # No separate /ready endpoint exists in this app (unlike the reference agent's
+          # /health + /ready pair) — app/api/main.py only defines /health. Reused for both
+          # probes rather than inventing an unimplemented endpoint.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

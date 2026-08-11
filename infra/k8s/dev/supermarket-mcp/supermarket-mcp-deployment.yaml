@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: supermarket-mcp
+  namespace: dev
+  labels:
+    app: supermarket-mcp
+
+spec:
+  # SQLite at /data/app.db does not support safe concurrent writers across pods — fixed at
+  # 1 replica, no HPA, same pattern the reference applies to its stateless-but-internal
+  # img-proc-mcp (deployment + service only, no autoscaling).
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: supermarket-mcp
+
+  template:
+    metadata:
+      labels:
+        app: supermarket-mcp
+
+    spec:
+      containers:
+        - name: supermarket-mcp
+          image: moataz189/supermarket-mcp:latest
+
+          ports:
+            - containerPort: 8001
+
+          env:
+            - name: DATABASE_URL
+              value: "sqlite:////data/app.db"
+
+            - name: PORT
+              value: "8001"
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: supermarket-mcp-data
