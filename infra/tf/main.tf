@@ -90,9 +90,9 @@ locals {
   # hardcodes five literal *.fursa.click strings directly.
   dev_hostname        = coalesce(var.dev_hostname, "${var.subdomain_prefix}-dev.${var.route53_zone_name}")
   prod_hostname       = coalesce(var.prod_hostname, "${var.subdomain_prefix}-prod.${var.route53_zone_name}")
-  grafana_hostname    = coalesce(var.grafana_hostname, "grafana.${var.route53_zone_name}")
-  prometheus_hostname = coalesce(var.prometheus_hostname, "prometheus.${var.route53_zone_name}")
-  argocd_hostname     = coalesce(var.argocd_hostname, "argocd.${var.route53_zone_name}")
+  grafana_hostname    = coalesce(var.grafana_hostname, "${var.subdomain_prefix}-grafana.${var.route53_zone_name}")
+  prometheus_hostname = coalesce(var.prometheus_hostname, "${var.subdomain_prefix}-prometheus.${var.route53_zone_name}")
+  argocd_hostname     = coalesce(var.argocd_hostname, "${var.subdomain_prefix}-argocd.${var.route53_zone_name}")
 
   ingress_hostnames = [
     local.dev_hostname,

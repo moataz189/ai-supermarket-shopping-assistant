@@ -6,7 +6,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: grafana.fursa.click
+    - host: supermarket-grafana.fursa.click
       http:
         paths:
           - path: /
