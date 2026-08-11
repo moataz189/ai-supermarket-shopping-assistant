@@ -23,3 +23,4 @@ subdomain_prefix  = "supermarket"
 # Required — subscribes this address to the alerts SNS topic (confirmation email sent on
 # first apply).
 alert_email = "moataz.ody44@gmail.com"
+custom_ami_id = "ami-07fc2802e9e3091be"
