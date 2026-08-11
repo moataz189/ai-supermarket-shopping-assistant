@@ -8,7 +8,7 @@ project_name = "supermarket-assistant"
 # Required — no safe default. Get yours with: curl -s ifconfig.me
 admin_cidr = "203.0.113.4/32"
 
-key_name = "supermarket-assistant"
+key_name = "moataz-key"
 
 worker_min_size         = 1
 worker_max_size         = 3
