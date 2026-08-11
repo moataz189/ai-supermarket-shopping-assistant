@@ -63,7 +63,7 @@ resource "aws_security_group" "control_plane" {
 
 resource "aws_security_group" "workers" {
   name        = "${var.project_name}-workers-sg"
-  description = "kubeadm worker nodes. NodePort ingress is opened only to the ALB's own SG - never the full NodePort range, never 0.0.0.0/0."
+  description = "kubeadm worker nodes"
 
   ingress {
     description = "SSH (admin only)"
