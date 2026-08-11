@@ -88,10 +88,10 @@ always an AWS-managed service, just reached from in-cluster pods via the worker 
   at all, unreachable from outside the cluster by construction, not just by convention.
   Credentials (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, plus a precomputed
   `DATABASE_URL` key so `supermarket-mcp`/`ingestion` never assemble the connection string
-  themselves) come from a `postgres-credentials` Secret — created out-of-band, same
-  not-automated pattern as `recipe-mcp-secrets` (see "Secrets," below). `supermarket-mcp`'s
-  own `init_db()` (`Base.metadata.create_all()`) creates the schema on first connect, exactly
-  as it already does against SQLite — no Alembic/migration tooling was introduced.
+  themselves) come from a `postgres-credentials` Secret — **fully automated**, no GitHub
+  Secret and no manual `kubectl` required (see "Secrets," below). `supermarket-mcp`'s own
+  `init_db()` (`Base.metadata.create_all()`) creates the schema on first connect, exactly as
+  it already does against SQLite — no Alembic/migration tooling was introduced.
 - **DynamoDB** (`infra/tf/main.tf`'s `aws_dynamodb_table.langgraph_checkpoints`, name
   `${project_name}-checkpoints`): PK/SK composite key, `PAY_PER_REQUEST`, TTL, point-in-time
   recovery, and SSE all enabled — this exact schema is what
@@ -107,12 +107,23 @@ always an AWS-managed service, just reached from in-cluster pods via the worker 
 
 - `recipe-mcp-secrets` (`SPOONACULAR_API_KEY`) — created by whatever process manages
   application secrets for this cluster (out of scope for this checkpoint; not automated by
-  any workflow here).
+  any workflow here — the only remaining manual secret in this project).
 - `postgres-credentials` (prod only: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
-  `DATABASE_URL`) — same not-automated pattern as `recipe-mcp-secrets`. Create once with,
-  e.g., `kubectl create secret generic postgres-credentials -n prod --from-literal=...`; keep
-  `DATABASE_URL`'s user/password/db consistent with the three discrete keys (the StatefulSet
-  reads the discrete keys, `supermarket-mcp`/`ingestion` read `DATABASE_URL`).
+  `DATABASE_URL`) — **fully automated**, and unlike `retailer-cart-sessions` needs **no
+  GitHub Secret at all**: `.github/workflows/sync-postgres-credentials.yml` runs on every
+  push to `main`, SSHes to the control plane, and creates the Secret with a
+  `openssl rand`-generated password **the first time it's missing** — then does nothing on
+  every later run. This has to be idempotent-by-non-overwrite rather than always-overwrite
+  (unlike `sync-retailer-sessions.yml`): Postgres only reads `POSTGRES_USER`/`PASSWORD`/`DB`
+  once, at first `initdb` — overwriting the Secret after that would desync the stored value
+  from what the already-initialized database actually accepts, locking every app pod out.
+  Rotating the password (rare, deliberate) means: `kubectl delete secret
+  postgres-credentials -n prod`, then change the Postgres user's password inside the running
+  database itself (`ALTER USER app WITH PASSWORD '...'`) to match before re-running the
+  workflow — not a routine operation, unlike retailer-session rotation. The generated
+  `DATABASE_URL` is always consistent with the three discrete keys by construction, since the
+  workflow computes all four from the same generated password in one step (the StatefulSet
+  reads the three discrete keys; `supermarket-mcp`/`ingestion` read `DATABASE_URL`).
 - `retailer-cart-sessions` (`shufersal.json`, `rami_levy.json`) — **fully automated**:
   `.github/workflows/sync-retailer-sessions.yml` creates/updates this Secret in both `dev`
   and `prod` on every push, reading the raw session JSON from GitHub Secrets
@@ -144,6 +155,10 @@ always an AWS-managed service, just reached from in-cluster pods via the worker 
    sync automatically. Rotating a stale/expired session is: repeat step 1, update the GitHub
    Secret's value, re-run the workflow (or just push) — no `kubectl` required.
 
+`postgres-credentials` needs **no setup at all** beyond what's already required above
+(`CONTROL_PLANE_IP`, `SSH_PRIVATE_KEY`) — `sync-postgres-credentials.yml` generates and
+stores its own password on first run against `main`, with no GitHub Secret to add.
+
 ## Validation performed (code + static validation only)
 
 - [x] `kubeconform` (with the ArgoCD/prometheus-operator CRD schemas) — all plain Kubernetes
@@ -162,18 +177,20 @@ always an AWS-managed service, just reached from in-cluster pods via the worker 
 - [x] `pytest` — `tests/agent/test_checkpointer.py` (new) covers all four
       `CHECKPOINTER_BACKEND` values including `dynamodb` (table-name-required error path, and
       a mocked-`DynamoDBSaver` construction-arguments check); 363 tests pass overall.
-- [x] `actionlint` on `sync-retailer-sessions.yml` — clean.
+- [x] `actionlint` on `sync-retailer-sessions.yml` and `sync-postgres-credentials.yml` — clean.
 
 ## Risks
 
 - No cluster was actually bootstrapped in this environment (code + static validation only,
-  per the same product decision as CP10) — ArgoCD's actual sync behavior, the
-  `retailer-cart-sessions` Secret sync over SSH, and the EBS CSI driver's PVC binding are all
-  unverified against a real cluster. Everything up to that boundary (manifest correctness,
-  Helm chart compatibility, image builds) is verified.
-- `recipe-mcp-secrets` and `postgres-credentials` both have no automated creation path (unlike
-  `retailer-cart-sessions`) — documented as manual one-time steps until/unless it's worth
-  automating them the same way.
+  per the same product decision as CP10) — ArgoCD's actual sync behavior, and the
+  `retailer-cart-sessions`/`postgres-credentials` Secret syncs over SSH, and the EBS CSI
+  driver's PVC binding are all unverified against a real cluster. Everything up to that
+  boundary (manifest correctness, Helm chart compatibility, workflow YAML/actionlint,
+  image builds) is verified.
+- `recipe-mcp-secrets` has no automated creation path (unlike `retailer-cart-sessions` and,
+  now, `postgres-credentials`) — documented as a manual one-time step until/unless it's
+  worth automating the same way (Spoonacular's API key, unlike a Postgres password, isn't
+  something this project can generate itself — it has to come from a real external account).
 - No CI job runs against a real PostgreSQL service container on every PR (unlike the
   originally-sketched Alembic-based design) — the Postgres path was verified with one live,
   manual smoke test (see "Validation performed") rather than a permanent CI gate. If Postgres
@@ -184,7 +201,9 @@ always an AWS-managed service, just reached from in-cluster pods via the worker 
 
 - [x] `infra/argocd/`, `infra/k8s/common/`, `infra/k8s/dev/`, `infra/k8s/prod/` (incl.
       `infra/k8s/prod/postgres/`) created and validated.
-- [x] `scripts/bootstrap.sh` adapted, `sync-retailer-sessions.yml` created.
+- [x] `scripts/bootstrap.sh` adapted, `sync-retailer-sessions.yml` and (added on request,
+      after the initial "create it manually" design was pushed back on)
+      `sync-postgres-credentials.yml` created.
 - [x] `app/agent/checkpointer.py`'s `dynamodb` branch implemented and tested;
       `infra/tf/main.tf`'s DynamoDB table + worker IAM permissions added.
 - [x] Committed with message referencing CP11. **M4 milestone complete at this point** (code
