@@ -73,8 +73,11 @@ technology checklist (see §9).
                                                         │
                                             ┌────────────────────────┐
                                             │ Ingestion job            │
-                                            │ (K8s CronJob deployed;    │
-                                            │  manual/fixtures locally) │
+                                            │ prod: live (K8s Job for   │
+                                            │  PriceFull once per      │
+                                            │  deploy + hourly CronJob │
+                                            │  for Price deltas)       │
+                                            │ dev/local/tests: fixtures│
                                             │ downloads Shufersal Online│
                                             │ (StoreId 413) & Rami Levy │
                                             │ Online (StoreId 39) into  │

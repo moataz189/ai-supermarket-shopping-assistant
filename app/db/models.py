@@ -33,3 +33,12 @@ class RetailerFeedStatus(Base):
     retailer: Mapped[str] = mapped_column(String(32), primary_key=True)
     last_updated_at: Mapped[datetime] = mapped_column(DateTime)
     stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Source filename of the last successfully-ingested feed of each type (e.g.
+    # "PriceFull7290027600007-002-413-20260811-034000.gz") — lets the live downloader skip
+    # re-ingesting a file it's already processed (the hourly Price delta CronJob polls more
+    # often than the upstream file necessarily changes). Nullable: unset for fixture-loaded
+    # data, which has no real source filename. Tracked separately per feed type since a new
+    # PriceFull shouldn't cause an already-processed Price delta to look reprocessable, or
+    # vice versa.
+    last_full_filename: Mapped[str | None] = mapped_column(String(128), default=None)
+    last_delta_filename: Mapped[str | None] = mapped_column(String(128), default=None)

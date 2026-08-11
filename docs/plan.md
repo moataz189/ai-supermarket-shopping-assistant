@@ -222,6 +222,7 @@ later ones depend on earlier ones being done and committed.
 | CP14 | Prometheus & Grafana monitoring | `docs/plan/14-monitoring-prometheus-grafana.md` | M5 |
 | CP15 | Test suite hardening & demo resilience | `docs/plan/15-test-hardening-resilience.md` | M6 |
 | CP16 | UI polish, docs & final demo readiness | `docs/plan/16-ui-polish-docs-demo.md` | M6 |
+| CP17 | Live price-feed ingestion (Shufersal + Rami Levy, prod only) | `docs/plan/17-live-price-feed-ingestion.md` | — (added after CP16, not part of the original M1-M6 milestone sequence) |
 
 ## Deliverables
 
@@ -272,7 +273,8 @@ app/
     models.py      # SQLAlchemy: RetailerProduct, RetailerFeedStatus          (CP2)
     repositories.py# repository layer used by MCP server + ingestion         (CP2)
     session.py     # DATABASE_URL-driven engine/session setup                (CP2)
-  ingestion/       # feed download, parse, validate, atomic staging load     (CP2, CP15)
+  ingestion/       # feed download, parse, validate, atomic staging load
+    downloaders/   # live Shufersal/Rami Levy portal downloaders, prod only (CP2, CP15, CP17)
   api/             # FastAPI app, routes, request/response schemas           (CP5, CP8)
 mcp_servers/         # each an independent HTTP service (own port, own container/Deployment)
   recipe_mcp/      # Recipe MCP server (Spoonacular), port 8002              (CP6)
@@ -307,7 +309,10 @@ infra/
                    # session Secret mount                                  (CP11)
     prod/          # ArgoCD-watched prod namespace manifests (tracks
                    # `main`, manual sync only — same shape as dev, plus a
-                   # postgres/ StatefulSet+Service dev doesn't have)       (CP13)
+                   # postgres/ StatefulSet+Service dev doesn't have; its
+                   # ingestion/ is a PostSync Job (PriceFull) + hourly
+                   # CronJob (Price) hitting live retailer feeds, not
+                   # dev's single fixtures CronJob                  (CP13, CP17)
     monitoring/    # kube-prometheus-stack Helm values (values.yaml +
                    # values.yaml.tpl, SNS topic ARN rendered by CI)        (CP14)
 .github/workflows/
@@ -347,6 +352,7 @@ docker-compose.yml   # local dev stack — SQLite/memory backend, 4 backend-side
 - [ ] CP14 — Prometheus & Grafana monitoring
 - [ ] CP15 — Test suite hardening & demo resilience
 - [ ] CP16 — UI polish, docs & final demo readiness
+- [x] CP17 — Live price-feed ingestion (Shufersal + Rami Levy, prod only)
 
 (Each box maps to one detail file under `docs/plan/`, which carries its own internal task
 checklist — mark this box done only once that file's Definition of Done is fully met.)
