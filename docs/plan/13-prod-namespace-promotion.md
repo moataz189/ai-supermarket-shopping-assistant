@@ -19,13 +19,19 @@ only ever changes through a deliberate, reviewed action, never automatically.
 
 ## Actual Architecture
 
-`infra/k8s/prod/` is byte-for-byte the same file layout as `infra/k8s/dev/` (six services:
-`backend`, `web`, `supermarket-mcp`, `recipe-mcp`, `retailer-cart-mcp`, `ingestion`),
-differing only in `namespace: prod`, the `supermarket-prod.<zone>` hostname, and (once CI has
-run at least once) image tags. `infra/argocd/prod.yaml`'s `Application` tracks `targetRevision:
-main` at `path: infra/k8s/prod`, with **no `automated:` sync block** — only
-`syncOptions: [CreateNamespace=true]`. Compare `infra/argocd/dev.yaml`, which tracks the
-`dev` branch with `automated: {prune: true, selfHeal: true}`.
+`infra/k8s/prod/` mirrors `infra/k8s/dev/`'s six services (`backend`, `web`,
+`supermarket-mcp`, `recipe-mcp`, `retailer-cart-mcp`, `ingestion`), differing in
+`namespace: prod`, the `supermarket-prod.<zone>` hostname, image tags (once CI has run at
+least once), and — per an explicit later decision — the data backend: prod's `backend` sets
+`CHECKPOINTER_BACKEND=dynamodb` (dev: `memory`) and prod's `supermarket-mcp`/`ingestion` read
+`DATABASE_URL` from the `postgres-credentials` Secret pointing at an in-cluster Postgres
+StatefulSet (dev: a local SQLite PVC) — see CP11's "Prod-only: Postgres + DynamoDB" for the
+full architecture and rationale. `infra/k8s/prod/` also has one directory `infra/k8s/dev/`
+doesn't: `postgres/` (the StatefulSet + headless Service). `infra/argocd/prod.yaml`'s
+`Application` tracks `targetRevision: main` at `path: infra/k8s/prod`, with **no
+`automated:` sync block** — only `syncOptions: [CreateNamespace=true]`. Compare
+`infra/argocd/dev.yaml`, which tracks the `dev` branch with
+`automated: {prune: true, selfHeal: true}`.
 
 **Promotion flow, concretely:**
 
@@ -48,28 +54,32 @@ workflow (`docs/plan.md`'s "Git Branch Workflow") already is the promotion revie
 
 ## Secrets
 
-Same as `dev` (CP11): `recipe-mcp-secrets` (manual, not automated) and
-`retailer-cart-sessions` (fully automated via `sync-retailer-sessions.yml`, using the
-`RETAILER_SESSION_*_PROD` GitHub Secrets — see CP11's "Retailer Session Secrets Setup").
+`recipe-mcp-secrets` (manual, not automated) and `retailer-cart-sessions` (fully automated
+via `sync-retailer-sessions.yml`, using the `RETAILER_SESSION_*_PROD` GitHub Secrets — see
+CP11's "Retailer Session Secrets Setup") exist in both namespaces. `postgres-credentials`
+(manual, not automated — see CP11) exists in `prod` only, since `dev` has no Postgres.
 
 ## Validation performed (code + static validation only)
 
-- [x] `kubeconform` — all 17 `infra/k8s/prod/*.yaml` manifests validate successfully
-      (included in CP11's 48-manifest validation run).
-- [x] `diff` confirms `infra/k8s/dev/` and `infra/k8s/prod/` differ only in `namespace` and
-      hostname (image tags identical placeholder `:latest` in both, since neither has had a
-      real CI run yet).
+- [x] `kubeconform` — all 18 `infra/k8s/prod/*.yaml` manifests (incl.
+      `postgres-statefulset.yaml`/`postgres-service.yaml`) validate successfully.
 - [x] Confirmed `infra/argocd/prod.yaml` has no `automated:` key (manual-only sync), unlike
       every other `Application` in `infra/argocd/`.
+- [x] Live Postgres smoke test (see CP11) confirms prod's `supermarket-mcp`/`ingestion`
+      `DATABASE_URL` wiring actually works against a real Postgres, not just that the
+      manifests parse.
 
 ## Risks
 
 - No cluster was actually bootstrapped in this environment — the real promotion flow (steps
   1-4 above) is unverified against a live ArgoCD instance. The manifest structure and sync
   policy are verified statically.
-- Both namespaces' `supermarket-mcp` SQLite data are on separate PVCs (`supermarket-mcp-data`
-  in each namespace) — genuinely isolated, unlike the reference infrastructure's shared
-  `hostPath` trade-off the original CP13 sketch inherited.
+- Prod's data is genuinely isolated from dev's: dev's `supermarket-mcp` uses its own SQLite
+  PVC (`supermarket-mcp-data`) and the in-memory LangGraph checkpointer (nothing persisted
+  between pod restarts); prod uses its own Postgres StatefulSet PVC and the one DynamoDB
+  checkpoint table Terraform provisions — dev never touches either, so there's no
+  shared-storage collision risk to reason about at all (unlike the original CP13 sketch's own
+  shared-DynamoDB-table trade-off, which doesn't apply here).
 
 ## Notes
 
@@ -79,6 +89,7 @@ manual-promotion requirement.
 
 ## Definition of Done
 
-- [x] `infra/k8s/prod/` created (17 manifests, mirroring `infra/k8s/dev/`).
+- [x] `infra/k8s/prod/` created (18 manifests: mirrors `infra/k8s/dev/`'s six services, plus
+      `postgres/`, which `infra/k8s/dev/` doesn't have).
 - [x] `infra/argocd/prod.yaml` confirmed manual-sync-only.
 - [x] Committed with message referencing CP13.

@@ -3,5 +3,8 @@
 # transitively via `mcp` itself; not pinned here since the root requirements.txt never
 # pinned them explicitly either.
 sqlalchemy>=2.0
+# Postgres driver — dev's DATABASE_URL stays sqlite:// (stdlib sqlite3, no driver needed),
+# prod's points at the in-cluster Postgres StatefulSet (postgresql+psycopg://).
+psycopg[binary]>=3.1
 pydantic>=2.7
 mcp==1.29.0

@@ -5,10 +5,11 @@ Spec milestone: M5 (starts). Depends on: CP9, CP11.
 > **As-built note (2026-08-11):** implemented as a structural migration of a separate,
 > already-working infrastructure project (`polyaifursa`)'s `cd.yml` (paths-filter build
 > matrix + manifest-bump pattern), adapted to this project's six real services. The original
-> design below (a single shared `Dockerfile` + Alembic/PostgreSQL compatibility gate) was
-> never implemented as written — this project has six separate per-service Dockerfiles
-> (CP9), and the Postgres/Alembic plan was superseded (see CP11's as-built note: the app
-> runs on SQLite/in-memory checkpointing, not Postgres).
+> design below (a single shared `Dockerfile` + an Alembic-migration-based CI compatibility
+> gate) was never implemented as written — this project has six separate per-service
+> Dockerfiles (CP9), and no Alembic/migration tooling was introduced (see CP11's as-built
+> note: `supermarket-mcp`'s existing `init_db()`/`create_all()` already works unchanged
+> against prod's real Postgres, verified with a live smoke test, not a permanent CI gate).
 
 ## Goal
 
@@ -21,7 +22,8 @@ which ArgoCD's `dev`/`prod` Applications (CP11) then pick up.
 
 Runs on every PR/push to `main`: Python setup, `make install`, `ruff check`, `pytest` with
 coverage, Codecov upload. Unchanged by this checkpoint — no Postgres service container was
-ever added (no Postgres exists to compatibility-check), no coverage-threshold gate.
+added (prod's Postgres path was verified with one live manual smoke test instead, see CP11),
+no coverage-threshold gate.
 
 ## `cd.yml` (new)
 

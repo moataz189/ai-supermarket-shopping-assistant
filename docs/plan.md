@@ -84,9 +84,10 @@ them.
   everywhere else: app-specific Kubernetes resources (backend, MCP servers, web, ingestion)
   stay as plain manifests under `infra/k8s/dev` / `infra/k8s/prod`, unchanged.
   Application metrics are exposed via a `ServiceMonitor` resource that `kube-prometheus-stack`
-  scrapes, not hand-rolled Prometheus scrape config. (CP11's original Postgres/DynamoDB
-  checkpointer plan was never implemented — the app runs on SQLite/in-memory checkpointing in
-  every environment, per CP10-14's actual implementation; see `docs/plan/10-14` for details.)
+  scrapes, not hand-rolled Prometheus scrape config. (Postgres/DynamoDB are prod-only, an
+  in-cluster StatefulSet and a Terraform-provisioned table respectively — dev stays on
+  SQLite/in-memory checkpointing for cheaper, faster iteration; see `docs/plan/10-14` for
+  the full rationale and architecture.)
 - **Every checkpoint/plan is implemented in its own branch created from the latest `main`.**
   See "Git Branch Workflow" below for the concrete commands, branch lifecycle, and CI/CD
   triggers — every checkpoint's work begins by updating `main` and branching from it.
@@ -242,10 +243,10 @@ mock retailer site in automated tests.
 By the end of CP11 (M4): the full stack (including the Retailer-Cart MCP server) runs in the
 `dev` namespace of a self-managed kubeadm cluster on AWS EC2 (provisioned by Terraform),
 deployed via ArgoCD's App-of-Apps pattern, ingesting feeds on a schedule via a CronJob —
-backed by SQLite (the same `CHECKPOINTER_BACKEND=memory` / `DATABASE_URL=sqlite:///...`
-configuration used locally, per CP10-14's actual implementation; the PostgreSQL/DynamoDB
-design originally sketched here was never built, since the application never grew a real need
-for it — see `docs/plan/10-14` for the full rationale).
+`dev` backed by SQLite (the same `CHECKPOINTER_BACKEND=memory` / `DATABASE_URL=sqlite:///...`
+configuration used locally); `prod` backed by an in-cluster PostgreSQL StatefulSet and a
+DynamoDB checkpointer (`CHECKPOINTER_BACKEND=dynamodb`) — see `docs/plan/10-14` for the full
+architecture and rationale for the dev/prod split.
 
 By the end of CP14 (M5): every plan branch is linted and tested (including mock-site
 browser-automation tests) before merging directly into `dev`, whose push automatically builds
@@ -305,7 +306,8 @@ infra/
                    # backend + web, ingestion CronJob, retailer-cart-mcp's
                    # session Secret mount                                  (CP11)
     prod/          # ArgoCD-watched prod namespace manifests (tracks
-                   # `main`, manual sync only — same shape as dev)         (CP13)
+                   # `main`, manual sync only — same shape as dev, plus a
+                   # postgres/ StatefulSet+Service dev doesn't have)       (CP13)
     monitoring/    # kube-prometheus-stack Helm values (values.yaml +
                    # values.yaml.tpl, SNS topic ARN rendered by CI)        (CP14)
 .github/workflows/
@@ -380,9 +382,10 @@ Mirrors `docs/spec.md` §9, mapped to the checkpoints that implement each requir
 **Definition of "project complete":** all 16 checkpoints are checked off, each implemented per
 the Git Branch Workflow above; the full automated test suite (unit, integration, MCP
 contract, agent/graph, ingestion, concurrent-thread-id, mock-site
-browser-automation) passes in CI on `main` (no PostgreSQL-compatibility check — the app runs
-on SQLite/in-memory checkpointing in every environment, see CP10-14's as-built notes); the
-`dev` namespace auto-deploys on every push to
+browser-automation) passes in CI on `main` (verified manually against a real PostgreSQL
+container that `app/db/session.py`'s SQLAlchemy engine and `init_db()` work unchanged against
+Postgres — no permanent CI Postgres service container was added, see CP10-14's as-built
+notes); the `dev` namespace auto-deploys on every push to
 `dev` and is currently healthy; the `prod` namespace has at
 least one manually-promoted, working deployment; Prometheus/Grafana dashboards are live and
 show real traffic from a demo run, including retailer-cart-preparation metrics; and a full

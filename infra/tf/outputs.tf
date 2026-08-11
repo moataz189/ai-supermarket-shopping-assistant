@@ -38,6 +38,11 @@ output "alerts_sns_topic_arn" {
   value = module.alerting.topic_arn
 }
 
+output "checkpoint_table_name" {
+  description = "DynamoDB table name for CHECKPOINT_DYNAMODB_TABLE in infra/k8s/prod/backend/backend-deployment.yaml — deterministic (\"<project_name>-checkpoints\"), included here for convenience, not because the manifest needs to read it dynamically."
+  value       = aws_dynamodb_table.langgraph_checkpoints.name
+}
+
 output "alb_dns_name" {
   value = var.enable_ingress ? module.ingress[0].alb_dns_name : null
 }

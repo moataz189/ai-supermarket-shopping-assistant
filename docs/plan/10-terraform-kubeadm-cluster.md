@@ -86,11 +86,12 @@ infra/tf/
 - **Alerting (`modules/alerting/`):** one deterministically-named SNS topic
   (`${var.project_name}-alerts`) + an email subscription (manual confirmation required after
   the first `terraform apply` — SNS email subscriptions cannot be auto-confirmed).
-- **State:** local (`terraform.tfstate*` gitignored), the S3 backend block is present but
-  commented out in `main.tf` with an explanation — a real bucket must exist before
-  `terraform init` can use it, which would block even static validation (`fmt`/`validate`)
-  in an environment with no bucket provisioned yet. Switching it on later is a one-line
-  uncomment once a bucket exists.
+- **State:** a real `backend "s3"` block (`main.tf`) — `terraform.tfstate*` is gitignored
+  regardless, but state itself lives remotely in S3, not on any one machine. Static
+  validation in this environment (`fmt`/`validate`/`plan`, no real bucket access assumed) used
+  a local `terraform { backend "local" {} }` override file (not committed) to run
+  `terraform init` without needing that bucket reachable — the committed config always
+  targets the real S3 backend.
 
 **Packer (`infra/packer/`):** `k8s-node.pkr.hcl` + `install-k8s-deps.sh` bake an AMI
 (`${project_name}-k8s-node-<timestamp>`) with CRI-O, kubelet, kubeadm, kubectl, and the AWS
@@ -121,17 +122,21 @@ already-tested software.
 
 - [x] `terraform fmt -recursive` — no changes needed.
 - [x] `terraform init -backend=false` + `terraform validate` — succeeds.
-- [x] `terraform plan -var-file=tfvars/us-east-1.tfvars` — resolves the full variable/module
-      graph correctly; fails only on the expected "no AMI found yet" error (Packer hasn't
-      built one in this environment), confirming the config itself is correct.
+- [x] `terraform plan -var-file=tfvars/us-east-1.tfvars` (via a temporary, uncommitted
+      `backend "local" {}` override, since the real S3 bucket wasn't assumed reachable in
+      this environment) — resolves the full variable/module graph correctly, including the
+      new `aws_dynamodb_table.langgraph_checkpoints` resource; fails only on the expected "no
+      AMI found yet" error (Packer hasn't built one in this environment), confirming the
+      config itself is correct.
 - [x] `packer validate infra/packer/` — succeeds.
 - [x] Security group review: SSH/API restricted to `admin_cidr`; only the ALB's own SG can
       reach the workers' NodePort; no full NodePort range opened.
 
 ## Risks
 
-- Local Terraform state — documented and gitignored; a remote backend can be enabled later
-  by uncommenting the `backend "s3"` block once a bucket/DynamoDB lock table exist.
+- The `backend "s3"` block has no `dynamodb_table` set for state locking (commented out) —
+  concurrent `terraform apply` runs are not protected against a race; acceptable for now
+  since `cluster.yaml` is `workflow_dispatch`-only, not triggered concurrently.
 - Worker ASG scale-down leaves stale `NotReady` Node objects requiring manual `kubectl
   delete node <name>` — no lifecycle-hook/Lambda cleanup implemented, deliberately
   deprioritized for MVP scope (same trade-off the migrated reference infrastructure made).

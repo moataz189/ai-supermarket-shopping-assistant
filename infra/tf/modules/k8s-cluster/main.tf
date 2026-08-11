@@ -210,6 +210,20 @@ data "aws_iam_policy_document" "worker_permissions" {
     actions   = ["sns:Publish"]
     resources = [var.sns_topic_arn]
   }
+
+  # Minimum permissions langgraph-checkpoint-aws's DynamoDBSaver documents needing —
+  # matches AWS's own published IAM policy for this exact package.
+  statement {
+    sid = "LangGraphCheckpointStore"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:Query",
+      "dynamodb:BatchGetItem",
+      "dynamodb:BatchWriteItem",
+    ]
+    resources = [var.checkpoint_table_arn]
+  }
 }
 
 resource "aws_iam_role_policy" "worker_permissions" {

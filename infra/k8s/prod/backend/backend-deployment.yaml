@@ -28,12 +28,19 @@ spec:
             - containerPort: 8000
 
           env:
-            # CHECKPOINTER_BACKEND=memory (not sqlite) — no volume mount needed here, same
-            # as the reference agent's stateless deployment. See docker-compose.yml/
-            # app/agent/checkpointer.py for why: only "memory" and "sqlite" backends exist,
-            # and this project's actual current runtime config uses "memory".
+            # dev stays CHECKPOINTER_BACKEND=memory (see infra/k8s/dev/backend/); prod uses
+            # the DynamoDB backend (app/agent/checkpointer.py) backed by the table Terraform
+            # provisions (infra/tf/main.tf's aws_dynamodb_table.langgraph_checkpoints) — read/
+            # write access comes from the worker node's IAM instance profile, no credentials
+            # needed here.
             - name: CHECKPOINTER_BACKEND
-              value: "memory"
+              value: "dynamodb"
+
+            # Deterministic name ("${project_name}-checkpoints") matching Terraform's
+            # aws_dynamodb_table.langgraph_checkpoints — see infra/tf/outputs.tf's
+            # checkpoint_table_name output.
+            - name: CHECKPOINT_DYNAMODB_TABLE
+              value: "supermarket-assistant-checkpoints"
 
             - name: AWS_REGION
               value: "us-east-1"

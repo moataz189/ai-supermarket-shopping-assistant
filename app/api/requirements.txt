@@ -9,6 +9,7 @@ prometheus-fastapi-instrumentator>=7.0
 mcp==1.29.0
 langgraph==1.2.10
 langgraph-checkpoint-sqlite==3.1.1
+langgraph-checkpoint-aws>=0.1
 langchain-aws==1.6.4
 # See requirements.txt for why these are pinned exact instead of left to
 # langchain-aws's own loose ranges.

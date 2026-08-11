@@ -8,9 +8,9 @@ metadata:
     app: supermarket-mcp
 
 spec:
-  # SQLite at /data/app.db does not support safe concurrent writers across pods — fixed at
-  # 1 replica, no HPA, same pattern the reference applies to its stateless-but-internal
-  # img-proc-mcp (deployment + service only, no autoscaling).
+  # Fixed at 1 replica, no HPA — unlike dev's SQLite-backed supermarket-mcp, Postgres itself
+  # supports concurrent access from multiple pods, but scaling this out isn't requested;
+  # kept at the same replica count as every other MCP server for now.
   replicas: 1
 
   selector:
@@ -31,15 +31,19 @@ spec:
             - containerPort: 8001
 
           env:
+            # Points at the in-cluster Postgres StatefulSet (infra/k8s/prod/postgres/),
+            # unlike dev's DATABASE_URL=sqlite:////data/app.db — the postgres-credentials
+            # Secret (created out-of-band, never committed — see infra/k8s/prod/postgres/)
+            # stores the full URL directly so no in-pod string assembly is needed:
+            # postgresql+psycopg://<user>:<password>@postgres:5432/<db>
             - name: DATABASE_URL
-              value: "sqlite:////data/app.db"
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DATABASE_URL
 
             - name: PORT
               value: "8001"
-
-          volumeMounts:
-            - name: data
-              mountPath: /data
 
           resources:
             requests:
@@ -66,8 +70,3 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 3
-
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: supermarket-mcp-data
