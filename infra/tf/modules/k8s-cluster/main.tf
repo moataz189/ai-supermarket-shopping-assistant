@@ -64,6 +64,7 @@ resource "aws_security_group" "control_plane" {
 resource "aws_security_group" "workers" {
   name        = "${var.project_name}-workers-sg"
   description = "kubeadm worker nodes"
+  vpc_id      = var.vpc_id
 
   ingress {
     description = "SSH (admin only)"
