@@ -77,6 +77,11 @@ variable "bedrock_model_arns" {
   default     = ["arn:aws:bedrock:*::foundation-model/*"]
 }
 
+variable "checkpoint_table_arn" {
+  description = "LangGraph checkpoint DynamoDB table ARN (from the root module) — the prod backend pod (CHECKPOINTER_BACKEND=dynamodb) reads/writes it via the worker instance profile, no IRSA."
+  type        = string
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

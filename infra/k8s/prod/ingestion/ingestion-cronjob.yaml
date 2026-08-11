@@ -21,12 +21,15 @@ spec:
               image: moataz189/supermarket-ingestion:latest
 
               env:
+                # Points at the in-cluster Postgres StatefulSet, same as prod's
+                # supermarket-mcp — Postgres (unlike dev's SQLite-on-a-PVC) supports
+                # concurrent writers, so this job and supermarket-mcp's pod no longer need
+                # to share a single ReadWriteOnce volume or land on the same worker node.
                 - name: DATABASE_URL
-                  value: "sqlite:////data/app.db"
-
-              volumeMounts:
-                - name: data
-                  mountPath: /data
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: DATABASE_URL
 
               resources:
                 requests:
@@ -35,12 +38,3 @@ spec:
                 limits:
                   cpu: "500m"
                   memory: "512Mi"
-
-          # Same PVC as supermarket-mcp (RWO EBS volume) — safe only because this job and
-          # supermarket-mcp's single replica are expected to land on the same worker node in
-          # this small MVP cluster; a genuine multi-node RWO conflict would need ReadWriteMany
-          # (EFS) or moving ingestion to write via the supermarket-mcp API instead.
-          volumes:
-            - name: data
-              persistentVolumeClaim:
-                claimName: supermarket-mcp-data

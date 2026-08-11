@@ -1,3 +1,7 @@
 # Subset of the root requirements.txt (source of truth for versions) — app/ingestion +
-# app/db use only sqlalchemy; feed parsing is stdlib xml, no pydantic/mcp/fastapi needed.
+# app/db use only sqlalchemy (+ a Postgres driver for prod); feed parsing is stdlib xml, no
+# pydantic/mcp/fastapi needed.
 sqlalchemy>=2.0
+# dev's DATABASE_URL stays sqlite:// (stdlib sqlite3, no driver needed); prod's points at
+# the in-cluster Postgres StatefulSet (postgresql+psycopg://).
+psycopg[binary]>=3.1

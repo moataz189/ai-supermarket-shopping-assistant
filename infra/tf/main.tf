@@ -18,13 +18,13 @@ terraform {
     }
   }
 
-  # backend "s3" {
-  #   bucket         = "<your-unique-bucket-name>"
-  #   key            = "supermarket-assistant/terraform.tfstate"
-  #   region         = "us-east-1"
-  #   dynamodb_table = "terraform-locks"
-  #   encrypt        = true
-  # }
+  backend "s3" {
+    bucket = "moataz-terraform-state-bucket-2026"
+    key    = "supermarket-assistant/terraform.tfstate"
+    region = "us-east-1"
+    #dynamodb_table = "terraform-locks"
+    encrypt = true
+  }
 }
 
 provider "aws" {
@@ -110,6 +110,44 @@ module "alerting" {
   alert_email  = var.alert_email
 }
 
+# LangGraph checkpoint store for the prod backend (CHECKPOINTER_BACKEND=dynamodb) — dev
+# stays on in-memory checkpointing, so only one table is needed. Schema (PK/SK composite
+# key, PAY_PER_REQUEST, TTL, PITR, SSE) matches langgraph-checkpoint-aws's own documented
+# requirements exactly (docs.aws.amazon.com/amazondynamodb/latest/developerguide/
+# ddb-langgraph-checkpoint.html) — the DynamoDBSaver class expects this table to already
+# exist, it does not create it itself.
+resource "aws_dynamodb_table" "langgraph_checkpoints" {
+  name         = "${var.project_name}-checkpoints"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "PK"
+  range_key    = "SK"
+
+  attribute {
+    name = "PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "SK"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = { Project = var.project_name }
+}
+
 module "k8s_cluster" {
   source = "./modules/k8s-cluster"
 
@@ -128,7 +166,8 @@ module "k8s_cluster" {
   worker_max_size             = var.worker_max_size
   worker_desired_capacity     = var.worker_desired_capacity
 
-  sns_topic_arn = module.alerting.topic_arn
+  sns_topic_arn        = module.alerting.topic_arn
+  checkpoint_table_arn = aws_dynamodb_table.langgraph_checkpoints.arn
 }
 
 module "ingress" {

@@ -62,8 +62,10 @@ technology checklist (see §9).
                                             ┌────────────────────────┐└───────────────────────┘
                                             │ Product DB               │
                                             │ SQLite — local dev/tests │
-                                            │ PostgreSQL — deployed    │
-                                            │   dev & prod namespaces  │
+                                            │   and the dev namespace  │
+                                            │ PostgreSQL (in-cluster   │
+                                            │   StatefulSet) — prod    │
+                                            │   namespace only         │
                                             └────────────────────────┘
                                                         ▲
                                           validated staging load,
@@ -79,9 +81,8 @@ technology checklist (see §9).
                                             │ two independent catalogs  │
                                             └────────────────────────┘
 
-LangGraph checkpoint/state → in-memory or SQLite (same in every environment,
-deployed or local/tests — see CP10-14's as-built notes for why the originally
-planned DynamoDB backend was never built)
+LangGraph checkpoint/state → in-memory (local dev/tests and the dev namespace)
+or DynamoDB (prod namespace only — see CP10-14's as-built notes)
 — enables interrupt/resume for clarification and for the final "choose a
 retailer's cart" gate before browser automation runs.
 ```
@@ -153,11 +154,11 @@ not live stock.
   with a choose/decline control. After a choice: the real-cart result (added/failed items,
   a link if available), with warnings clearly separated.
 
-- **Product data storage / conversation state storage** — an ORM/repository layer over
-  SQLite (same in every environment — the originally planned PostgreSQL-when-deployed split
-  was never built, see CP10-14's as-built notes); conversation state in-memory or SQLite
-  (same in every environment) — only configuration changes between local/tests and deployed
-  dev/prod, never the underlying engine.
+- **Product data storage / conversation state storage** — an ORM/repository layer
+  (SQLAlchemy, `DATABASE_URL`-driven) over SQLite for local dev/tests and the dev namespace,
+  PostgreSQL (an in-cluster StatefulSet, see CP10-14's as-built notes) for prod only;
+  conversation state in-memory for local dev/tests and dev, DynamoDB for prod only — only
+  configuration changes per environment, the application code is identical.
 
 ### Data Model (conceptual)
 

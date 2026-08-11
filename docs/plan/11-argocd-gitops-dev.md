@@ -5,8 +5,10 @@ Spec milestone: M4 (completes M4). Depends on: CP9, CP10.
 > **As-built note (2026-08-11):** implemented as a structural migration of a separate,
 > already-working infrastructure project (`polyaifursa`)'s ArgoCD App-of-Apps pattern, not
 > designed from scratch. The original design below (a single `dev-application.yaml` /
-> `prod-application.yaml` pair, `k8s/dev/` at the repo root, Postgres + DynamoDB) was never
-> implemented as written — see "Actual Architecture."
+> `prod-application.yaml` pair, `k8s/dev/` at the repo root, a shared Postgres/DynamoDB
+> backend for both namespaces) was never implemented as written — see "Actual Architecture."
+> Postgres/DynamoDB themselves *are* implemented, per a later explicit decision, but
+> **prod-only**: dev stays on SQLite/in-memory checkpointing for cheaper, faster iteration.
 
 ## Goal
 
@@ -49,34 +51,68 @@ step is needed for application manifests, only for ArgoCD itself.
 - `backend/` — Deployment + Service + HPA (1-3 replicas, CPU 50%) + Ingress (`/api` routed
   from `supermarket-dev.<zone>`) + ServiceMonitor (`/metrics`, 15s).
 - `web/` — Deployment + Service + HPA + Ingress (`/` on the same host).
-- `supermarket-mcp/` — Deployment + Service + a PVC (`ebs-sc`, 2Gi, `ReadWriteOnce`) mounted
-  at `/data` for its SQLite database. Fixed at 1 replica, no HPA — SQLite doesn't support
-  safe concurrent writers across pods.
+- `supermarket-mcp/` — Deployment + Service. In `dev`: a PVC (`ebs-sc`, 2Gi, `ReadWriteOnce`)
+  mounted at `/data` for its SQLite database, fixed at 1 replica (SQLite doesn't support safe
+  concurrent writers across pods). In `prod`: `DATABASE_URL` instead points at the in-cluster
+  Postgres StatefulSet (see "Prod-only: Postgres + DynamoDB," below) — no local PVC needed.
 - `recipe-mcp/` — Deployment + Service. `SPOONACULAR_API_KEY` comes from a
   `recipe-mcp-secrets` Kubernetes Secret (see "Secrets," below).
 - `retailer-cart-mcp/` — Deployment + Service, bumped resource requests/limits (Playwright's
   Chromium is the only real per-request browser workload in this project). Session cookies
   mount from a `retailer-cart-sessions` Secret at `/app/sessions` (see "Secrets," below).
 - `ingestion/` — a **CronJob** (`schedule: "0 3 * * *"`, `concurrencyPolicy: Forbid`), never
-  a Deployment, sharing `supermarket-mcp`'s PVC.
+  a Deployment. In `dev`, shares `supermarket-mcp`'s SQLite PVC; in `prod`, writes to the same
+  Postgres StatefulSet `supermarket-mcp` uses.
 
-`infra/k8s/prod/` is byte-for-byte the same files, differing only in `namespace: prod`,
-hostname, and (once CI has run) image tag — see CP13.
+`infra/k8s/prod/` mirrors `infra/k8s/dev/`'s file layout (same six services, same file names),
+differing in `namespace: prod`, hostname, image tag (once CI has run), the
+`postgres`/`dynamodb` backend config described below, and one extra directory
+(`infra/k8s/prod/postgres/`) that `infra/k8s/dev/` doesn't have — see CP13.
 
-**No Postgres, no DynamoDB checkpointer.** The originally-sketched design (a `postgres`
-StatefulSet + a `dynamodb` LangGraph checkpointer backend) was never built: the app's actual,
-current runtime configuration is `DATABASE_URL=sqlite:////data/app.db` (for `supermarket-mcp`
-and `ingestion` only — the backend never touches SQLite directly) and
-`CHECKPOINTER_BACKEND=memory` (`app/agent/checkpointer.py` only implements `memory` and
-`sqlite`; `dynamodb` raises `ValueError`). Introducing a real database migration is a
-separate, application-layer change this infrastructure checkpoint deliberately does not
-make — it was never requested and the app has no genuine need for it yet.
+## Prod-only: Postgres + DynamoDB
+
+Per an explicit product decision (dev stays on SQLite/memory for cheap, fast iteration; only
+prod needs a real production-grade backend), `app/agent/checkpointer.py`'s `dynamodb` branch
+(previously a `raise ValueError`, since CP4) is now implemented, and prod's `supermarket-mcp`/
+`ingestion` point at a real Postgres instead of a local SQLite file. Both are **in-cluster**,
+not AWS-managed (RDS/DynamoDB-as-a-service was considered and explicitly rejected for
+Postgres; DynamoDB itself, unlike Postgres, has no reasonable in-cluster equivalent — it's
+always an AWS-managed service, just reached from in-cluster pods via the worker IAM role).
+
+- **PostgreSQL** (`infra/k8s/prod/postgres/postgres-statefulset.yaml` +
+  `postgres-service.yaml`): a 1-replica `StatefulSet` (`postgres:16`), its own
+  `volumeClaimTemplates` entry (`ebs-sc`, 5Gi, `ReadWriteOnce`) — this is what makes data
+  survive pod restarts/rescheduling, distinct from `supermarket-mcp-data`'s dev-only PVC.
+  Reached via a **headless** Service (`clusterIP: None`) named `postgres` — the correct
+  Service type for a StatefulSet's `serviceName`, and, since it has no ClusterIP or NodePort
+  at all, unreachable from outside the cluster by construction, not just by convention.
+  Credentials (`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB`, plus a precomputed
+  `DATABASE_URL` key so `supermarket-mcp`/`ingestion` never assemble the connection string
+  themselves) come from a `postgres-credentials` Secret — created out-of-band, same
+  not-automated pattern as `recipe-mcp-secrets` (see "Secrets," below). `supermarket-mcp`'s
+  own `init_db()` (`Base.metadata.create_all()`) creates the schema on first connect, exactly
+  as it already does against SQLite — no Alembic/migration tooling was introduced.
+- **DynamoDB** (`infra/tf/main.tf`'s `aws_dynamodb_table.langgraph_checkpoints`, name
+  `${project_name}-checkpoints`): PK/SK composite key, `PAY_PER_REQUEST`, TTL, point-in-time
+  recovery, and SSE all enabled — this exact schema is what
+  [`langgraph-checkpoint-aws`'s `DynamoDBSaver`](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/ddb-langgraph-checkpoint.html)
+  documents needing; `DynamoDBSaver` does not create the table itself. The worker IAM role
+  (`infra/tf/modules/k8s-cluster/main.tf`) grants exactly the five actions AWS's own
+  documentation lists as the minimum (`GetItem`/`PutItem`/`Query`/`BatchGetItem`/
+  `BatchWriteItem`), scoped to that one table ARN — pods get this via the worker instance
+  profile, same pattern as the existing Bedrock/SNS permissions, no IRSA. Prod's backend sets
+  `CHECKPOINTER_BACKEND=dynamodb` and `CHECKPOINT_DYNAMODB_TABLE=supermarket-assistant-checkpoints`.
 
 ## Secrets (no committed values, no manual `kubectl create secret`)
 
 - `recipe-mcp-secrets` (`SPOONACULAR_API_KEY`) — created by whatever process manages
   application secrets for this cluster (out of scope for this checkpoint; not automated by
   any workflow here).
+- `postgres-credentials` (prod only: `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
+  `DATABASE_URL`) — same not-automated pattern as `recipe-mcp-secrets`. Create once with,
+  e.g., `kubectl create secret generic postgres-credentials -n prod --from-literal=...`; keep
+  `DATABASE_URL`'s user/password/db consistent with the three discrete keys (the StatefulSet
+  reads the discrete keys, `supermarket-mcp`/`ingestion` read `DATABASE_URL`).
 - `retailer-cart-sessions` (`shufersal.json`, `rami_levy.json`) — **fully automated**:
   `.github/workflows/sync-retailer-sessions.yml` creates/updates this Secret in both `dev`
   and `prod` on every push, reading the raw session JSON from GitHub Secrets
@@ -110,14 +146,22 @@ make — it was never requested and the app has no genuine need for it yet.
 
 ## Validation performed (code + static validation only)
 
-- [x] `kubeconform` (with the ArgoCD/prometheus-operator CRD schemas) — all 48 plain
-      Kubernetes + `Application`/`ServiceMonitor`/`PrometheusRule` manifests under
-      `infra/k8s/` and `infra/argocd/` validate successfully.
+- [x] `kubeconform` (with the ArgoCD/prometheus-operator CRD schemas) — all plain Kubernetes
+      + `Application`/`ServiceMonitor`/`PrometheusRule` manifests under `infra/k8s/` and
+      `infra/argocd/`, including the new `postgres-statefulset.yaml`/`postgres-service.yaml`,
+      validate successfully.
 - [x] `helm template` of both third-party charts (`ingress-nginx`, `kube-prometheus-stack`)
       against this project's own values files — both render successfully.
-- [x] `docker build` of the backend image + a live container smoke test (`/health`,
-      `/metrics` both respond) — confirms the image CP11's Deployment references actually
-      starts correctly.
+- [x] `docker build` of the backend, `supermarket-mcp`, and `ingestion` images (all three
+      pull in the new `psycopg[binary]`/`langgraph-checkpoint-aws` dependencies) — all build
+      cleanly.
+- [x] **Live Postgres smoke test**: ran a real `postgres:16` container locally, pointed the
+      built `supermarket-mcp` image's `DATABASE_URL` at it (`postgresql+psycopg://...`), and
+      confirmed `app/db/session.py`'s `init_db()` creates the schema against it exactly as it
+      does against SQLite — genuine evidence the Postgres path works, not just that it builds.
+- [x] `pytest` — `tests/agent/test_checkpointer.py` (new) covers all four
+      `CHECKPOINTER_BACKEND` values including `dynamodb` (table-name-required error path, and
+      a mocked-`DynamoDBSaver` construction-arguments check); 363 tests pass overall.
 - [x] `actionlint` on `sync-retailer-sessions.yml` — clean.
 
 ## Risks
@@ -127,13 +171,21 @@ make — it was never requested and the app has no genuine need for it yet.
   `retailer-cart-sessions` Secret sync over SSH, and the EBS CSI driver's PVC binding are all
   unverified against a real cluster. Everything up to that boundary (manifest correctness,
   Helm chart compatibility, image builds) is verified.
-- `recipe-mcp-secrets` has no automated creation path (unlike `retailer-cart-sessions`) —
-  document this as a manual one-time step until/unless it's worth automating the same way.
+- `recipe-mcp-secrets` and `postgres-credentials` both have no automated creation path (unlike
+  `retailer-cart-sessions`) — documented as manual one-time steps until/unless it's worth
+  automating them the same way.
+- No CI job runs against a real PostgreSQL service container on every PR (unlike the
+  originally-sketched Alembic-based design) — the Postgres path was verified with one live,
+  manual smoke test (see "Validation performed") rather than a permanent CI gate. If Postgres
+  schema changes become frequent, adding a `postgres:16` service container to `ci.yml` would
+  be a reasonable follow-up.
 
 ## Definition of Done
 
-- [x] `infra/argocd/`, `infra/k8s/common/`, `infra/k8s/dev/`, `infra/k8s/prod/` created and
-      validated.
+- [x] `infra/argocd/`, `infra/k8s/common/`, `infra/k8s/dev/`, `infra/k8s/prod/` (incl.
+      `infra/k8s/prod/postgres/`) created and validated.
 - [x] `scripts/bootstrap.sh` adapted, `sync-retailer-sessions.yml` created.
+- [x] `app/agent/checkpointer.py`'s `dynamodb` branch implemented and tested;
+      `infra/tf/main.tf`'s DynamoDB table + worker IAM permissions added.
 - [x] Committed with message referencing CP11. **M4 milestone complete at this point** (code
       + static validation; live cluster verification deferred per the product decision above).
