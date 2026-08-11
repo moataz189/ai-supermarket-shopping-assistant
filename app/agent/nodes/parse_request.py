@@ -6,6 +6,11 @@ from pydantic import BaseModel, field_validator
 
 from app.agent.i18n import detect_language, translate_recipe_query
 from app.agent.state import AgentState
+from app.metrics import (
+    agent_input_tokens_total,
+    agent_output_tokens_total,
+    agent_request_type_total,
+)
 
 PARSE_PROMPT = (
     "You are the request-classification component of an AI supermarket shopping "
@@ -103,6 +108,14 @@ def make_parse_request(llm):
         result: ParsedRequestSchema | None = output["parsed"]
         if result is None:
             result = ParsedRequestSchema(**_extract_json_from_raw_content(output["raw"].content))
+
+        # usage_metadata is None for LLM stubs used in tests that don't set it (real
+        # ChatBedrockConverse responses always populate it) — skip rather than crash.
+        usage = getattr(output["raw"], "usage_metadata", None)
+        if usage:
+            agent_input_tokens_total.inc(usage.get("input_tokens", 0))
+            agent_output_tokens_total.inc(usage.get("output_tokens", 0))
+        agent_request_type_total.labels(request_type=result.request_type).inc()
 
         recipe_query = None
         if result.request_type == "recipe":

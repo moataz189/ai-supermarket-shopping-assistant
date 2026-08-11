@@ -27,10 +27,25 @@ node_modules/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.auto.tfvars
+*.tfvars
+!infra/tf/tfvars/*.tfvars
+
+# Packer
+infra/packer/packer_cache/
+*.pkrvars.hcl
+packer-manifest.json
+
+# Kubernetes cluster access (never commit — SSH into the control plane or use
+# scripts/bootstrap.sh's own kubeconfig at /etc/kubernetes/admin.conf instead)
+kubeconfig*
+*.pem
 
 # Git worktrees
 .worktrees/
 worktrees/
 
-# Retailer login sessions (live cookies — never commit)
+# Retailer login sessions (live cookies — never commit, never baked into an image; synced
+# to Kubernetes Secrets from GitHub Secrets by .github/workflows/sync-retailer-sessions.yml)
 sessions/
+*.session.json

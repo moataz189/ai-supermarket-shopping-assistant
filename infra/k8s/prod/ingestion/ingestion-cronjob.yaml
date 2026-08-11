@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingestion
+  namespace: prod
+spec:
+  # Never an always-running Deployment — the ingestion image's own CMD
+  # (python -m app.ingestion.run --source fixtures) is a one-shot batch load, not a server.
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: ingestion
+              image: moataz189/supermarket-ingestion:latest
+
+              env:
+                - name: DATABASE_URL
+                  value: "sqlite:////data/app.db"
+
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: "128Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+
+          # Same PVC as supermarket-mcp (RWO EBS volume) — safe only because this job and
+          # supermarket-mcp's single replica are expected to land on the same worker node in
+          # this small MVP cluster; a genuine multi-node RWO conflict would need ReadWriteMany
+          # (EFS) or moving ingestion to write via the supermarket-mcp API instead.
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: supermarket-mcp-data
