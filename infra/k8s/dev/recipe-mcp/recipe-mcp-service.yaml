@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: recipe-mcp-svc
+  namespace: dev
+spec:
+  selector:
+    app: recipe-mcp
+  ports:
+    - port: 8002
+      targetPort: 8002

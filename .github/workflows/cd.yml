@@ -1,0 +1,311 @@
+name: Deploy Services
+
+on:
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "app/**"
+      - "mcp_servers/**"
+      - "web/**"
+      - "tests/fixtures/feeds/**"
+      - ".github/workflows/cd.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-services-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      web: ${{ steps.filter.outputs.web }}
+      supermarket_mcp: ${{ steps.filter.outputs.supermarket_mcp }}
+      recipe_mcp: ${{ steps.filter.outputs.recipe_mcp }}
+      retailer_cart_mcp: ${{ steps.filter.outputs.retailer_cart_mcp }}
+      ingestion: ${{ steps.filter.outputs.ingestion }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes in current push
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          base: ${{ github.event.before }}
+          ref: ${{ github.sha }}
+          filters: |
+            backend:
+              - "app/agent/**"
+              - "app/api/**"
+              - "app/dietary/**"
+
+            web:
+              - "web/**"
+
+            supermarket_mcp:
+              - "mcp_servers/supermarket_mcp/**"
+              - "app/db/**"
+
+            recipe_mcp:
+              - "mcp_servers/recipe_mcp/**"
+
+            retailer_cart_mcp:
+              - "mcp_servers/retailer_cart_mcp/**"
+
+            ingestion:
+              - "app/ingestion/**"
+              - "app/db/**"
+              - "tests/fixtures/feeds/**"
+
+      - name: Show detected changes
+        run: |
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Previous commit: ${{ github.event.before }}"
+          echo "Current commit: ${{ github.sha }}"
+          echo "Backend changed: ${{ steps.filter.outputs.backend }}"
+          echo "Web changed: ${{ steps.filter.outputs.web }}"
+          echo "Supermarket MCP changed: ${{ steps.filter.outputs.supermarket_mcp }}"
+          echo "Recipe MCP changed: ${{ steps.filter.outputs.recipe_mcp }}"
+          echo "Retailer-Cart MCP changed: ${{ steps.filter.outputs.retailer_cart_mcp }}"
+          echo "Ingestion changed: ${{ steps.filter.outputs.ingestion }}"
+
+  build:
+    name: Build ${{ matrix.service }}
+    needs: detect
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            changed: ${{ needs.detect.outputs.backend }}
+            dockerfile: app/api/Dockerfile
+            image: moataz189/supermarket-backend
+
+          - service: web
+            changed: ${{ needs.detect.outputs.web }}
+            dockerfile: web/Dockerfile
+            image: moataz189/supermarket-web
+
+          - service: supermarket-mcp
+            changed: ${{ needs.detect.outputs.supermarket_mcp }}
+            dockerfile: mcp_servers/supermarket_mcp/Dockerfile
+            image: moataz189/supermarket-mcp
+
+          - service: recipe-mcp
+            changed: ${{ needs.detect.outputs.recipe_mcp }}
+            dockerfile: mcp_servers/recipe_mcp/Dockerfile
+            image: moataz189/recipe-mcp
+
+          - service: retailer-cart-mcp
+            changed: ${{ needs.detect.outputs.retailer_cart_mcp }}
+            dockerfile: mcp_servers/retailer_cart_mcp/Dockerfile
+            image: moataz189/retailer-cart-mcp
+
+          - service: ingestion
+            changed: ${{ needs.detect.outputs.ingestion }}
+            dockerfile: app/ingestion/Dockerfile
+            image: moataz189/supermarket-ingestion
+
+    steps:
+      - name: Checkout repository
+        if: matrix.changed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Login to Docker Hub
+        if: matrix.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        if: matrix.changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          # Every image builds from the repo root (docker-compose.yml's own convention:
+          # `context: .`), not a per-service subdirectory like the reference's
+          # services/<name> layout — this project's Dockerfiles COPY shared modules
+          # (e.g. app/db) that live outside any single service's own directory.
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64
+          tags: ${{ matrix.image }}:${{ github.sha }}
+
+      - name: Skip unchanged service
+        if: matrix.changed != 'true'
+        run: |
+          echo "${{ matrix.service }} was not changed. Skipping image build."
+
+  update-manifests:
+    name: Update Kubernetes manifests
+    needs:
+      - detect
+      - build
+
+    if: |
+      needs.detect.outputs.backend == 'true' ||
+      needs.detect.outputs.web == 'true' ||
+      needs.detect.outputs.supermarket_mcp == 'true' ||
+      needs.detect.outputs.recipe_mcp == 'true' ||
+      needs.detect.outputs.retailer_cart_mcp == 'true' ||
+      needs.detect.outputs.ingestion == 'true'
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout current branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Configure SSH remote
+        run: |
+          git remote set-url origin git@github.com:moataz189/ai-supermarket-shopping-assistant.git
+
+      - name: Select environment directory
+        run: |
+          if [ "${{ github.ref_name }}" = "dev" ]; then
+            echo "ENV_DIR=dev" >> "$GITHUB_ENV"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            echo "ENV_DIR=prod" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+      - name: Update backend image
+        if: needs.detect.outputs.backend == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/backend/backend-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/supermarket-backend:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/supermarket-backend:${GITHUB_SHA}" "$FILE"
+
+      - name: Update web image
+        if: needs.detect.outputs.web == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/web/web-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/supermarket-web:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/supermarket-web:${GITHUB_SHA}" "$FILE"
+
+      - name: Update supermarket-mcp image
+        if: needs.detect.outputs.supermarket_mcp == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/supermarket-mcp/supermarket-mcp-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/supermarket-mcp:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/supermarket-mcp:${GITHUB_SHA}" "$FILE"
+
+      - name: Update recipe-mcp image
+        if: needs.detect.outputs.recipe_mcp == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/recipe-mcp/recipe-mcp-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/recipe-mcp:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/recipe-mcp:${GITHUB_SHA}" "$FILE"
+
+      - name: Update retailer-cart-mcp image
+        if: needs.detect.outputs.retailer_cart_mcp == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/retailer-cart-mcp/retailer-cart-mcp-deployment.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/retailer-cart-mcp:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/retailer-cart-mcp:${GITHUB_SHA}" "$FILE"
+
+      - name: Update ingestion image
+        if: needs.detect.outputs.ingestion == 'true'
+        run: |
+          FILE="infra/k8s/${ENV_DIR}/ingestion/ingestion-cronjob.yaml"
+
+          test -f "$FILE"
+
+          sed -i -E \
+            "s|(image:[[:space:]]*moataz189/supermarket-ingestion:).*|\1${GITHUB_SHA}|" \
+            "$FILE"
+
+          grep "image:.*moataz189/supermarket-ingestion:${GITHUB_SHA}" "$FILE"
+
+      - name: Commit and push dev manifest changes
+        if: github.ref_name == 'dev'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "infra/k8s/dev"
+
+          if git diff --cached --quiet; then
+            echo "No dev manifest changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "deploy(dev): update service images to ${GITHUB_SHA}"
+
+          git push origin HEAD:dev
+
+      - name: Commit and push production manifest changes
+        if: github.ref_name == 'main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add "infra/k8s/prod"
+
+          if git diff --cached --quiet; then
+            echo "No production manifest changes to commit."
+            exit 0
+          fi
+
+          git commit \
+            -m "deploy(prod): update service images to ${GITHUB_SHA}"
+
+          git push origin HEAD:main

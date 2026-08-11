@@ -1,0 +1,170 @@
+name: Provision Kubernetes Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: AWS region
+        required: true
+        default: us-east-1
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  terraform:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+
+    outputs:
+      control_plane_ip: ${{ steps.terraform-output.outputs.control_plane_ip }}
+
+    defaults:
+      run:
+        working-directory: infra/tf
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Select or create Terraform workspace
+        run: terraform workspace select -or-create "${{ inputs.region }}"
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -var-file="tfvars/${{ inputs.region }}.tfvars"
+
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -var-file="tfvars/${{ inputs.region }}.tfvars" \
+            -auto-approve
+
+      - name: Get Control Plane IP
+        id: terraform-output
+        run: |
+          CONTROL_PLANE_IP=$(terraform output -raw control_plane_public_ip)
+          echo "control_plane_ip=$CONTROL_PLANE_IP" >> "$GITHUB_OUTPUT"
+
+      # Local Terraform state (documented risk, see infra/tf/main.tf) means no other
+      # workflow run can `terraform output` this later — persisted as a repo variable so
+      # cd.yml and sync-retailer-sessions.yml can reach the cluster without re-running
+      # Terraform. Requires the default GITHUB_TOKEN to have "Read and write permissions"
+      # for Actions enabled in repo Settings -> Actions -> General (or a PAT in
+      # secrets.VARS_PAT as a fallback).
+      - name: Persist Control Plane IP as a repo variable
+        env:
+          GH_TOKEN: ${{ secrets.VARS_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          gh variable set CONTROL_PLANE_IP \
+            --body "${{ steps.terraform-output.outputs.control_plane_ip }}" \
+            --repo "${{ github.repository }}"
+
+      - name: Render monitoring values from Terraform output
+        run: |
+          SNS_TOPIC_ARN=$(terraform output -raw alerts_sns_topic_arn)
+          export SNS_TOPIC_ARN
+
+          envsubst '${SNS_TOPIC_ARN}' \
+            < "$GITHUB_WORKSPACE/infra/k8s/monitoring/values.yaml.tpl" \
+            > "$GITHUB_WORKSPACE/infra/k8s/monitoring/values.yaml"
+
+      - name: Commit and push rendered monitoring values
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_KEY }}
+
+      - name: Push rendered monitoring values
+        working-directory: ${{ github.workspace }}
+        run: |
+          git remote set-url origin git@github.com:moataz189/ai-supermarket-shopping-assistant.git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add infra/k8s/monitoring/values.yaml
+
+          if git diff --cached --quiet; then
+            echo "No monitoring values changes to commit."
+            exit 0
+          fi
+
+          git commit -m "monitoring: render Alertmanager SNS topic ARN from Terraform output [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
+
+  bootstrap:
+    name: Bootstrap Kubernetes Cluster
+    runs-on: ubuntu-latest
+    needs: terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for SSH
+        run: |
+          IP="${{ needs.terraform.outputs.control_plane_ip }}"
+
+          echo "Waiting for SSH on $IP..."
+
+          for i in {1..30}; do
+            if nc -z -w 5 "$IP" 22; then
+              echo "SSH is ready."
+              exit 0
+            fi
+
+            echo "Attempt $i/30..."
+            sleep 10
+          done
+
+          echo "SSH did not become available."
+          exit 1
+
+      - name: Copy bootstrap script
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "scripts/bootstrap.sh"
+          target: "/home/ubuntu"
+          strip_components: 1
+
+      - name: Copy App of Apps
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "infra/argocd/app-of-apps.yaml"
+          target: "/home/ubuntu"
+          strip_components: 2
+
+      - name: Run bootstrap
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.terraform.outputs.control_plane_ip }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            chmod +x /home/ubuntu/bootstrap.sh
+            sudo /home/ubuntu/bootstrap.sh

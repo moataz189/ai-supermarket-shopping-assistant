@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: web
+  namespace: prod
+  labels:
+    app: web
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: web
+
+  template:
+    metadata:
+      labels:
+        app: web
+
+    spec:
+      containers:
+        - name: web
+          image: moataz189/supermarket-web:latest
+          # No AGENT_INTERNAL_URL-equivalent env var (unlike the reference frontend):
+          # web/nginx.conf proxies /api/ to a build-time-baked "http://backend:8000/" for
+          # local docker-compose, where the backend service is literally named "backend".
+          # In this cluster the Ingress (backend-ingress.yaml) routes /api directly to
+          # backend-svc before traffic ever reaches this pod, so that baked-in nginx proxy
+          # target is simply never exercised here.
+
+          ports:
+            - containerPort: 80
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3

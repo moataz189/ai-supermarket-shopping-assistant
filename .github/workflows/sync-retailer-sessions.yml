@@ -1,0 +1,83 @@
+name: Sync Retailer Session Secrets
+
+# No equivalent in polyaifursa (it has no third-party login-session concept) — new
+# workflow, not adapted from an existing one. Keeps the retailer-cart-mcp Kubernetes
+# Secret (dev and prod, one each, since Secrets are namespace-scoped) in sync with the
+# raw session JSON stored in GitHub Secrets, so a fresh checkout of this repo never
+# contains the session files and no image ever bakes them in. Runs automatically on every
+# push to dev/main (redundant re-applies are harmless) and can be triggered manually to
+# rotate a stale login without needing a code change.
+on:
+  push:
+    branches:
+      - dev
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-retailer-sessions-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync session secrets to cluster
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Select namespace and per-environment GitHub Secrets
+        run: |
+          if [ "${{ github.ref_name }}" = "dev" ]; then
+            echo "K8S_NAMESPACE=dev" >> "$GITHUB_ENV"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            echo "K8S_NAMESPACE=prod" >> "$GITHUB_ENV"
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+      # CONTROL_PLANE_IP is a repo variable persisted by .github/workflows/cluster.yaml
+      # (local Terraform state means this workflow has no other way to know the cluster's
+      # address). If it isn't set yet, the cluster hasn't been provisioned.
+      - name: Require CONTROL_PLANE_IP
+        run: |
+          if [ -z "${{ vars.CONTROL_PLANE_IP }}" ]; then
+            echo "CONTROL_PLANE_IP repo variable is not set — run the 'Provision Kubernetes Cluster' workflow first." >&2
+            exit 1
+          fi
+
+      - name: Sync retailer-cart-mcp session Secret
+        uses: appleboy/ssh-action@v1
+        env:
+          SHUFERSAL_SESSION: ${{ env.K8S_NAMESPACE == 'prod' && secrets.RETAILER_SESSION_SHUFERSAL_PROD || secrets.RETAILER_SESSION_SHUFERSAL_DEV }}
+          RAMI_LEVY_SESSION: ${{ env.K8S_NAMESPACE == 'prod' && secrets.RETAILER_SESSION_RAMI_LEVY_PROD || secrets.RETAILER_SESSION_RAMI_LEVY_DEV }}
+        with:
+          host: ${{ vars.CONTROL_PLANE_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: SHUFERSAL_SESSION,RAMI_LEVY_SESSION,K8S_NAMESPACE
+          script: |
+            set -euo pipefail
+
+            if [ -z "${SHUFERSAL_SESSION:-}" ] || [ -z "${RAMI_LEVY_SESSION:-}" ]; then
+              echo "Missing RETAILER_SESSION_* GitHub Secret for namespace ${K8S_NAMESPACE} — nothing to sync." >&2
+              exit 1
+            fi
+
+            TMP_DIR=$(mktemp -d)
+            trap 'shred -u "$TMP_DIR"/*.json 2>/dev/null || rm -f "$TMP_DIR"/*.json; rmdir "$TMP_DIR"' EXIT
+
+            printf '%s' "$SHUFERSAL_SESSION" > "$TMP_DIR/shufersal.json"
+            printf '%s' "$RAMI_LEVY_SESSION" > "$TMP_DIR/rami_levy.json"
+
+            sudo kubectl --kubeconfig /etc/kubernetes/admin.conf \
+              create secret generic retailer-cart-sessions \
+              -n "$K8S_NAMESPACE" \
+              --from-file=shufersal.json="$TMP_DIR/shufersal.json" \
+              --from-file=rami_levy.json="$TMP_DIR/rami_levy.json" \
+              --dry-run=client -o yaml \
+              | sudo kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f -
+
+            echo "retailer-cart-sessions Secret synced in namespace $K8S_NAMESPACE."

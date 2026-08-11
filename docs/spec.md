@@ -79,7 +79,9 @@ technology checklist (see §9).
                                             │ two independent catalogs  │
                                             └────────────────────────┘
 
-LangGraph checkpoint/state → DynamoDB (deployed) or in-memory/SQLite (local/tests)
+LangGraph checkpoint/state → in-memory or SQLite (same in every environment,
+deployed or local/tests — see CP10-14's as-built notes for why the originally
+planned DynamoDB backend was never built)
 — enables interrupt/resume for clarification and for the final "choose a
 retailer's cart" gate before browser automation runs.
 ```
@@ -151,9 +153,11 @@ not live stock.
   with a choose/decline control. After a choice: the real-cart result (added/failed items,
   a link if available), with warnings clearly separated.
 
-- **Product data storage / conversation state storage** — as before: an ORM/repository
-  layer over SQLite (local) / PostgreSQL (deployed); conversation state in-memory/SQLite
-  (local) or DynamoDB (deployed) — only configuration changes between environments.
+- **Product data storage / conversation state storage** — an ORM/repository layer over
+  SQLite (same in every environment — the originally planned PostgreSQL-when-deployed split
+  was never built, see CP10-14's as-built notes); conversation state in-memory or SQLite
+  (same in every environment) — only configuration changes between local/tests and deployed
+  dev/prod, never the underlying engine.
 
 ### Data Model (conceptual)
 
@@ -355,8 +359,11 @@ flow as before — including the existing NGINX Ingress setup, which Helm does n
 Application metrics are exposed to `kube-prometheus-stack` via `ServiceMonitor` resources (or
 another mechanism it supports), not by hand-rolled Prometheus config.
 
-Prometheus/Grafana cover request latency, MCP call success/failure, per-retailer ingestion
-freshness, error rates, and retailer-cart-prep success/failure/blocked rates.
+Prometheus/Grafana cover request latency, MCP call success/failure by service, chat
+request/error rates, request-type/clarification/retailer-choice breakdowns, and
+retailer-cart-prep success/partial/blocked rates (see CP10-14's as-built notes: per-retailer
+ingestion freshness and a typed error-code taxonomy were not implemented — the current
+ingestion/finalize code doesn't expose either in a form worth instrumenting).
 
 ## 8. MVP & Milestones
 
