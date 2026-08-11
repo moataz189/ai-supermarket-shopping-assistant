@@ -1,0 +1,43 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingestion-full
+  namespace: prod
+  # Runs once per ArgoCD sync of the prod Application (which itself only ever happens
+  # manually — infra/argocd/prod.yaml has no automated sync policy), not on a schedule —
+  # this is the "PriceFull → run once after deployment/sync" half of live ingestion.
+  # BeforeHookCreation deletes the previous run's completed Job first, so a re-sync doesn't
+  # collide with an old Job of the same name still hanging around.
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 2
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: ingestion-full
+          image: moataz189/supermarket-ingestion:latest
+          # Overrides the image's own default CMD (--source fixtures, used by dev and local
+          # docker-compose) — downloads and ingests the live PriceFull baseline for both
+          # retailers (app/ingestion/downloaders/{shufersal,rami_levy}.py), one retailer's
+          # failure never blocking the other (app/ingestion/run.py's run_live()).
+          command: ["python", "-m", "app.ingestion.run", "--source", "live-full"]
+
+          env:
+            # Same in-cluster Postgres StatefulSet prod's supermarket-mcp/backend use — see
+            # infra/k8s/prod/postgres/.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: DATABASE_URL
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"

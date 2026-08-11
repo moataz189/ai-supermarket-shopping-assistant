@@ -1,12 +1,13 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: ingestion
+  name: ingestion-delta
   namespace: prod
 spec:
-  # Never an always-running Deployment — the ingestion image's own CMD
-  # (python -m app.ingestion.run --source fixtures) is a one-shot batch load, not a server.
-  schedule: "0 3 * * *"
+  # Hourly — the "Price → poll for the newest incremental delta" half of live ingestion.
+  # Never an always-running Deployment: each run is a one-shot batch download+ingest,
+  # exiting when done (app/ingestion/run.py's run_live()).
+  schedule: "0 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -17,14 +18,14 @@ spec:
         spec:
           restartPolicy: OnFailure
           containers:
-            - name: ingestion
+            - name: ingestion-delta
               image: moataz189/supermarket-ingestion:latest
+              # already_processed() (app/ingestion/pipeline.py) makes re-running this against
+              # an unchanged upstream file a safe no-op — the newest Price file doesn't
+              # necessarily change every hour.
+              command: ["python", "-m", "app.ingestion.run", "--source", "live-delta"]
 
               env:
-                # Points at the in-cluster Postgres StatefulSet, same as prod's
-                # supermarket-mcp — Postgres (unlike dev's SQLite-on-a-PVC) supports
-                # concurrent writers, so this job and supermarket-mcp's pod no longer need
-                # to share a single ReadWriteOnce volume or land on the same worker node.
                 - name: DATABASE_URL
                   valueFrom:
                     secretKeyRef:

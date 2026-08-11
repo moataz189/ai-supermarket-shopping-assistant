@@ -60,9 +60,12 @@ step is needed for application manifests, only for ArgoCD itself.
 - `retailer-cart-mcp/` — Deployment + Service, bumped resource requests/limits (Playwright's
   Chromium is the only real per-request browser workload in this project). Session cookies
   mount from a `retailer-cart-sessions` Secret at `/app/sessions` (see "Secrets," below).
-- `ingestion/` — a **CronJob** (`schedule: "0 3 * * *"`, `concurrencyPolicy: Forbid`), never
-  a Deployment. In `dev`, shares `supermarket-mcp`'s SQLite PVC; in `prod`, writes to the same
-  Postgres StatefulSet `supermarket-mcp` uses.
+- `ingestion/` — never a Deployment. In `dev`: a **CronJob** (`schedule: "0 3 * * *"`,
+  `concurrencyPolicy: Forbid`) loading fixtures into `supermarket-mcp`'s SQLite PVC. In
+  `prod`: a **Job** (ArgoCD PostSync hook, one-shot full catalog load) plus a separate
+  **hourly CronJob** (incremental delta), both downloading real live retailer data into the
+  same Postgres StatefulSet `supermarket-mcp` uses — see CP17
+  (`docs/plan/17-live-price-feed-ingestion.md`), added after this checkpoint.
 
 `infra/k8s/prod/` mirrors `infra/k8s/dev/`'s file layout (same six services, same file names),
 differing in `namespace: prod`, hostname, image tag (once CI has run), the

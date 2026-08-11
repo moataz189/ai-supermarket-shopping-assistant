@@ -318,13 +318,19 @@ need to change it.
 ## Risks
 
 - Real feed schemas may differ from hand-built fixtures — check one real sample per chain
-  before finalizing fixtures.
+  before finalizing fixtures. **Confirmed true in practice**: when live ingestion was
+  eventually built (CP17), the real Shufersal/Rami Levy feeds included several `UnitQty`
+  spellings and one entirely new physical unit (meters) neither fixture had an example of —
+  see CP17 for the full findings.
 
 ## Notes
 
 CP3's MCP server calls `ProductRepository` directly — no cross-retailer query lives here or
-there. Real live ingestion (CronJob) is CP11; this checkpoint proves `ingest_retailer_feed`
-itself (both `PriceFull` and `Price`) against fixtures — not the schedule around it.
+there. This checkpoint proves `ingest_retailer_feed` itself (both `PriceFull` and `Price`)
+against fixtures — not the schedule around it. Real live ingestion was **not** CP11 as
+originally assumed here — CP11 (as actually implemented) stayed infrastructure-only; live
+downloading from the two real retailer portals is CP17
+(`docs/plan/17-live-price-feed-ingestion.md`), added later as a follow-on feature.
 
 Both feed types are fully implemented — see "Feed Types: PriceFull vs. Price" above. What's
 still deliberately **not** built here: any feed-file discovery/ordering, an
