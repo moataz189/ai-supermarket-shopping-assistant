@@ -66,3 +66,34 @@ async def test_retailer_cart_client_call_records_error_counter_on_exception():
 
     after = generate_latest().decode()
     assert 'mcp_call_total{mcp_service="retailer_cart",status="error"}' in after
+
+
+async def test_retailer_cart_client_sends_api_key_header_and_environment_argument():
+    captured = {}
+
+    def _capturing_streamablehttp_client(url, headers=None, **kwargs):
+        captured["headers"] = headers
+        return _FakeAsyncContextManager((None, None, None))
+
+    session = AsyncMock()
+    session.initialize = AsyncMock()
+    tool_result = AsyncMock()
+    tool_result.structuredContent = {
+        "retailer": "shufersal", "added": [], "failed": [], "blocked": False,
+        "blocked_reason": None, "cart_url": None,
+    }
+    session.call_tool = AsyncMock(return_value=tool_result)
+
+    with (
+        patch("app.agent.mcp_clients.streamablehttp_client", side_effect=_capturing_streamablehttp_client),
+        patch("app.agent.mcp_clients.ClientSession", return_value=_FakeAsyncContextManager(session)),
+    ):
+        client = McpRetailerCartClient(
+            "https://retailer-cart.fursa.click/mcp", api_key="secret123", environment="dev"
+        )
+        await client.prepare_retailer_cart("shufersal", [])
+
+    assert captured["headers"] == {"X-API-Key": "secret123"}
+    session.call_tool.assert_awaited_once_with(
+        "prepare_retailer_cart", {"retailer": "shufersal", "items": [], "environment": "dev"}
+    )
