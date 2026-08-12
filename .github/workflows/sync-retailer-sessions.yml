@@ -4,14 +4,9 @@ name: Sync Retailer Session Secrets
 # workflow, not adapted from an existing one. Keeps the retailer-cart-mcp Kubernetes
 # Secret (dev and prod, one each, since Secrets are namespace-scoped) in sync with the
 # raw session JSON stored in GitHub Secrets, so a fresh checkout of this repo never
-# contains the session files and no image ever bakes them in. Runs automatically on every
-# push to dev/main (redundant re-applies are harmless) and can be triggered manually to
-# rotate a stale login without needing a code change.
+# contains the session files and no image ever bakes them in. Manual-only — triggered by
+# hand (picking the dev or main branch/ref) whenever a session needs to be rotated.
 on:
-  push:
-    branches:
-      - dev
-      - main
   workflow_dispatch: {}
 
 permissions:
