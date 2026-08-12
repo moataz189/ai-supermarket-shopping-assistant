@@ -1,0 +1,47 @@
+name: Sync Retailer Sessions (il-central-1, Shufersal only)
+
+# Rami Levy's session (~590KB, a full Vuex/Pinia store snapshot the site needs for
+# correct cart-to-account linkage — see the 2026-08-13 fix commits) is too large for a
+# practical GitHub Secret and is transferred to the instance manually, out of band. This
+# workflow only covers Shufersal until that's solved — see
+# docs/superpowers/specs/2026-08-12-il-central-1-retailer-cart-mcp-design.md.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-retailer-sessions-il
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync Shufersal session to il-central-1
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require IL_CENTRAL_1_HOST
+        run: |
+          if [ -z "${{ vars.IL_CENTRAL_1_HOST }}" ]; then
+            echo "IL_CENTRAL_1_HOST repo variable is not set — run 'Provision il-central-1 Instance' first." >&2
+            exit 1
+          fi
+
+      - name: Sync sessions/{dev,prod}/shufersal.json
+        uses: appleboy/ssh-action@v1
+        env:
+          SHUFERSAL_SESSION_DEV: ${{ secrets.RETAILER_SESSION_SHUFERSAL_DEV }}
+          SHUFERSAL_SESSION_PROD: ${{ secrets.RETAILER_SESSION_SHUFERSAL_PROD }}
+        with:
+          host: ${{ vars.IL_CENTRAL_1_HOST }}
+          username: ubuntu
+          key: ${{ secrets.IL_CENTRAL_1_SSH_KEY }}
+          envs: SHUFERSAL_SESSION_DEV,SHUFERSAL_SESSION_PROD
+          script: |
+            set -euo pipefail
+            sudo mkdir -p /opt/retailer-cart-mcp/sessions/dev /opt/retailer-cart-mcp/sessions/prod
+            echo "$SHUFERSAL_SESSION_DEV" | sudo tee /opt/retailer-cart-mcp/sessions/dev/shufersal.json > /dev/null
+            echo "$SHUFERSAL_SESSION_PROD" | sudo tee /opt/retailer-cart-mcp/sessions/prod/shufersal.json > /dev/null
+            sudo chmod 600 /opt/retailer-cart-mcp/sessions/dev/shufersal.json /opt/retailer-cart-mcp/sessions/prod/shufersal.json
+            echo "Shufersal sessions synced (dev + prod)."
