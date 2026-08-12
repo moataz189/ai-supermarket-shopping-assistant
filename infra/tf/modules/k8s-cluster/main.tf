@@ -32,22 +32,22 @@ resource "aws_security_group" "control_plane" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
-  ingress {
-    description = "Kubernetes API (admin only)"
-    from_port   = 6443
-    to_port     = 6443
-    protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
-  }
 
   ingress {
     description = "Kubernetes API (in-VPC, for workers joining/talking to the API server)"
     from_port   = 6443
     to_port     = 6443
     protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+   ingress {
+    description = "Allow all intra-VPC traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
     cidr_blocks = [var.vpc_cidr]
   }
 
@@ -67,12 +67,20 @@ resource "aws_security_group" "workers" {
   vpc_id      = var.vpc_id
 
   ingress {
-    description = "SSH (admin only)"
+    description = "SSH (all traffic)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
+    cidr_blocks = ["0.0.0.0/0"]
   }
+  ingress {
+    description = "Allow all intra-VPC traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
 
   egress {
     from_port   = 0
