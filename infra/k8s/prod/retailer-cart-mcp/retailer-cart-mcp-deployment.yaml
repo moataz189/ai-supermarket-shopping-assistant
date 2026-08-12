@@ -20,17 +20,8 @@ spec:
         app: retailer-cart-mcp
 
     spec:
-      # All containers in this Pod use Gluetun's local DNS server.
-      # Gluetun listens on port 53 inside the shared Pod network namespace.
-      dnsPolicy: None
-
-      dnsConfig:
-        nameservers:
-          - 127.0.0.1
-
-      # Gluetun runs as a native Kubernetes sidecar.
-      # It starts before retailer-cart-mcp and remains alive
-      # for the lifetime of the Pod.
+      # Native Kubernetes sidecar.
+      # Starts before retailer-cart-mcp and stays alive for the whole Pod lifetime.
       initContainers:
         - name: gluetun
           image: qmcgaw/gluetun:latest
@@ -42,9 +33,9 @@ spec:
             capabilities:
               add:
                 - NET_ADMIN
-                - NET_RAW
 
           env:
+            # Surfshark through WireGuard
             - name: VPN_SERVICE_PROVIDER
               value: "surfshark"
 
@@ -54,6 +45,7 @@ spec:
             - name: SERVER_COUNTRIES
               value: "Israel"
 
+            # Created earlier as Kubernetes Secret.
             - name: WIREGUARD_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
@@ -66,18 +58,21 @@ spec:
                   name: surfshark-gluetun
                   key: WIREGUARD_ADDRESSES
 
-            # Allow Kubernetes/backend traffic to reach retailer-cart-mcp.
+            # The Kubernetes Service/backend must still be able to reach
+            # retailer-cart-mcp on port 8003 through Gluetun's firewall.
             - name: FIREWALL_INPUT_PORTS
               value: "8003"
 
-            # Keep internal AWS/Kubernetes traffic outside the VPN.
+            # Internal traffic must remain outside the VPN:
             #
-            # 10.0.0.0/16    = AWS VPC
-            # 10.96.0.0/12   = Kubernetes Service CIDR
-            # 192.168.0.0/16 = Calico Pod CIDR
+            # 10.0.0.0/16    -> AWS VPC
+            # 10.96.0.0/12   -> Kubernetes Service CIDR
+            # 192.168.0.0/16 -> Calico Pod CIDR
             - name: FIREWALL_OUTBOUND_SUBNETS
               value: "10.0.0.0/16,10.96.0.0/12,192.168.0.0/16"
 
+          # Do not start retailer-cart-mcp until Gluetun reports
+          # that the VPN connection is healthy.
           startupProbe:
             exec:
               command:
@@ -88,6 +83,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 30
 
+          # If the VPN later becomes unhealthy, Kubernetes also sees it.
           readinessProbe:
             exec:
               command:
@@ -99,7 +95,7 @@ spec:
 
           resources:
             requests:
-              cpu: "10m"
+              cpu: "50m"
               memory: "128Mi"
             limits:
               cpu: "500m"
@@ -126,9 +122,11 @@ spec:
               mountPath: /app/sessions
               readOnly: true
 
+          # This is the only MCP service running a real Chromium instance
+          # through Playwright, so it gets higher resource limits.
           resources:
             requests:
-              cpu: "150m"
+              cpu: "300m"
               memory: "512Mi"
             limits:
               cpu: "1500m"
@@ -152,6 +150,7 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 3
 
+      # Session cookies are supplied through Kubernetes Secret.
       volumes:
         - name: sessions
           secret:
