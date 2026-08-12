@@ -30,6 +30,7 @@ node_modules/
 *.auto.tfvars
 *.tfvars
 !infra/tf/tfvars/*.tfvars
+!infra/tf-il/tfvars/*.tfvars
 
 # Packer
 infra/packer/packer_cache/
