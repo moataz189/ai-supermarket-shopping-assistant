@@ -18,7 +18,6 @@ external mechanism), never a plain ConfigMap or a file baked into the image.
 """
 
 import asyncio
-import json
 import os
 import stat
 import sys
@@ -31,32 +30,14 @@ from mcp_servers.retailer_cart_mcp.adapters.shufersal import ShufersalAdapter
 ADAPTERS = {"shufersal": ShufersalAdapter, "rami_levy": RamiLevyAdapter}
 SESSIONS_DIR = os.environ.get("RETAILER_SESSIONS_DIR", "sessions")
 
-# Playwright's storage_state() captures every localStorage entry indiscriminately, including
-# large cached app-state/analytics blobs that have nothing to do with login (observed live:
-# a single entry over 100KB on each retailer site, dwarfing the ~20KB of actual cookies —
-# real login state is cookie-based here, not localStorage-based). Entries below this
-# threshold are kept as-is (small enough to plausibly matter, e.g. an auth flag or token);
-# only clear outliers are dropped, and every drop is logged, never silent.
-MAX_LOCAL_STORAGE_ENTRY_BYTES = 20_000
-
-
-def _trim_oversized_local_storage(session_path: str) -> None:
-    with open(session_path, encoding="utf-8") as f:
-        state = json.load(f)
-
-    for origin in state.get("origins", []):
-        kept, dropped = [], []
-        for entry in origin.get("localStorage", []):
-            if len(entry["value"].encode("utf-8")) > MAX_LOCAL_STORAGE_ENTRY_BYTES:
-                dropped.append(entry["name"])
-            else:
-                kept.append(entry)
-        if dropped:
-            print(f"  {origin['origin']}: dropped oversized localStorage keys {dropped}")
-        origin["localStorage"] = kept
-
-    with open(session_path, "w", encoding="utf-8") as f:
-        json.dump(state, f)
+# Deliberately NOT trimming large localStorage entries (a prior version dropped anything
+# over 20KB, assuming it was disposable analytics cache). Confirmed live, 2026-08-13: on
+# Rami Levy that assumption was wrong — the large entry is a full serialized Vuex/Pinia
+# store snapshot (cart/checkout/authuser/preferences), real application state the site
+# uses for cart-to-account linkage. Dropping it produced sessions where add-to-cart
+# succeeded server-side but never appeared in the account's real cart. Saving the session
+# untrimmed is what's confirmed working; shrinking it for GitHub Secrets' size limit is a
+# separate, not-yet-solved problem — not a return to trimming.
 
 
 async def main(retailer: str) -> None:
@@ -77,7 +58,6 @@ async def main(retailer: str) -> None:
 
             session_path = os.path.join(SESSIONS_DIR, f"{retailer}.json")
             await context.storage_state(path=session_path)
-            _trim_oversized_local_storage(session_path)
             os.chmod(session_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600 — live cookies inside
             print(f"Saved {retailer} login session to {session_path}")
         finally:
