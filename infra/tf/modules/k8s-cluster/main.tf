@@ -43,7 +43,7 @@ resource "aws_security_group" "control_plane" {
     protocol    = "tcp"
     cidr_blocks = [var.vpc_cidr]
   }
-   ingress {
+  ingress {
     description = "Allow all intra-VPC traffic"
     from_port   = 0
     to_port     = 0
