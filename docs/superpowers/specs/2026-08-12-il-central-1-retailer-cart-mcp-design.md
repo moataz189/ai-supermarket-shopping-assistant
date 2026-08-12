@@ -115,10 +115,18 @@ No Kubernetes on the new instance, so the existing `kubectl`-based
 `sync-retailer-sessions.yml` pattern doesn't apply directly. A new workflow,
 `sync-retailer-sessions-il.yml` (manual-dispatch, same SSH-based approach as the rest of
 this project's `sync-*.yml` workflows), connects to the `il-central-1` instance and writes
-`sessions/{dev,prod}/{shufersal,rami_levy}.json` directly to disk from the same
-`RETAILER_SESSION_*` GitHub Secrets already in use today. `retailer-cart-mcp` reads these
-as a live-mounted directory, same as the current in-cluster volume-mount behavior — no
+session files directly to disk from GitHub Secrets. `retailer-cart-mcp` reads these as a
+live-mounted directory, same as the current in-cluster volume-mount behavior — no
 container restart needed after a sync.
+
+**Shufersal only, for now.** Rami Levy's captured session is currently ~590KB (a full
+serialized Vuex/Pinia store snapshot the site needs for correct cart-to-account linkage —
+see the two `fix(retailer-cart-mcp)` commits from 2026-08-13 — trimming it back down
+broke cart persistence, so it's no longer trimmed). That's too large for a practical
+GitHub Secret. Until a real shrinking approach exists, `sync-retailer-sessions-il.yml`
+only handles `sessions/{dev,prod}/shufersal.json` from `RETAILER_SESSION_SHUFERSAL_*`.
+Rami Levy's session is transferred to the instance manually, out of band, by hand — not
+through this workflow. Revisit once the size problem is actually solved.
 
 Two new GitHub Secrets/variables: `IL_CENTRAL_1_HOST` (the stable Elastic IP, set once
 after `terraform apply`, same role as today's `CONTROL_PLANE_IP`), and
