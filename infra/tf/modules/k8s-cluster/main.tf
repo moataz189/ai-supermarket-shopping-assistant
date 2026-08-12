@@ -34,8 +34,6 @@ resource "aws_security_group" "control_plane" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-
   ingress {
     description = "Kubernetes API (in-VPC, for workers joining/talking to the API server)"
     from_port   = 6443
