@@ -40,8 +40,14 @@ jobs:
           envs: SHUFERSAL_SESSION_DEV,SHUFERSAL_SESSION_PROD
           script: |
             set -euo pipefail
+
+            if [ -z "${SHUFERSAL_SESSION_DEV:-}" ] || [ -z "${SHUFERSAL_SESSION_PROD:-}" ]; then
+              echo "Missing RETAILER_SESSION_SHUFERSAL_* GitHub Secret — nothing to sync." >&2
+              exit 1
+            fi
+
             sudo mkdir -p /opt/retailer-cart-mcp/sessions/dev /opt/retailer-cart-mcp/sessions/prod
-            echo "$SHUFERSAL_SESSION_DEV" | sudo tee /opt/retailer-cart-mcp/sessions/dev/shufersal.json > /dev/null
-            echo "$SHUFERSAL_SESSION_PROD" | sudo tee /opt/retailer-cart-mcp/sessions/prod/shufersal.json > /dev/null
+            printf '%s' "$SHUFERSAL_SESSION_DEV" | sudo tee /opt/retailer-cart-mcp/sessions/dev/shufersal.json > /dev/null
+            printf '%s' "$SHUFERSAL_SESSION_PROD" | sudo tee /opt/retailer-cart-mcp/sessions/prod/shufersal.json > /dev/null
             sudo chmod 600 /opt/retailer-cart-mcp/sessions/dev/shufersal.json /opt/retailer-cart-mcp/sessions/prod/shufersal.json
             echo "Shufersal sessions synced (dev + prod)."
