@@ -15,6 +15,7 @@ from mcp_servers.retailer_cart_mcp.schemas import CartItemRequest, PrepareRetail
 
 ADAPTERS = {"shufersal": ShufersalAdapter, "rami_levy": RamiLevyAdapter}
 SESSIONS_DIR = os.environ.get("RETAILER_SESSIONS_DIR", "sessions")
+ALLOWED_ENVIRONMENTS = {"dev", "prod"}
 logger = logging.getLogger(__name__)
 
 
@@ -90,15 +91,13 @@ def create_server(
             allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
         ),
     )
-    # Store api_key on the mcp instance so we can add middleware to any app instance
-    mcp._api_key = api_key
-    # Add middleware factory to create middleware with the api_key each time app is accessed
+    # Add middleware factory to create middleware with the api_key each time app is accessed.
+    # streamable_http_app() returns a fresh Starlette instance on each call, so we wrap it
+    # to add the middleware to every new instance.
     _original_streamable_http_app = mcp.streamable_http_app
     def _get_app_with_middleware():
         app = _original_streamable_http_app()
-        if not hasattr(app, '_api_key_middleware_added'):
-            app.add_middleware(ApiKeyMiddleware, api_key=api_key)
-            app._api_key_middleware_added = True
+        app.add_middleware(ApiKeyMiddleware, api_key=api_key)
         return app
     mcp.streamable_http_app = _get_app_with_middleware
 
@@ -116,6 +115,9 @@ def create_server(
         adapter_factory = adapters.get(retailer)
         if adapter_factory is None:
             return _refusal(retailer, items, "unsupported_retailer", "unsupported_retailer")
+
+        if environment not in ALLOWED_ENVIRONMENTS:
+            return _refusal(retailer, items, "unsupported_environment", "unsupported_environment")
 
         session_path = os.path.join(sessions_dir, environment, f"{retailer}.json")
         _log_resolved_session_file(retailer, session_path)

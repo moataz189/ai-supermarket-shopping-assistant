@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 from starlette.testclient import TestClient
@@ -58,3 +57,52 @@ async def test_prepare_retailer_cart_reads_environment_scoped_session(tmp_path, 
     tool = server._tool_manager.get_tool("prepare_retailer_cart")
     await tool.fn(retailer="shufersal", items=[], environment="dev")
     assert calls == [str(sessions_dir / "dev" / "shufersal.json")]
+
+
+@pytest.mark.asyncio
+async def test_prepare_retailer_cart_refuses_unsupported_environment(tmp_path, monkeypatch):
+    class _FakeAdapter:
+        retailer_name = "shufersal"
+
+    server = create_server(
+        adapters={"shufersal": _FakeAdapter}, sessions_dir=str(tmp_path), api_key=None
+    )
+
+    tool = server._tool_manager.get_tool("prepare_retailer_cart")
+    result = await tool.fn(retailer="shufersal", items=[], environment="invalid_env")
+
+    assert result.blocked is True
+    assert result.blocked_reason == "unsupported_environment"
+
+
+@pytest.mark.asyncio
+async def test_prepare_retailer_cart_refuses_path_traversal_attempt(tmp_path, monkeypatch):
+    # Ensure prepare_cart_for_retailer is never called (would indicate a path traversal escape)
+    prepare_called = []
+
+    async def _fake_prepare(adapter, items, storage_state_path):
+        prepare_called.append(storage_state_path)
+        return {
+            "retailer": "shufersal", "added": [], "failed": [], "blocked": False,
+            "blocked_reason": None, "cart_url": None,
+        }
+
+    monkeypatch.setattr(
+        "mcp_servers.retailer_cart_mcp.server.prepare_cart_for_retailer", _fake_prepare
+    )
+
+    class _FakeAdapter:
+        retailer_name = "shufersal"
+
+    server = create_server(
+        adapters={"shufersal": _FakeAdapter}, sessions_dir=str(tmp_path), api_key=None
+    )
+
+    tool = server._tool_manager.get_tool("prepare_retailer_cart")
+    result = await tool.fn(retailer="shufersal", items=[], environment="../../tmp")
+
+    # Should be refused at environment validation, not attempt path traversal
+    assert result.blocked is True
+    assert result.blocked_reason == "unsupported_environment"
+    # prepare_cart_for_retailer should never be called
+    assert prepare_called == []
