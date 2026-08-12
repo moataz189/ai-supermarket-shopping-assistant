@@ -103,7 +103,7 @@ spec:
 
       containers:
         - name: retailer-cart-mcp
-          image: moataz189/retailer-cart-mcp:e4ac90440c81aa22744433d04270ae98187ca18f
+          image: moataz189/retailer-cart-mcp:ebeabc309ea8a1014de20003c16fb61663712bdc
           imagePullPolicy: Always
 
           ports:
