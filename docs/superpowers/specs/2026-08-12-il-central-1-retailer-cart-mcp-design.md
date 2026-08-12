@@ -55,9 +55,10 @@ us-east-1 (existing cluster)                  il-central-1 (new)
 
 `retailer-cart-mcp` is removed entirely from the `us-east-1` cluster (both `dev` and
 `prod` — the Deployment, Service, and Gluetun/Surfshark Secret). A single EC2 instance in
-`il-central-1` serves both environments, distinguished by an `X-Environment: dev|prod`
-request header that selects which session directory (`/app/sessions/dev/` vs.
-`/app/sessions/prod/`) to read from.
+`il-central-1` serves both environments, distinguished by an `environment` MCP tool-call
+argument (`"dev"`/`"prod"`, not a header — resolved this way during implementation to
+avoid depending on FastMCP's request-object access) that selects which session directory
+(`/app/sessions/dev/` vs. `/app/sessions/prod/`) to read from.
 
 ## Networking & security
 
@@ -103,7 +104,7 @@ Docker, nginx, and certbot, and writes the initial `docker-compose.yml`.
   `-svc` Kubernetes hostname) to include `retailer-cart.fursa.click`.
 - **`app/agent/mcp_clients.py`**: `base_url` becomes a required env var
   (`RETAILER_CART_MCP_URL`) instead of the current cluster-internal DNS name; requests
-  attach `X-API-Key` and `X-Environment: dev|prod` headers.
+  attach an `X-API-Key` header and an `environment` (`"dev"`/`"prod"`) tool-call argument.
 - **Removed**: `infra/k8s/{dev,prod}/retailer-cart-mcp/` (Deployment, Service, the
   `surfshark-gluetun` Secret reference) — no longer runs in the cluster at all.
 - **Added**: `RETAILER_CART_MCP_URL` and a `RETAILER_CART_MCP_API_KEY` Secret to the

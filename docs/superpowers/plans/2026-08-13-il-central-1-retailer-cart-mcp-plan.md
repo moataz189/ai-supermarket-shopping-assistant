@@ -8,7 +8,8 @@ its Gluetun/Surfshark VPN sidecar) from the `us-east-1` cluster entirely.
 
 **Architecture:** Backend in `us-east-1` calls `retailer-cart-mcp` over the public internet
 at `https://retailer-cart.fursa.click/mcp`, authenticated with an `X-API-Key` header and
-scoped to dev/prod via an `X-Environment` header. The il-central-1 side is a single EC2
+scoped to dev/prod via an `environment` MCP tool-call argument (not a header — see Global
+Constraints). The il-central-1 side is a single EC2
 instance running Docker Compose (nginx/certbot for TLS, the `retailer-cart-mcp` container),
 provisioned by a small, independent Terraform stack.
 
@@ -45,9 +46,10 @@ provisioned by a small, independent Terraform stack.
   `api_key` is a new optional parameter (defaults to `os.environ.get("RETAILER_CART_MCP_API_KEY")`
   at the `mcp = create_server()` call site, but explicit in the factory signature for
   testability). `prepare_retailer_cart`'s session path becomes
-  `os.path.join(sessions_dir, environment, f"{retailer}.json")` where `environment` is
-  read from the `X-Environment` request header via `ctx: Context`, defaulting to `"prod"`
-  when the header is absent (matches this project's own prod-first convention elsewhere).
+  `os.path.join(sessions_dir, environment, f"{retailer}.json")` where `environment` is an
+  explicit `prepare_retailer_cart` tool-call argument (see Global Constraints — not a
+  header), defaulting to `"prod"` when omitted (matches this project's own prod-first
+  convention elsewhere).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -973,6 +975,11 @@ This task has no code to write — it's the go-live checklist, run by the user, 
 
 - [ ] `aws account enable-region --region-name il-central-1` (Task 5, Step 1) and wait for
       `ENABLED` status.
+- [ ] Replace the placeholder `admin_cidr` in `infra/tf-il/tfvars/il-central-1.tfvars`
+      (currently `203.0.113.4/32`, TEST-NET-3 documentation space — not a real address)
+      with your real IP (`curl -s ifconfig.me`) before applying. Flagged during the final
+      whole-branch review: applying with the placeholder locks SSH to an address that
+      isn't yours.
 - [ ] `terraform apply` in `infra/tf-il` (locally, or via Task 6's workflow) — creates the
       instance, Elastic IP, and Route53 record.
 - [ ] From the instance itself (SSH in with the Task 6-retrieved private key), run the same
@@ -991,6 +998,11 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       now that the API key and sessions exist).
 - [ ] `curl https://retailer-cart.fursa.click/health` from anywhere — confirms nginx/certbot
       TLS termination and the container are both up.
+- [ ] `curl -X POST https://retailer-cart.fursa.click/mcp -H "X-API-Key: <the real key>" ...`
+      (a real MCP call, not just `/health`) and confirm a non-421, non-504 response —
+      catches an `allowed_hosts` gap or an nginx timeout that `/health` alone wouldn't
+      surface. Recommended explicitly by the final whole-branch review; do this before
+      merging Tasks 1-4, not after.
 - [ ] Merge Tasks 1-4's commits to `dev`, let ArgoCD sync, and send a real chat request
       through the app confirming Shufersal/Rami Levy cart automation succeeds — the actual
       end-to-end proof this whole feature exists for.
@@ -1004,3 +1016,10 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       (`kubectl delete secret surfshark-gluetun -n prod`) once the old Deployment is
       confirmed gone — it was created manually via `kubectl` (never tracked in this repo)
       and nothing in this migration removes it automatically.
+- [ ] Delete the now-orphaned `retailer-cart-sessions` Secret in both `dev` and `prod`
+      (`kubectl delete secret retailer-cart-sessions -n dev`, same for `prod`) — the
+      Deployment that consumed it is gone (Task 4), but the Secret itself, and the
+      `kubectl`-based `.github/workflows/sync-retailer-sessions.yml` workflow that creates
+      it, both survive untouched. Flagged during the final whole-branch review: either
+      delete that old workflow file or clearly mark it deprecated (there are now two
+      similarly-named "Sync Retailer Sessions" entries in the Actions UI, only one live).
