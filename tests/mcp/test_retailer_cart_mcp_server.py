@@ -6,10 +6,20 @@ from starlette.testclient import TestClient
 from mcp_servers.retailer_cart_mcp.server import create_server
 
 
-def test_missing_api_key_is_rejected_when_key_configured():
+def test_health_is_reachable_without_api_key_even_when_key_configured():
+    # /health must stay a plain, unauthenticated liveness probe — it sits in front of the
+    # API-key middleware's check, matching the plan's own unauthenticated health-check
+    # expectation.
     server = create_server(adapters={}, sessions_dir="sessions", api_key="secret123")
     client = TestClient(server.streamable_http_app())
     response = client.get("/health")
+    assert response.status_code == 200
+
+
+def test_missing_api_key_is_rejected_on_mcp_when_key_configured():
+    server = create_server(adapters={}, sessions_dir="sessions", api_key="secret123")
+    client = TestClient(server.streamable_http_app())
+    response = client.post("/mcp")
     assert response.status_code == 401
 
 

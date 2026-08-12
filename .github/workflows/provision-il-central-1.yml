@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: provision-il-central-1
+  cancel-in-progress: false
+
 jobs:
   terraform:
     name: Terraform Apply
@@ -36,6 +40,9 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -var-file=tfvars/il-central-1.tfvars -auto-approve
 
+      # Requires the default GITHUB_TOKEN to have "Read and write permissions" for Actions
+      # enabled in repo Settings -> Actions -> General (or a PAT in secrets.VARS_PAT as a
+      # fallback) — same requirement as cluster.yaml's equivalent step.
       - name: Persist instance IP as a repo variable
         env:
           GH_TOKEN: ${{ secrets.VARS_PAT || secrets.GITHUB_TOKEN }}

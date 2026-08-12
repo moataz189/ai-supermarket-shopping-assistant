@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.7.0"
+  required_version = ">= 1.11.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -12,10 +12,11 @@ terraform {
   }
 
   backend "s3" {
-    bucket  = "moataz-terraform-state-bucket-2026"
-    key     = "supermarket-assistant/retailer-cart-il-central-1.tfstate"
-    region  = "us-east-1"
-    encrypt = true
+    bucket       = "moataz-terraform-state-bucket-2026"
+    key          = "supermarket-assistant/retailer-cart-il-central-1.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
   }
 }
 
@@ -76,11 +77,25 @@ resource "aws_security_group" "this" {
   }
 
   ingress {
-    description = "SSH (admin only)"
+    description = "HTTP (certbot ACME challenge + redirect)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    # Open to the world because the sync/deploy GitHub Actions workflows
+    # (.github/workflows/sync-retailer-sessions-il.yml,
+    # .github/workflows/deploy-retailer-cart-il.yml) SSH in from GitHub-hosted runners,
+    # which have no stable IP to allowlist — security relies on key-only auth, not source
+    # IP, matching this project's existing cluster's own SSH posture
+    # (infra/tf/modules/k8s-cluster/main.tf).
+    description = "SSH - open to the world because GitHub Actions runners have no stable IP; security relies on key-only auth, matching this projects existing cluster own SSH posture"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.admin_cidr]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {

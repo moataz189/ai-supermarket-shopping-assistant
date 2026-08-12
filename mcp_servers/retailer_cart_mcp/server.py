@@ -1,3 +1,4 @@
+import hmac
 import logging
 import os
 from datetime import datetime, timezone
@@ -25,7 +26,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         self._api_key = api_key
 
     async def dispatch(self, request, call_next):
-        if self._api_key is not None and request.headers.get("X-API-Key") != self._api_key:
+        if request.url.path == "/health":
+            return await call_next(request)
+        if self._api_key is not None and not hmac.compare_digest(
+            request.headers.get("X-API-Key") or "", self._api_key
+        ):
             return Response(status_code=401, content="invalid or missing X-API-Key")
         return await call_next(request)
 
@@ -76,7 +81,9 @@ def create_server(
     # reach it through is named "retailer-cart-mcp-svc" (see
     # infra/k8s/*/retailer-cart-mcp/retailer-cart-mcp-service.yaml), a different hostname —
     # the localhost-only default would reject both with 421 Misdirected Request, so both
-    # hostnames must be allowed explicitly.
+    # hostnames must be allowed explicitly. On the standalone il-central-1 EC2 instance
+    # (infra/tf-il), nginx forwards requests with Host: retailer-cart.fursa.click, a third
+    # hostname that must be allowed the same way, or every backend request 421s.
     mcp = FastMCP(
         "retailer-cart",
         transport_security=TransportSecuritySettings(
@@ -87,6 +94,8 @@ def create_server(
                 "[::1]:*",
                 "retailer-cart-mcp:*",
                 "retailer-cart-mcp-svc:*",
+                "retailer-cart.fursa.click",
+                "retailer-cart.fursa.click:*",
             ],
             allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
         ),
@@ -132,7 +141,13 @@ def create_server(
     return mcp
 
 
-mcp = create_server(api_key=os.environ.get("RETAILER_CART_MCP_API_KEY"))
+_api_key = os.environ.get("RETAILER_CART_MCP_API_KEY")
+if _api_key is None:
+    logger.warning(
+        "retailer_cart_mcp: RETAILER_CART_MCP_API_KEY is not set — the server is running "
+        "with no X-API-Key enforcement; every /mcp request will be accepted unauthenticated."
+    )
+mcp = create_server(api_key=_api_key)
 
 if __name__ == "__main__":
     mcp.settings.host = "0.0.0.0"

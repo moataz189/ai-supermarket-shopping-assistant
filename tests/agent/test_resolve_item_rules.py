@@ -123,3 +123,21 @@ async def test_relevance_filtering_to_zero_relevant_is_treated_as_a_miss_not_a_c
     assert label == "milk"
     assert still_ambiguous is False
     assert effective == []
+
+
+async def test_relevance_filtering_matches_names_case_insensitively():
+    # The LLM echoes back product names verbatim from its own generation, which is not
+    # guaranteed to preserve the candidate dict's exact casing (e.g. "Basmati Rice" vs.
+    # the catalog's stored "basmati rice") — a casing-only mismatch must still match, not
+    # silently degrade to "no candidates relevant".
+    candidates = [
+        {"item_code": "S1", "name": "basmati rice", "price": 8.0},
+        {"item_code": "S2", "name": "rice cooker", "price": 250.0},
+    ]
+    llm = FakeLLM(relevant_names=["Basmati Rice"])
+
+    label, still_ambiguous, effective = await _resolve_item(llm, "rice", candidates, None, "no_preference")
+
+    assert label == "basmati rice"
+    assert still_ambiguous is False
+    assert effective == [candidates[0]]

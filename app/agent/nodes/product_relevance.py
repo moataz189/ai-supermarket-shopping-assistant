@@ -65,5 +65,8 @@ async def filter_relevant_candidates(llm, item_name: str, candidates: list[dict]
         )
         return candidates
 
-    relevant_names = {n.strip() for n in result.relevant_names}
-    return [c for c in candidates if c["name"].strip() in relevant_names]
+    # .casefold() (not just .strip()) on both sides — an LLM response with any casing
+    # difference from the candidate dict's stored name (e.g. "Basmati Rice" vs. "basmati
+    # rice") must still match, or this silently degrades to "no candidates relevant".
+    relevant_names = {n.strip().casefold() for n in result.relevant_names}
+    return [c for c in candidates if c["name"].strip().casefold() in relevant_names]

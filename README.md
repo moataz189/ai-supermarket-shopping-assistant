@@ -52,8 +52,9 @@ docker compose down                      # stop and remove containers (keeps the
 A valid `BEDROCK_MODEL_ID` (+ working AWS credentials via the local-only `~/.aws` mount) is
 required for the agent to respond at all — the backend fails fast at startup if it's unset.
 A valid `SPOONACULAR_API_KEY` is required for the recipe flow. A previously-captured session
-under `./sessions/<retailer>.json` (CP8's `login.py`, run locally, never in a container) is
-required for a real (non-`login_required`) retailer-cart attempt.
+under `./sessions/<environment>/<retailer>.json` (CP8's `login.py`, run locally, never in a
+container; `<environment>` defaults to `prod`) is required for a real (non-`login_required`)
+retailer-cart attempt.
 
 Ports: web `3000`, backend `8000`, supermarket-mcp `8001`, recipe-mcp `8002`,
 retailer-cart-mcp `8003`. See [`docs/plan/09-containerization.md`](docs/plan/09-containerization.md)

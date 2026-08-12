@@ -48,3 +48,12 @@ def test_retailer_cart_mcp_allows_its_own_k8s_service_hostname():
     mcp_server = retailer_cart_server.create_server(adapters={}, sessions_dir="sessions")
     allowed_hosts = mcp_server.settings.transport_security.allowed_hosts
     assert "retailer-cart-mcp-svc:*" in allowed_hosts
+
+
+def test_retailer_cart_mcp_allows_its_il_central_1_ec2_hostname():
+    # infra/tf-il's standalone EC2 instance is reached via nginx forwarding requests with
+    # Host: retailer-cart.fursa.click — a third hostname distinct from the docker-compose
+    # and Kubernetes ones above, also rejected with 421 unless explicitly allowed.
+    mcp_server = retailer_cart_server.create_server(adapters={}, sessions_dir="sessions")
+    allowed_hosts = mcp_server.settings.transport_security.allowed_hosts
+    assert "retailer-cart.fursa.click:*" in allowed_hosts
