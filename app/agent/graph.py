@@ -62,7 +62,7 @@ def build_graph(
     graph.add_node("select_recipe_ingredients", select_recipe_ingredients)
     graph.add_node("no_ingredients_to_buy", no_ingredients_to_buy)
     graph.add_node("resolve_weekly_shop_profile", resolve_weekly_shop_profile)
-    graph.add_node("resolve_items", make_resolve_items(client))
+    graph.add_node("resolve_items", make_resolve_items(client, llm))
     graph.add_node("resolve_ambiguity", resolve_ambiguity)
     graph.add_node("build_shufersal_cart", make_build_retailer_cart("shufersal", client))
     graph.add_node("build_rami_levy_cart", make_build_retailer_cart("rami_levy", client))

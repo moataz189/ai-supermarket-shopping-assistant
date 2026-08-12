@@ -1,4 +1,7 @@
+import re
 from types import SimpleNamespace
+
+from app.agent.nodes.product_relevance import RelevantCandidatesSchema
 
 # A small, test-scoped ingredient dictionary (english_name -> hebrew_search_term) for
 # recipe-flow graph tests that need get_recipe_ingredients' translation to actually
@@ -97,21 +100,48 @@ class FakeLLM:
     """Stand-in for ChatBedrockConverse. Mimics `.with_structured_output(schema,
     include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape.
 
-    Returns a canned `parsed` value (typically a ParsedRequestSchema). Pass `parsed=None`
-    with `raw_content` set (a string, or a Bedrock content-block list) to simulate the
-    openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with plain JSON text
-    instead of a real tool call — `with_structured_output` then has nothing to parse and
-    returns `parsed=None`, which the caller (parse_request.py) must fall back on.
+    Returns a canned `parsed` value (typically a ParsedRequestSchema) for parse_request's
+    call. Pass `parsed=None` with `raw_content` set (a string, or a Bedrock content-block
+    list) to simulate the openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers
+    with plain JSON text instead of a real tool call — `with_structured_output` then has
+    nothing to parse and returns `parsed=None`, which the caller (parse_request.py) must
+    fall back on.
+
+    A *separate* call site, product_relevance.py's relevance classification, requests a
+    different schema (`RelevantCandidatesSchema`) — tracked here by which schema
+    `with_structured_output` was last called with, so a single FakeLLM instance can answer
+    both call sites correctly within one graph run. `relevant_names=None` (the default)
+    means "no filtering configured" — every candidate name found in the prompt itself is
+    echoed back as relevant, which is behaviorally a no-op (identical to no relevance
+    filtering ever running), so existing tests that don't care about this new call site
+    need no changes at all. Pass `relevant_names=[...]` to test actual filtering.
     """
 
-    def __init__(self, parsed=None, raw_content=None):
+    def __init__(self, parsed=None, raw_content=None, relevant_names=None):
         self._parsed = parsed
         self._raw_content = raw_content
+        self._relevant_names = relevant_names
+        self._schema = None
 
     def with_structured_output(self, schema, include_raw=False):
+        self._schema = schema
         return self
 
     async def ainvoke(self, messages) -> dict:
+        if self._schema is RelevantCandidatesSchema:
+            if self._relevant_names is not None:
+                names = self._relevant_names
+            else:
+                # No filtering configured — pass every candidate name mentioned in the
+                # prompt straight through as relevant (see product_relevance.py's "- name"
+                # line format), a no-op equivalent to filtering never having run.
+                names = re.findall(r"^- (.+)$", messages[-1][1], re.MULTILINE)
+            parsed = RelevantCandidatesSchema(relevant_names=names)
+            return {
+                "raw": SimpleNamespace(content=self._raw_content),
+                "parsed": parsed,
+                "parsing_error": None,
+            }
         return {
             "raw": SimpleNamespace(content=self._raw_content),
             "parsed": self._parsed,
