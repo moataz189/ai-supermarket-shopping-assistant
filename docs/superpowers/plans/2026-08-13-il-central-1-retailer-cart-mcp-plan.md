@@ -994,4 +994,13 @@ This task has no code to write — it's the go-live checklist, run by the user, 
 - [ ] Merge Tasks 1-4's commits to `dev`, let ArgoCD sync, and send a real chat request
       through the app confirming Shufersal/Rami Levy cart automation succeeds — the actual
       end-to-end proof this whole feature exists for.
-- [ ] Repeat for `prod` once `dev` is confirmed working.
+- [ ] Repeat for `prod` once `dev` is confirmed working. **`infra/argocd/prod.yaml` has no
+      `syncPolicy.automated` block (`dev`'s does, with `prune: true`/`selfHeal: true`) — prod
+      does not auto-sync or auto-prune** (confirmed during Task 4's review). The old
+      `retailer-cart-mcp` Deployment/Service will keep running in prod after merge until you
+      manually run `argocd app sync prod --prune` (or enable automated sync). Do this
+      explicitly — don't assume prod cleans itself up the way dev does.
+- [ ] Delete the out-of-band `surfshark-gluetun` Kubernetes Secret from prod by hand
+      (`kubectl delete secret surfshark-gluetun -n prod`) once the old Deployment is
+      confirmed gone — it was created manually via `kubectl` (never tracked in this repo)
+      and nothing in this migration removes it automatically.
