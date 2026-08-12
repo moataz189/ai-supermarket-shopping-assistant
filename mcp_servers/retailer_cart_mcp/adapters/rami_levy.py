@@ -131,10 +131,18 @@ async def _click_plus_and_dismiss_first_click_modal(page: Page, tile, plus_btn) 
     same way — root cause is the same one-time modal, not something particular to weighed
     products. Every click after the first (of the whole session, regardless of which
     product triggered it) closes cleanly with no modal, so this is always checked but
-    normally a no-op after the first call across an entire add_to_cart run."""
+    normally a no-op after the first call across an entire add_to_cart run.
+
+    `force=True`: confirmed live (2026-08-13) that the click's own coordinates land on a
+    child `<polygon>` SVG element drawing the "+" glyph inside this exact button — not a
+    separate overlay, not a different product's control, just the button's own icon,
+    lacking `pointer-events: none`. Playwright's default actionability check refuses to
+    click there since some element other than the requested locator technically occupies
+    that point, even though it's confirmed to be the button's own child. Verified via
+    `elementFromPoint` at the button's exact center before adding this."""
     await tile.hover()
     await plus_btn.wait_for(state="visible", timeout=5000)
-    await plus_btn.click()
+    await plus_btn.click(force=True)
     close_popup = page.locator("#close-popup")
     if await close_popup.count() > 0 and await close_popup.is_visible():
         await close_popup.click()
