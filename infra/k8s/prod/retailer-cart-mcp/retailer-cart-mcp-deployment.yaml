@@ -20,95 +20,12 @@ spec:
         app: retailer-cart-mcp
 
     spec:
-      # Native Kubernetes sidecar.
-      # Starts before retailer-cart-mcp and stays alive for the whole Pod lifetime.
-      initContainers:
-        - name: gluetun
-          image: qmcgaw/gluetun:latest
-          imagePullPolicy: Always
-
-          restartPolicy: Always
-
-          securityContext:
-            capabilities:
-              add:
-                - NET_ADMIN
-
-          env:
-            # Surfshark through WireGuard
-            - name: VPN_SERVICE_PROVIDER
-              value: "surfshark"
-
-            - name: VPN_TYPE
-              value: "wireguard"
-
-            - name: SERVER_COUNTRIES
-              value: "Israel"
-
-            # Created earlier as Kubernetes Secret.
-            - name: WIREGUARD_PRIVATE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: surfshark-gluetun
-                  key: WIREGUARD_PRIVATE_KEY
-
-            - name: WIREGUARD_ADDRESSES
-              valueFrom:
-                secretKeyRef:
-                  name: surfshark-gluetun
-                  key: WIREGUARD_ADDRESSES
-
-            # The Kubernetes Service/backend must still be able to reach
-            # retailer-cart-mcp on port 8003 through Gluetun's firewall.
-            - name: FIREWALL_INPUT_PORTS
-              value: "8003"
-
-            # Internal traffic must remain outside the VPN:
-            #
-            # 10.0.0.0/16    -> AWS VPC
-            # 10.96.0.0/12   -> Kubernetes Service CIDR
-            # 192.168.0.0/16 -> Calico Pod CIDR
-            - name: FIREWALL_OUTBOUND_SUBNETS
-              value: "10.0.0.0/16,10.96.0.0/12,192.168.0.0/16"
-
-          # Do not start retailer-cart-mcp until Gluetun reports
-          # that the VPN connection is healthy.
-          startupProbe:
-            exec:
-              command:
-                - /gluetun-entrypoint
-                - healthcheck
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 5
-            failureThreshold: 30
-
-          # If the VPN later becomes unhealthy, Kubernetes also sees it.
-          readinessProbe:
-            exec:
-              command:
-                - /gluetun-entrypoint
-                - healthcheck
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
-
-          resources:
-            requests:
-              cpu: "50m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "512Mi"
-
       containers:
         - name: retailer-cart-mcp
-          image: moataz189/retailer-cart-mcp:ebeabc309ea8a1014de20003c16fb61663712bdc
-          imagePullPolicy: Always
+          image: moataz189/retailer-cart-mcp:latest
 
           ports:
             - containerPort: 8003
-              protocol: TCP
 
           env:
             - name: PORT
@@ -122,8 +39,9 @@ spec:
               mountPath: /app/sessions
               readOnly: true
 
-          # This is the only MCP service running a real Chromium instance
-          # through Playwright, so it gets higher resource limits.
+          # Bumped up from the other MCP services: this is the only image that runs a real
+          # Chromium instance (via Playwright) per request, which the reference has no
+          # equivalent of.
           resources:
             requests:
               cpu: "300m"
@@ -150,7 +68,14 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 3
 
-      # Session cookies are supplied through Kubernetes Secret.
+      # Session cookies (sessions/<retailer>.json, produced out-of-band by
+      # mcp_servers/retailer_cart_mcp/login.py — never committed) are supplied as a
+      # Secret, not a host bind-mount like docker-compose's ./sessions:/app/sessions:ro —
+      # there is no single persistent host directory across a Kubernetes node pool. Create
+      # per environment with, e.g.:
+      #   kubectl create secret generic retailer-cart-sessions -n dev \
+      #     --from-file=shufersal.json=sessions/shufersal.json \
+      #     --from-file=rami_levy.json=sessions/rami_levy.json
       volumes:
         - name: sessions
           secret:
