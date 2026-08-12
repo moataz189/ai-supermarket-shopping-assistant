@@ -14,13 +14,21 @@ from mcp_servers.supermarket_mcp.schemas import (
 
 # FastMCP auto-enables DNS-rebinding protection restricted to localhost (captured at
 # construction time, before __main__ rebinds host to 0.0.0.0 below) — docker-compose peers
-# reach this server as "supermarket-mcp", which the localhost-only default would reject with
-# 421 Misdirected Request, so that hostname must be allowed explicitly.
+# reach this server as "supermarket-mcp", and the Kubernetes Service peers reach it through
+# is named "supermarket-mcp-svc" (see infra/k8s/*/supermarket-mcp/supermarket-mcp-service.yaml),
+# a different hostname — the localhost-only default would reject both with 421 Misdirected
+# Request, so both hostnames must be allowed explicitly.
 mcp = FastMCP(
     "supermarket-data",
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", "supermarket-mcp:*"],
+        allowed_hosts=[
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+            "supermarket-mcp:*",
+            "supermarket-mcp-svc:*",
+        ],
         allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
     ),
 )

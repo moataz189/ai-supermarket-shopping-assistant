@@ -106,6 +106,24 @@ def test_ambiguous_item_then_resumes():
         app.dependency_overrides.clear()
 
 
+def test_weekly_shop_with_budget_and_no_items_asks_for_profile():
+    # A budget with no items (e.g. "Weekly shopping under 250") routes to
+    # resolve_weekly_shop_profile instead of resolve_items — regression test for a bug
+    # where chat.py's interrupt-reason-to-metric-status lookup didn't know about this
+    # node's "weekly_shop_profile" reason and crashed with an unhandled KeyError (500),
+    # discovered live in the deployed cluster.
+    fake_app = _build_fake_app([], candidates={}, prices={}, budget=250)
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "weekly shopping under 250"})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "needs_clarification"
+        assert body["clarification"]["reason"] == "weekly_shop_profile"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_choosing_retailer_invokes_playwright():
     candidates = {
         ("milk", "shufersal"): [{"item_code": "S-MILK", "name": "Milk 3%", "price": 6.0}],
