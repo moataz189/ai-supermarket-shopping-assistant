@@ -12,7 +12,7 @@ key_name = "moataz-key"
 
 worker_min_size         = 1
 worker_max_size         = 3
-worker_desired_capacity = 1
+worker_desired_capacity = 2
 
 # Required when enable_ingress = true (the default) — an existing Route53 public hosted
 # zone this AWS account already manages. Leave enable_ingress = false (and this blank) to

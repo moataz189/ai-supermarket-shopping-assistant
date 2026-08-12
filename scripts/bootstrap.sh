@@ -36,6 +36,25 @@ echo "Installing Calico..."
 kubectl apply --validate=false \
   -f https://raw.githubusercontent.com/projectcalico/calico/v3.32.1/manifests/calico.yaml
 
+echo "Waiting for Calico..."
+
+kubectl rollout status \
+  daemonset/calico-node \
+  --namespace kube-system \
+  --timeout=10m
+
+kubectl rollout status \
+  deployment/calico-kube-controllers \
+  --namespace kube-system \
+  --timeout=10m
+
+echo "Waiting for CoreDNS (depends on Calico for pod networking)..."
+
+kubectl rollout status \
+  deployment/coredns \
+  --namespace kube-system \
+  --timeout=5m
+
 #################################################
 # Metrics Server
 #################################################
