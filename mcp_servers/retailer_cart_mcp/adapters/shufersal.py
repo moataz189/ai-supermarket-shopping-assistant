@@ -117,7 +117,11 @@ class ShufersalAdapter:
     retailer_name = "shufersal"
 
     async def open_site(self, page: Page) -> None:
-        await page.goto(BASE_URL)
+        await page.goto(
+            BASE_URL,
+            wait_until="domcontentloaded",
+            timeout=60_000,
+)
 
     async def detect_block(self, page: Page) -> str | None:
         content = await page.content()
@@ -181,7 +185,11 @@ class ShufersalAdapter:
         # One navigation per fresh context (automation.py gives each item its own), then
         # the rest of this adapter talks to the site entirely through same-origin fetch
         # calls from inside page.evaluate() — no further navigation is needed at all.
-        await page.goto(BASE_URL)
+        await page.goto(
+    BASE_URL,
+    wait_until="domcontentloaded",
+    timeout=60_000,
+)
 
         normalized_code = item_code.removeprefix("P_") if item_code else None
         if normalized_code:
