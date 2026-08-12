@@ -408,7 +408,8 @@ git commit -m "feat(backend): point retailer-cart-mcp client at il-central-1 end
 ```
 
 Note: this Deployment change references a `retailer-cart-mcp-api-key` Secret that doesn't
-exist yet in either namespace — Task 7 creates the workflow that populates it. Committing
+exist yet in either namespace — Task 9's manual go-live checklist creates it (Task 7 only
+syncs the Shufersal session file, not this Secret). Committing
 this now is safe (ArgoCD will show the Deployment as degraded/pending until that Secret
 exists, same class of ordering as any other Secret-dependent rollout in this project) but
 **do not let ArgoCD sync this to a live cluster until Task 7's workflow has been run at
