@@ -368,16 +368,34 @@ async def test_weighed_product_kg_unit_passes_through_unchanged():
     assert result.unit == "kg"
 
 
-async def test_weighed_product_with_count_unit_raises_quantity_conversion_required():
-    # Recipe asked for "2 units" of a product this retailer only sells by weight — no
-    # deterministic unit->weight conversion exists, so this must not guess one.
+async def test_weighed_product_with_count_unit_estimates_weight_instead_of_failing():
+    # Recipe asked for "2 units" of a product this retailer only sells by weight (e.g.
+    # "2 onions" for loose onions) — no exact unit->weight conversion exists, but this is
+    # the single most common real-world case (loose produce requested by count), so a
+    # coarse estimate (0.5 kg/unit -> 1.0 kg here) is used instead of failing outright.
+    page = FakePage(search_results=[_ok([
+        {"code": "P22", "name": "Tomato", "cartStatus": {"inCart": True, "qty": 1.0}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _weighed_match(), 2, "unit")
+
+    assert result.quantity == pytest.approx(1.0)
+    assert result.unit == "kg"
+    assert page.add_calls == [{"productCode": "P22", "sellingMethod": "BY_WEIGHT", "qty": pytest.approx(1.0)}]
+
+
+async def test_weighed_product_with_volume_unit_still_raises_quantity_conversion_required():
+    # A volume request (e.g. "200 ml") against a weight-sold product has no density
+    # source -- unlike a bare count, inventing a weight here would be a materially
+    # riskier guess, so this case is deliberately NOT covered by the count-unit estimate
+    # above and must still raise.
     page = FakePage()
 
     with pytest.raises(QuantityConversionRequiredError) as exc_info:
-        await ShufersalAdapter().add_to_cart(page, _weighed_match(), 2, "unit")
+        await ShufersalAdapter().add_to_cart(page, _weighed_match(), 200, "ml")
 
-    assert exc_info.value.requested_quantity == 2
-    assert exc_info.value.requested_unit == "unit"
+    assert exc_info.value.requested_quantity == 200
+    assert exc_info.value.requested_unit == "ml"
     assert exc_info.value.retailer_selling_method == "BY_WEIGHT"
     assert page.add_calls == []  # never attempted a guessed add
 

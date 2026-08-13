@@ -113,6 +113,7 @@ from mcp_servers.retailer_cart_mcp.automation import (
 from mcp_servers.retailer_cart_mcp.quantity import (
     AddToCartResult,
     QuantityConversionRequiredError,
+    estimate_weight_kg_for_count,
     is_count_unit,
     normalize_weight_to_kg,
     packages_needed,
@@ -259,13 +260,23 @@ class RamiLevyAdapter:
             else:
                 target_kg = normalize_weight_to_kg(quantity, unit)
                 if target_kg is None:
-                    raise QuantityConversionRequiredError(
-                        f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
-                        "deterministic weight conversion",
-                        requested_quantity=quantity,
-                        requested_unit=unit,
-                        retailer_selling_method="by_weight",
-                    )
+                    if is_count_unit(unit):
+                        # A bare count against a weight-sold product (e.g. "1 onion" for
+                        # loose onions sold by kg) has no exact conversion -- estimate
+                        # rather than refuse outright, since this is the single most
+                        # common real-world case (loose produce requested by count). See
+                        # quantity.py's estimate_weight_kg_for_count for why this is safe
+                        # here but not for the genuine volume/weight mismatch below,
+                        # which still raises.
+                        target_kg = estimate_weight_kg_for_count(quantity)
+                    else:
+                        raise QuantityConversionRequiredError(
+                            f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
+                            "deterministic weight conversion",
+                            requested_quantity=quantity,
+                            requested_unit=unit,
+                            retailer_selling_method="by_weight",
+                        )
             confirmed = await self._add_weighed_item(page, match, target_kg)
             return AddToCartResult(confirmed, "kg")
 

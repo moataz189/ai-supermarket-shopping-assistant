@@ -205,15 +205,34 @@ async def test_weighed_item_501g_rounds_up_to_one_kg_never_down():
     assert result.quantity >= 0.501
 
 
-async def test_weighed_item_with_count_unit_raises_quantity_conversion_required():
+async def test_weighed_item_with_count_unit_estimates_weight_instead_of_failing():
+    # "2 onions" against loose onions sold by kg -- no exact unit->weight conversion
+    # exists, but this is the single most common real-world case (loose produce
+    # requested by count), so a coarse estimate (0.5 kg/unit -> 1.0 kg here) is used
+    # instead of failing outright.
+    tile = FakeTile(is_weighed=True, step=0.5)
+    page = FakePage()
+
+    result = await RamiLevyAdapter().add_to_cart(page, _match(tile), 2, "unit")
+
+    assert result.quantity == pytest.approx(1.0)
+    assert result.unit == "kg"
+    assert tile.clicks == 2  # 0.5 -> 1.0
+
+
+async def test_weighed_item_with_volume_unit_still_raises_quantity_conversion_required():
+    # A volume request (e.g. "200 ml") against a weight-sold product has no density
+    # source -- unlike a bare count, inventing a weight here would be a materially
+    # riskier guess, so this case is deliberately NOT covered by the count-unit estimate
+    # above and must still raise.
     tile = FakeTile(is_weighed=True, step=0.5)
     page = FakePage()
 
     with pytest.raises(QuantityConversionRequiredError) as exc_info:
-        await RamiLevyAdapter().add_to_cart(page, _match(tile), 2, "unit")
+        await RamiLevyAdapter().add_to_cart(page, _match(tile), 200, "ml")
 
-    assert exc_info.value.requested_quantity == 2
-    assert exc_info.value.requested_unit == "unit"
+    assert exc_info.value.requested_quantity == 200
+    assert exc_info.value.requested_unit == "ml"
     assert exc_info.value.retailer_selling_method == "by_weight"
     assert tile.clicks == 0  # never attempted a guessed add
 

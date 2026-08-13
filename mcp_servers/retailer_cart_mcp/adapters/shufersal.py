@@ -97,6 +97,7 @@ from mcp_servers.retailer_cart_mcp.automation import (
 from mcp_servers.retailer_cart_mcp.quantity import (
     AddToCartResult,
     QuantityConversionRequiredError,
+    estimate_weight_kg_for_count,
     is_count_unit,
     normalize_weight_to_kg,
     packages_needed,
@@ -254,13 +255,23 @@ class ShufersalAdapter:
         elif is_weighed:
             target_kg = normalize_weight_to_kg(quantity, unit)
             if target_kg is None:
-                raise QuantityConversionRequiredError(
-                    f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
-                    "deterministic weight conversion",
-                    requested_quantity=quantity,
-                    requested_unit=unit,
-                    retailer_selling_method=selling_method,
-                )
+                if is_count_unit(unit):
+                    # A bare count against a weight-sold product (e.g. "1 onion" for
+                    # loose onions sold by kg) has no exact conversion -- estimate rather
+                    # than refuse outright, since this is the single most common
+                    # real-world case (loose produce requested by count). See
+                    # quantity.py's estimate_weight_kg_for_count for why this is safe
+                    # here but not for the genuine volume/weight mismatch below, which
+                    # still raises.
+                    target_kg = estimate_weight_kg_for_count(quantity)
+                else:
+                    raise QuantityConversionRequiredError(
+                        f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
+                        "deterministic weight conversion",
+                        requested_quantity=quantity,
+                        requested_unit=unit,
+                        retailer_selling_method=selling_method,
+                    )
             # Confirmed live (CP9 2026-08-08): this site's /cart/add takes an exact kg
             # float with no minimum-increment rounding at all — a request for 0.4 was
             # confirmed back as exactly 0.4, unlike Rami Levy's DOM stepper (0.5kg steps),
