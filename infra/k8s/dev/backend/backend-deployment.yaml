@@ -48,7 +48,16 @@ spec:
               value: "http://recipe-mcp-svc:8002/mcp"
 
             - name: RETAILER_CART_MCP_URL
-              value: "http://retailer-cart-mcp-svc:8003/mcp"
+              value: "https://retailer-cart.fursa.click/mcp"
+
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: "dev"
+
+            - name: RETAILER_CART_MCP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: retailer-cart-mcp-api-key
+                  key: RETAILER_CART_MCP_API_KEY
 
           resources:
             requests:

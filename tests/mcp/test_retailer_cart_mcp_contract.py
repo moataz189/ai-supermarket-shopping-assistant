@@ -64,7 +64,9 @@ async def test_prepare_retailer_cart_refuses_for_unsupported_retailer():
 
 
 async def test_prepare_retailer_cart_succeeds_with_session_present(mock_site, tmp_path):
-    session_file = tmp_path / "mock_retailer.json"
+    session_dir = tmp_path / "prod"
+    session_dir.mkdir(parents=True)
+    session_file = session_dir / "mock_retailer.json"
     session_file.write_text(json.dumps({"cookies": [], "origins": []}))
 
     mcp_server = server.create_server(
@@ -90,7 +92,9 @@ async def test_prepare_retailer_cart_succeeds_with_session_present(mock_site, tm
 async def test_prepare_retailer_cart_logs_resolved_session_path_and_metadata_only(
     mock_site, tmp_path, caplog
 ):
-    session_file = tmp_path / "mock_retailer.json"
+    session_dir = tmp_path / "prod"
+    session_dir.mkdir(parents=True)
+    session_file = session_dir / "mock_retailer.json"
     session_file.write_text(json.dumps({
         "cookies": [
             {"name": "secret", "value": "do-not-log-me", "domain": "example.test", "path": "/"},
@@ -128,4 +132,4 @@ async def test_prepare_retailer_cart_logs_missing_session_path_without_exists_fl
 
     [record] = [r for r in caplog.records if "session file" in r.message]
     assert "not found" in record.message
-    assert str(tmp_path / "mock_retailer.json") in record.message
+    assert str(tmp_path / "prod" / "mock_retailer.json") in record.message

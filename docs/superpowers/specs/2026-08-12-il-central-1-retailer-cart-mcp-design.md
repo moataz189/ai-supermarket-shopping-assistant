@@ -55,9 +55,10 @@ us-east-1 (existing cluster)                  il-central-1 (new)
 
 `retailer-cart-mcp` is removed entirely from the `us-east-1` cluster (both `dev` and
 `prod` — the Deployment, Service, and Gluetun/Surfshark Secret). A single EC2 instance in
-`il-central-1` serves both environments, distinguished by an `X-Environment: dev|prod`
-request header that selects which session directory (`/app/sessions/dev/` vs.
-`/app/sessions/prod/`) to read from.
+`il-central-1` serves both environments, distinguished by an `environment` MCP tool-call
+argument (`"dev"`/`"prod"`, not a header — resolved this way during implementation to
+avoid depending on FastMCP's request-object access) that selects which session directory
+(`/app/sessions/dev/` vs. `/app/sessions/prod/`) to read from.
 
 ## Networking & security
 
@@ -103,7 +104,7 @@ Docker, nginx, and certbot, and writes the initial `docker-compose.yml`.
   `-svc` Kubernetes hostname) to include `retailer-cart.fursa.click`.
 - **`app/agent/mcp_clients.py`**: `base_url` becomes a required env var
   (`RETAILER_CART_MCP_URL`) instead of the current cluster-internal DNS name; requests
-  attach `X-API-Key` and `X-Environment: dev|prod` headers.
+  attach an `X-API-Key` header and an `environment` (`"dev"`/`"prod"`) tool-call argument.
 - **Removed**: `infra/k8s/{dev,prod}/retailer-cart-mcp/` (Deployment, Service, the
   `surfshark-gluetun` Secret reference) — no longer runs in the cluster at all.
 - **Added**: `RETAILER_CART_MCP_URL` and a `RETAILER_CART_MCP_API_KEY` Secret to the
@@ -115,10 +116,18 @@ No Kubernetes on the new instance, so the existing `kubectl`-based
 `sync-retailer-sessions.yml` pattern doesn't apply directly. A new workflow,
 `sync-retailer-sessions-il.yml` (manual-dispatch, same SSH-based approach as the rest of
 this project's `sync-*.yml` workflows), connects to the `il-central-1` instance and writes
-`sessions/{dev,prod}/{shufersal,rami_levy}.json` directly to disk from the same
-`RETAILER_SESSION_*` GitHub Secrets already in use today. `retailer-cart-mcp` reads these
-as a live-mounted directory, same as the current in-cluster volume-mount behavior — no
+session files directly to disk from GitHub Secrets. `retailer-cart-mcp` reads these as a
+live-mounted directory, same as the current in-cluster volume-mount behavior — no
 container restart needed after a sync.
+
+**Shufersal only, for now.** Rami Levy's captured session is currently ~590KB (a full
+serialized Vuex/Pinia store snapshot the site needs for correct cart-to-account linkage —
+see the two `fix(retailer-cart-mcp)` commits from 2026-08-13 — trimming it back down
+broke cart persistence, so it's no longer trimmed). That's too large for a practical
+GitHub Secret. Until a real shrinking approach exists, `sync-retailer-sessions-il.yml`
+only handles `sessions/{dev,prod}/shufersal.json` from `RETAILER_SESSION_SHUFERSAL_*`.
+Rami Levy's session is transferred to the instance manually, out of band, by hand — not
+through this workflow. Revisit once the size problem is actually solved.
 
 Two new GitHub Secrets/variables: `IL_CENTRAL_1_HOST` (the stable Elastic IP, set once
 after `terraform apply`, same role as today's `CONTROL_PLANE_IP`), and

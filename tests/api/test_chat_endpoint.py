@@ -18,8 +18,8 @@ from tests.agent.fakes import (
 client = TestClient(app)
 
 
-def _build_fake_app(items, candidates, prices, budget=None, retailer_cart_client=None):
-    llm = FakeLLM(ParsedRequestSchema(items=items, budget=budget))
+def _build_fake_app(items, candidates, prices, budget=None, retailer_cart_client=None, relevant_names=None):
+    llm = FakeLLM(ParsedRequestSchema(items=items, budget=budget), relevant_names=relevant_names)
     fake_client = FakeSupermarketDataClient(candidates, prices)
     return build_graph(fake_client, llm, MemorySaver(), retailer_cart_client=retailer_cart_client)
 
@@ -120,6 +120,44 @@ def test_weekly_shop_with_budget_and_no_items_asks_for_profile():
         body = response.json()
         assert body["status"] == "needs_clarification"
         assert body["clarification"]["reason"] == "weekly_shop_profile"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_ambiguity_clarification_only_shows_llm_relevant_candidates():
+    # Real example this was built for: an ILIKE search for "rice" also returns a rice
+    # cooker appliance and rice cakes alongside actual rice — none of that should reach
+    # the clarification UI once the LLM has judged only "Basmati Rice" relevant.
+    candidates = {
+        ("rice", "shufersal"): [
+            {"item_code": "S1", "name": "Basmati Rice", "price": 8.0},
+            {"item_code": "S2", "name": "Rice Multi-Cooker", "price": 250.0},
+            {"item_code": "S3", "name": "Rice Cakes", "price": 6.0},
+        ],
+        ("rice", "rami_levy"): [
+            {"item_code": "R1", "name": "Basmati Rice", "price": 7.5},
+        ],
+        ("Basmati Rice", "shufersal"): [{"item_code": "S1", "name": "Basmati Rice", "price": 8.0}],
+        ("Basmati Rice", "rami_levy"): [{"item_code": "R1", "name": "Basmati Rice", "price": 7.5}],
+    }
+    prices = {
+        ("shufersal", "S1"): {"unit_price": 8.0, "price": 8.0},
+        ("rami_levy", "R1"): {"unit_price": 7.5, "price": 7.5},
+    }
+    fake_app = _build_fake_app(["rice"], candidates, prices, relevant_names=["Basmati Rice"])
+    app.dependency_overrides[get_agent_app] = lambda: fake_app
+    try:
+        response = client.post("/chat", json={"message": "rice"})
+        assert response.status_code == 200
+        body = response.json()
+        # rami_levy had only one candidate to begin with (auto-resolves, never asked
+        # about); shufersal had three, but only one survives relevance filtering, so it
+        # auto-resolves too instead of asking about the appliance/rice-cakes noise — no
+        # ambiguous_product clarification for this item at all, straight to cart totals.
+        assert body["status"] == "awaiting_retailer_choice"
+        carts = body["clarification"]["carts"]
+        assert carts["shufersal"]["total"] == 8.0
+        assert carts["rami_levy"]["total"] == 7.5
     finally:
         app.dependency_overrides.clear()
 

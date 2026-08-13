@@ -47,7 +47,7 @@ class _PlusButton:
     async def wait_for(self, state="visible", timeout=5000):
         pass
 
-    async def click(self):
+    async def click(self, force=False):
         self._tile.confirmed = round(self._tile.confirmed + self._tile.step, 6)
         self._tile.clicks += 1
 

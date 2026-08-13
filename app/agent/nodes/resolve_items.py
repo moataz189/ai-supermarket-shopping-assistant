@@ -1,3 +1,4 @@
+from app.agent.nodes.product_relevance import filter_relevant_candidates
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
@@ -37,36 +38,50 @@ def _dedupe_by_name(candidates: list[dict]) -> list[dict]:
 
 
 async def _resolve_item(
-    search_name: str, candidates: list[dict], brand_preference: str | None, selection_preference: str,
-) -> tuple[str | None, bool]:
+    llm, search_name: str, candidates: list[dict], brand_preference: str | None, selection_preference: str,
+) -> tuple[str | None, bool, list[dict]]:
     """`search_name` is the (possibly localized) query actually used to find `candidates`
     — see `resolve_items`'s own `search_name` for why this isn't always the item's
     canonical name. `candidates` is one retailer's own deduped candidate list (CP9
     follow-up, 2026-08-08 — previously a cross-retailer merged set; ambiguity is now
     judged independently per retailer, see `make_resolve_items` below). Returns
-    (resolved_label_or_None, still_ambiguous). A resolved label is a product name used as
-    the search query in that same retailer's own catalog later — not an item_code."""
+    (resolved_label_or_None, still_ambiguous, effective_candidates) — the third element is
+    the candidate list this decision was actually made against (unchanged unless relevance
+    filtering ran), which the caller persists back into `item_candidates` so
+    resolve_ambiguity.py's later display reflects the same filtering, not the raw DB
+    results. A resolved label is a product name used as the search query in that same
+    retailer's own catalog later — not an item_code."""
     if not candidates:
-        return search_name, False  # nothing matched anywhere; let per-retailer building report it missing
+        return search_name, False, candidates  # nothing matched anywhere; let per-retailer building report it missing
     if len(candidates) == 1:
-        return candidates[0]["name"], False
+        return candidates[0]["name"], False, candidates
 
     exact = [c for c in candidates if c["name"].strip().lower() == search_name.strip().lower()]
     if len(exact) == 1:
-        return exact[0]["name"], False
+        return exact[0]["name"], False, candidates
 
     if brand_preference:
         matches = [c for c in candidates if brand_preference.strip().lower() in c["name"].strip().lower()]
         if len(matches) == 1:
-            return matches[0]["name"], False
+            return matches[0]["name"], False, candidates
 
     if selection_preference == "cheapest":
-        return min(candidates, key=lambda c: c["price"])["name"], False
+        return min(candidates, key=lambda c: c["price"])["name"], False, candidates
 
-    return None, True
+    # A plain ILIKE substring search has no relevance ranking at all — it routinely
+    # returns products where search_name only matches as a flavor/ingredient/appliance
+    # descriptor of a genuinely different product (e.g. a rice-cooker for "rice"). Only
+    # reached once the cheap deterministic rules above fail to resolve unambiguously.
+    relevant = await filter_relevant_candidates(llm, search_name, candidates)
+    if not relevant:
+        return search_name, False, relevant  # LLM judged none of these the right product — treat as a miss
+    if len(relevant) == 1:
+        return relevant[0]["name"], False, relevant
+
+    return None, True, relevant
 
 
-def make_resolve_items(client):
+def make_resolve_items(client, llm):
     async def resolve_items(state: AgentState) -> AgentState:
         parsed = state["parsed_request"]
         item_candidates = dict(state.get("item_candidates", {}))
@@ -119,10 +134,14 @@ def make_resolve_items(client):
                     # latter isn't ambiguity, just a miss; build_retailer_cart.py's own
                     # search_name fallback covers it when no entry exists here.
                     continue
-                label, still_ambiguous = await _resolve_item(
-                    search_name, _dedupe_by_name(candidates),
+                label, still_ambiguous, effective_candidates = await _resolve_item(
+                    llm, search_name, _dedupe_by_name(candidates),
                     parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
                 )
+                # Persisted so resolve_ambiguity.py's later display reflects relevance
+                # filtering too, not just this function's own resolve/still-ambiguous
+                # decision — it independently re-reads item_candidates from state.
+                by_retailer[retailer] = effective_candidates
                 if label is not None:
                     item_resolved[retailer] = label
                 elif still_ambiguous:
