@@ -113,6 +113,21 @@ def _find_by_code(results: list[dict], normalized_code: str) -> MatchResult | No
     return None
 
 
+def _legacy_short_code(normalized_code: str) -> str | None:
+    # Shufersal's search index is inconsistent: some products' internal code equals the
+    # full 13-digit GTIN as-is, others use a legacy short code -- the GTIN with its
+    # 3-digit GS1 country prefix and any leading zeros stripped. Confirmed live
+    # (2026-08-13): barcode 7290000060781 finds zero results searched as-is, but "60781"
+    # (its short form) finds the exact same product. Confirmed safe against a false match
+    # too: the same transform applied to a different, already-matching barcode found zero
+    # results rather than colliding with an unrelated product -- so trying this is a
+    # second EXACT-code attempt, not a name/fuzzy guess.
+    if len(normalized_code) != 13 or not normalized_code.isdigit():
+        return None
+    short = normalized_code[3:].lstrip("0")
+    return short or None
+
+
 class ShufersalAdapter:
     retailer_name = "shufersal"
 
@@ -189,6 +204,13 @@ class ShufersalAdapter:
             match = _find_by_code(code_results, normalized_code)
             if match is not None:
                 return match
+
+            short_code = _legacy_short_code(normalized_code)
+            if short_code:
+                short_results = await self._search(page, short_code)
+                match = _find_by_code(short_results, short_code)
+                if match is not None:
+                    return match
 
         results = await self._search(page, item_name)
         if not results:

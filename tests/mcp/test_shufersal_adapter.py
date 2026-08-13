@@ -152,6 +152,54 @@ async def test_search_and_match_falls_back_to_name_when_code_search_finds_nothin
     assert match.matched_by == "exact_name"
 
 
+async def test_search_and_match_falls_back_to_legacy_short_code_when_full_barcode_finds_nothing():
+    # confirmed live (2026-08-13): Shufersal's search index is inconsistent -- some
+    # products' internal code equals the full 13-digit GTIN as-is, others use a legacy
+    # short code (the GTIN with its 3-digit GS1 country prefix and leading zeros
+    # stripped). Barcode 7290000060781 finds nothing searched as-is, but "60781" (its
+    # short form) finds the exact same product. Confirmed safe: a stripped form of a
+    # DIFFERENT, already-matching barcode found zero results rather than colliding with
+    # an unrelated product -- so this is a second EXACT-code attempt, not a name/fuzzy
+    # guess, and doesn't reopen the "guessed the wrong product" failure mode.
+    page = FakePage(search_results=[
+        _ok([]),  # full 13-digit barcode search finds nothing
+        _ok([{"code": "P_60781", "name": "פסטה מסולסלת", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}}]),
+    ])
+
+    match = await ShufersalAdapter().search_and_match(page, "פסטה", "7290000060781")
+
+    assert match.item_code == "P_60781"
+    assert match.matched_by == "item_code"
+    assert page.search_urls[0].endswith("q=7290000060781&limit=20")
+    assert page.search_urls[1].endswith("q=60781&limit=20")
+
+
+async def test_search_and_match_short_code_fallback_not_tried_for_non_13_digit_codes():
+    # The short-code transform only makes sense for a full-length GTIN -- a shorter code
+    # (already the legacy form, or just not a barcode) must not trigger a second search
+    # attempt. Only one response is queued; a second _search call would raise.
+    page = FakePage(search_results=[_ok([]), _ok([{"code": "P1", "name": "Milk", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}}])])
+
+    match = await ShufersalAdapter().search_and_match(page, "Milk", "60781")
+
+    # Falls through to the ordinary name search (2nd queued response), not a short-code retry.
+    assert match.item_code == "P1"
+    assert match.matched_by == "exact_name"
+
+
+async def test_search_and_match_skips_short_code_retry_when_full_code_already_matches():
+    # A successful full-code match must not trigger any further search call -- only one
+    # response is queued; a second _search call would raise.
+    page = FakePage(search_results=[
+        _ok([{"code": "P_7290000060781", "name": "פסטה מסולסלת", "sellingMethod": {"code": "BY_UNIT"}, "cartStatus": {}}]),
+    ])
+
+    match = await ShufersalAdapter().search_and_match(page, "פסטה", "7290000060781")
+
+    assert match.item_code == "P_7290000060781"
+    assert match.matched_by == "item_code"
+
+
 async def test_search_and_match_returns_none_when_no_results_by_code_or_name():
     page = FakePage(search_results=[_ok([]), _ok([])])
 
