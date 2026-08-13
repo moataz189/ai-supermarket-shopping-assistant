@@ -275,6 +275,46 @@ async def test_comparison_view_falls_back_to_the_raw_amount_when_package_size_un
     assert tomatoes_line["subtotal"] == 8.0  # unchanged: the raw package price
 
 
+async def test_comparison_view_estimates_a_weight_for_a_bare_count_against_a_weighed_product():
+    # Real user report: a recipe asking for "1 onion" (a bare count) matched against
+    # loose onions priced by weight (package_unit="kg") showed the FULL per-kg price
+    # (₪3.90) in the comparison view -- but the real cart-add (see
+    # mcp_servers/retailer_cart_mcp/quantity.py's identical estimate_weight_kg_for_count)
+    # only ever buys ~0.5 kg for a bare count against a weight-sold product. The
+    # comparison view must show that same ~0.5 kg estimate, not the full package price.
+    llm = FakeLLM(ParsedRequestSchema(request_type="recipe", recipe_query="onion soup", servings=4, items=[]))
+    recipe_client = FakeRecipeClient(
+        search_results={"onion soup": [{"id": 20, "title": "Onion Soup"}]},
+        recipes={20: {"title": "Onion Soup", "servings": 4, "ingredients": [
+            {"name": "onion", "amount": 1.0, "unit": "unit"},
+        ]}},
+    )
+    candidates = {
+        ("בצל", "shufersal"): [{"item_code": "S-ONI", "name": "Onion Loose 1kg", "price": 3.9}],
+        ("Onion Loose 1kg", "shufersal"): [{"item_code": "S-ONI", "name": "Onion Loose 1kg", "price": 3.9}],
+        ("בצל", "rami_levy"): [{"item_code": "R-ONI", "name": "Onion Loose 1kg", "price": 3.5}],
+        ("Onion Loose 1kg", "rami_levy"): [{"item_code": "R-ONI", "name": "Onion Loose 1kg", "price": 3.5}],
+    }
+    prices = {
+        ("shufersal", "S-ONI"): {"unit_price": 0.0039, "price": 3.9, "package_size": 1.0, "package_unit": "kg"},
+        ("rami_levy", "R-ONI"): {"unit_price": 0.0035, "price": 3.5, "package_size": 1.0, "package_unit": "kg"},
+    }
+    app = build_graph(
+        FakeSupermarketDataClient(candidates, prices), llm, MemorySaver(),
+        recipe_client=recipe_client, ingredient_dictionary={"onion": "בצל"},
+    )
+    config = {"configurable": {"thread_id": "onion1"}}
+
+    await app.ainvoke({"raw_message": "onion soup"}, config=config)
+    result = await app.ainvoke(Command(resume=["onion"]), config=config)
+
+    onion_line = result["retailer_carts"]["shufersal"]["items"][0]
+    assert onion_line["estimated_package_count"] is None  # count vs. weight -- no whole-package count
+    assert onion_line["subtotal"] == 1.95  # 0.5 kg estimate at ₪0.0039/g, not the full ₪3.90
+    assert onion_line["requested_quantity"] == 1.0
+    assert onion_line["requested_unit"] == "unit"
+
+
 async def test_requested_quantity_stays_separate_from_cart_quantity_in_the_result():
     # Requirement 8: requested quantity remains separate from cart quantity — the graph
     # must pass through whatever the Retailer-Cart MCP reports without collapsing the two.
