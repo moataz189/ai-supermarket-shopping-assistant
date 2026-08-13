@@ -1019,8 +1019,8 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       and nothing in this migration removes it automatically.
 - [ ] Delete the now-orphaned `retailer-cart-sessions` Secret in both `dev` and `prod`
       (`kubectl delete secret retailer-cart-sessions -n dev`, same for `prod`) — the
-      Deployment that consumed it is gone (Task 4), but the Secret itself, and the
-      `kubectl`-based `.github/workflows/sync-retailer-sessions.yml` workflow that creates
-      it, both survive untouched. Flagged during the final whole-branch review: either
-      delete that old workflow file or clearly mark it deprecated (there are now two
-      similarly-named "Sync Retailer Sessions" entries in the Actions UI, only one live).
+      Deployment that consumed it is gone (Task 4). The old `kubectl`-based
+      `.github/workflows/sync-retailer-sessions.yml` that used to create this Secret has
+      already been deleted from the repo (there were briefly two similarly-named "Sync
+      Retailer Sessions" entries in the Actions UI; only `sync-retailer-sessions-il.yml`
+      remains).
