@@ -986,11 +986,12 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       cheap verification `curl` used throughout this investigation against both
       `https://www.shufersal.co.il` and `https://www.rami-levy.co.il`, confirming real
       (non-blocked, non-403) responses — do not proceed until this is confirmed.
-- [ ] Set `RETAILER_CART_MCP_API_KEY` (generate with `openssl rand -hex 32`) in three
-      places: `/opt/retailer-cart-mcp/.env` on the instance (referenced by Task 5's
-      `docker-compose.yml`), and as a Kubernetes Secret named `retailer-cart-mcp-api-key`
-      (key `RETAILER_CART_MCP_API_KEY`) in both the `dev` and `prod` namespaces (Task 3
-      depends on this Secret already existing before ArgoCD syncs).
+- [ ] Generate an API key (`openssl rand -hex 32`), set it as the `RETAILER_CART_MCP_API_KEY`
+      GitHub Secret, then run "Sync retailer-cart-mcp API Key" — it writes the same value to
+      the instance's `/opt/retailer-cart-mcp/.env` (restarting the container to pick it up)
+      and to the `retailer-cart-mcp-api-key` Kubernetes Secret in both `dev` and `prod` (Task 3
+      depends on this Secret already existing before ArgoCD syncs), so all three locations
+      can never drift out of sync with each other.
 - [ ] Run "Sync Retailer Sessions (il-central-1, Shufersal only)" (Task 7).
 - [ ] Manually copy Rami Levy's session file to
       `/opt/retailer-cart-mcp/sessions/{dev,prod}/rami_levy.json` on the instance over SSH.

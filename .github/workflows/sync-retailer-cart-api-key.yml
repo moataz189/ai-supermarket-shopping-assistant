@@ -1,0 +1,90 @@
+name: Sync retailer-cart-mcp API Key
+
+# retailer-cart-mcp on il-central-1 authenticates backend requests with a single shared
+# API key (see mcp_servers/retailer_cart_mcp/server.py's ApiKeyMiddleware). That same value
+# has to exist in three places at once: the il-central-1 instance's docker-compose .env
+# (what the container itself checks incoming requests against), and the
+# retailer-cart-mcp-api-key Kubernetes Secret in both dev and prod (what the backend pods
+# send as the X-API-Key header — see infra/k8s/{dev,prod}/backend/backend-deployment.yaml).
+# This workflow updates all three from one GitHub Secret so they can never drift out of
+# sync with each other. Manual-only: this key rarely changes, and there's no reason to
+# re-run this on every push.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-retailer-cart-api-key
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync API key to il-central-1 instance and both K8s namespaces
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require IL_CENTRAL_1_HOST
+        run: |
+          if [ -z "${{ vars.IL_CENTRAL_1_HOST }}" ]; then
+            echo "IL_CENTRAL_1_HOST repo variable is not set — run 'Provision il-central-1 Instance' first." >&2
+            exit 1
+          fi
+
+      - name: Require CONTROL_PLANE_IP
+        run: |
+          if [ -z "${{ vars.CONTROL_PLANE_IP }}" ]; then
+            echo "CONTROL_PLANE_IP repo variable is not set — run the 'Provision Kubernetes Cluster' workflow first." >&2
+            exit 1
+          fi
+
+      - name: Require RETAILER_CART_MCP_API_KEY
+        run: |
+          if [ -z "${{ secrets.RETAILER_CART_MCP_API_KEY }}" ]; then
+            echo "RETAILER_CART_MCP_API_KEY GitHub Secret is not set (generate one with: openssl rand -hex 32)." >&2
+            exit 1
+          fi
+
+      - name: Write .env on il-central-1 and restart the container
+        uses: appleboy/ssh-action@v1
+        env:
+          RETAILER_CART_MCP_API_KEY: ${{ secrets.RETAILER_CART_MCP_API_KEY }}
+        with:
+          host: ${{ vars.IL_CENTRAL_1_HOST }}
+          username: ubuntu
+          key: ${{ secrets.IL_CENTRAL_1_SSH_KEY }}
+          envs: RETAILER_CART_MCP_API_KEY
+          script: |
+            set -euo pipefail
+
+            printf 'RETAILER_CART_MCP_API_KEY=%s\n' "$RETAILER_CART_MCP_API_KEY" \
+              | sudo tee /opt/retailer-cart-mcp/.env > /dev/null
+            sudo chmod 600 /opt/retailer-cart-mcp/.env
+
+            cd /opt/retailer-cart-mcp
+            sudo docker compose up -d
+            echo "il-central-1 .env updated and container restarted."
+
+      - name: Sync retailer-cart-mcp-api-key Secret (dev and prod)
+        uses: appleboy/ssh-action@v1
+        env:
+          RETAILER_CART_MCP_API_KEY: ${{ secrets.RETAILER_CART_MCP_API_KEY }}
+        with:
+          host: ${{ vars.CONTROL_PLANE_IP }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: RETAILER_CART_MCP_API_KEY
+          script: |
+            set -euo pipefail
+
+            for ns in dev prod; do
+              sudo kubectl --kubeconfig /etc/kubernetes/admin.conf \
+                create secret generic retailer-cart-mcp-api-key \
+                -n "$ns" \
+                --from-literal=RETAILER_CART_MCP_API_KEY="$RETAILER_CART_MCP_API_KEY" \
+                --dry-run=client -o yaml \
+                | sudo kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f -
+
+              echo "retailer-cart-mcp-api-key Secret synced in namespace $ns."
+            done
