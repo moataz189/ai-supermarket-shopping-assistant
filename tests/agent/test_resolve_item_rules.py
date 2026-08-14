@@ -1,4 +1,4 @@
-from app.agent.nodes.resolve_items import _resolve_item
+from app.agent.nodes.resolve_items import MAX_CANDIDATES_SHOWN, _dedupe_by_name, _resolve_item
 from tests.agent.fakes import FakeLLM
 
 
@@ -106,7 +106,9 @@ async def test_relevance_filtering_narrows_ambiguity_to_only_relevant_candidates
 
     assert label is None
     assert still_ambiguous is True
-    assert effective == candidates[:2]
+    # Displayed shortlist is cheapest-first (2026-08-14 fix) -- Tara (5.5) before
+    # Tnuva (6.0), not raw candidate-list order.
+    assert effective == [candidates[1], candidates[0]]
 
 
 async def test_relevance_filtering_to_zero_relevant_is_treated_as_a_miss_not_a_crash():
@@ -136,8 +138,101 @@ async def test_relevance_filtering_matches_names_case_insensitively():
     ]
     llm = FakeLLM(relevant_names=["Basmati Rice"])
 
-    label, still_ambiguous, effective = await _resolve_item(llm, "rice", candidates, None, "no_preference")
+    label, still_ambiguous, _effective = await _resolve_item(llm, "rice", candidates, None, "no_preference")
 
     assert label == "basmati rice"
     assert still_ambiguous is False
-    assert effective == [candidates[0]]
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 (2026-08-14): MAX_CANDIDATES_SHOWN is a display limit only -- it must never gate
+# what reaches semantic relevance filtering, nor the ambiguity decision itself. Real user
+# report: a display-sized cap applied *before* relevance filtering lost genuinely
+# relevant products (real milk, enough pasta options, several real rice/tuna products)
+# that happened to sit past the first few raw DB results.
+# ---------------------------------------------------------------------------
+
+
+def test_dedupe_by_name_does_not_truncate():
+    # 8 uniquely-named candidates -- well past the old cap of 5 -- must all survive
+    # deduping. Truncation (if any) belongs downstream, after relevance filtering.
+    candidates = [{"item_code": f"S{i}", "name": f"Product {i}", "price": float(i)} for i in range(8)]
+
+    result = _dedupe_by_name(candidates)
+
+    assert len(result) == 8
+
+
+async def test_a_relevant_candidate_past_the_old_cap_of_five_still_survives():
+    # 7 raw candidates for "milk" -- more than the old MAX_CANDIDATES_SHOWN=5 -- where
+    # the one genuine milk product is deliberately placed *last*. Under the old
+    # (pre-2026-08-14) behavior, _dedupe_by_name's cap would have dropped it before
+    # relevance filtering ever ran, producing a false "not_found" even though a real
+    # match existed in the full candidate pool.
+    candidates = [
+        {"item_code": f"S{i}", "name": f"Milk Chocolate Bar {i}", "price": 7.0 + i}
+        for i in range(6)
+    ] + [{"item_code": "S-REAL", "name": "Tnuva Milk 3%", "price": 6.0}]
+    llm = FakeLLM(relevant_names=["Tnuva Milk 3%"])
+
+    label, still_ambiguous, _effective = await _resolve_item(llm, "milk", candidates, None, "no_preference")
+
+    assert label == "Tnuva Milk 3%"
+    assert still_ambiguous is False
+
+
+async def test_ten_plus_relevant_candidates_still_shows_only_max_candidates_shown():
+    # The *decision* to ask (still_ambiguous=True) must be based on the full relevant
+    # set, but only MAX_CANDIDATES_SHOWN are actually returned for display.
+    candidates = [{"item_code": f"S{i}", "name": f"Rice Type {i}", "price": float(20 - i)} for i in range(10)]
+    llm = FakeLLM(relevant_names=[c["name"] for c in candidates])  # all 10 relevant
+
+    label, still_ambiguous, effective = await _resolve_item(llm, "rice", candidates, None, "no_preference")
+
+    assert label is None
+    assert still_ambiguous is True
+    assert len(effective) == MAX_CANDIDATES_SHOWN
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 (2026-08-14): the relevance filter answers "is this relevant", not "which one
+# should the user buy". `cheapest` now runs *after* relevance filtering (picks among
+# confirmed-relevant candidates only), and without an explicit cheapest preference, 2+
+# relevant candidates is real ambiguity the user must resolve -- min(price) must never
+# silently pick for them by default.
+# ---------------------------------------------------------------------------
+
+
+async def test_multiple_relevant_candidates_without_cheapest_preference_stays_ambiguous():
+    # Real user report: "chillies" judged both a fresh and a packaged/preserved hot
+    # pepper product relevant, and the system silently picked the cheaper one instead of
+    # asking. Without an explicit cheapest preference, this must be real ambiguity.
+    candidates = [
+        {"item_code": "S1", "name": "Fresh Chili Pepper", "price": 12.9},
+        {"item_code": "S2", "name": "Preserved Chili Pepper 225g", "price": 13.56},
+    ]
+    llm = FakeLLM(relevant_names=["Fresh Chili Pepper", "Preserved Chili Pepper 225g"])
+
+    label, still_ambiguous, effective = await _resolve_item(llm, "chillies", candidates, None, "no_preference")
+
+    assert label is None
+    assert still_ambiguous is True
+    assert {c["item_code"] for c in effective} == {"S1", "S2"}
+
+
+async def test_cheapest_preference_picks_among_relevant_candidates_not_raw_candidates():
+    # The cheapest RAW candidate (a rice cooker) is not actually rice at all -- cheapest
+    # must never win by being cheap alone; it only ever picks among candidates the
+    # relevance filter already confirmed are genuinely relevant.
+    candidates = [
+        {"item_code": "S1", "name": "Rice Cooker Appliance", "price": 5.0},  # cheapest raw, but irrelevant
+        {"item_code": "S2", "name": "Basmati Rice", "price": 12.0},
+        {"item_code": "S3", "name": "Jasmine Rice", "price": 10.0},
+    ]
+    llm = FakeLLM(relevant_names=["Basmati Rice", "Jasmine Rice"])
+
+    label, still_ambiguous, effective = await _resolve_item(llm, "rice", candidates, None, "cheapest")
+
+    assert label == "Jasmine Rice"  # cheapest of the two RELEVANT candidates, not the raw cooker
+    assert still_ambiguous is False
+    assert {c["item_code"] for c in effective} == {"S2", "S3"}  # the raw cooker never enters the result
