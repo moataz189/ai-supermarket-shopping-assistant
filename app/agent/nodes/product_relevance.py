@@ -1,7 +1,5 @@
 import logging
 
-from pydantic import BaseModel
-
 logger = logging.getLogger(__name__)
 
 RELEVANCE_PROMPT = (
@@ -16,13 +14,28 @@ RELEVANCE_PROMPT = (
     "genuinely different product (e.g. a rice-cooker appliance is not rice; milk "
     "chocolate or a dairy-flavored pastry is not plain milk; banana-flavored cereal is "
     "not a banana).\n\n"
-    "Return the exact product names, verbatim and unmodified, of only the relevant "
-    "candidates."
+    "Output ONLY the exact, verbatim names of the relevant candidates, one per line, "
+    "with no numbering, no bullets, no explanation, and no other text. If none are "
+    "relevant, output exactly the single word: NONE"
 )
 
 
-class RelevantCandidatesSchema(BaseModel):
-    relevant_names: list[str] = []
+def _extract_text(content) -> str:
+    """`content` is a plain string for most models, but openai.gpt-oss-20b-1:0 on
+    Bedrock returns a list of content blocks instead (typically a `reasoning_content`
+    block holding the model's chain-of-thought, followed by a `text` block holding its
+    actual answer) — confirmed live: this model reliably reasons its way to the correct
+    answer but does not reliably emit a real tool call, so `with_structured_output`
+    can't be used here (its `parsed` came back `None` for nearly every real query,
+    silently degrading this filter to a no-op). Concatenates every `text`-type block;
+    ignores `reasoning_content` (the model's internal reasoning, not its answer)."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text", ""))
+    return "\n".join(parts)
 
 
 async def filter_relevant_candidates(llm, item_name: str, candidates: list[dict]) -> list[dict]:
@@ -34,22 +47,24 @@ async def filter_relevant_candidates(llm, item_name: str, candidates: list[dict]
     keyword list can generalize to every product, so it's judged by the LLM rather than a
     hardcoded rule.
 
+    Calls the LLM directly (a plain `ainvoke`, not `with_structured_output`) and parses
+    its plain-text answer (see `_extract_text`) — see that function's docstring for why:
+    this specific model doesn't reliably use tool-calling, so structured output silently
+    failed to parse for nearly every real query.
+
     Fails safe: any error (LLM call failure, unparseable output) falls back to returning
     `candidates` unfiltered — exactly the pre-existing behavior — rather than raising. A
     successful call that judges *no* candidate relevant returns an empty list; that's a
     real, respected answer (the same way "nothing matched" is treated elsewhere in this
     codebase), not a failure to fall back from."""
-    structured_llm = llm.with_structured_output(RelevantCandidatesSchema, include_raw=True)
     candidate_names = [c["name"] for c in candidates]
     user_message = (
         f"Requested item: {item_name}\n\nCandidate product names:\n"
         + "\n".join(f"- {n}" for n in candidate_names)
     )
     try:
-        output = await structured_llm.ainvoke(
-            [("system", RELEVANCE_PROMPT), ("user", user_message)]
-        )
-        result: RelevantCandidatesSchema | None = output["parsed"]
+        response = await llm.ainvoke([("system", RELEVANCE_PROMPT), ("user", user_message)])
+        text = _extract_text(response.content).strip()
     except Exception:
         logger.warning(
             "Relevance classification call failed for %r; falling back to unfiltered candidates",
@@ -57,16 +72,19 @@ async def filter_relevant_candidates(llm, item_name: str, candidates: list[dict]
         )
         return candidates
 
-    if result is None:
+    if not text:
         logger.warning(
-            "Relevance classification returned no parsed result for %r; falling back to "
+            "Relevance classification returned an empty response for %r; falling back to "
             "unfiltered candidates",
             item_name,
         )
         return candidates
 
-    # .casefold() (not just .strip()) on both sides — an LLM response with any casing
-    # difference from the candidate dict's stored name (e.g. "Basmati Rice" vs. "basmati
-    # rice") must still match, or this silently degrades to "no candidates relevant".
-    relevant_names = {n.strip().casefold() for n in result.relevant_names}
+    if text == "NONE":
+        return []
+
+    # .casefold() (not just .strip()) on both sides — a casing difference from the
+    # candidate dict's stored name (e.g. "Basmati Rice" vs. "basmati rice") must still
+    # match, or this silently degrades to "no candidates relevant".
+    relevant_names = {line.strip().casefold() for line in text.splitlines() if line.strip()}
     return [c for c in candidates if c["name"].strip().casefold() in relevant_names]
