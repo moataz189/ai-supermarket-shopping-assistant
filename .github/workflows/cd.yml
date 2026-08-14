@@ -143,7 +143,14 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64
-          tags: ${{ matrix.image }}:${{ github.sha }}
+          # :latest alongside the SHA tag -- the K8s services get their manifest rewritten
+          # to the SHA tag below (immutable, GitOps-pinned), but retailer-cart-mcp no
+          # longer has a manifest to pin (il-central-1 migration): its EC2 docker-compose
+          # references :latest directly, and deploy-retailer-cart-il.yml's `docker compose
+          # pull` only ever picks up whatever :latest currently points to.
+          tags: |
+            ${{ matrix.image }}:${{ github.sha }}
+            ${{ matrix.image }}:latest
 
       - name: Skip unchanged service
         if: matrix.changed != 'true'

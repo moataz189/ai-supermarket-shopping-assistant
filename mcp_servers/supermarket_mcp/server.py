@@ -1,3 +1,4 @@
+# Touch to trigger cd.yml's path-based rebuild (picks up the new :latest tag).
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
