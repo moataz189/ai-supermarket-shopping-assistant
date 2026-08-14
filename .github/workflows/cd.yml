@@ -156,12 +156,15 @@ jobs:
       - detect
       - build
 
+    # retailer-cart-mcp deliberately excluded here: it no longer deploys via a K8s
+    # manifest (see the il-central-1 migration) -- its image is still built/pushed by
+    # the `build` job above, but rolled out to the EC2 instance via the separate
+    # deploy-retailer-cart-il.yml workflow, not by editing a Deployment YAML.
     if: |
       needs.detect.outputs.backend == 'true' ||
       needs.detect.outputs.web == 'true' ||
       needs.detect.outputs.supermarket_mcp == 'true' ||
       needs.detect.outputs.recipe_mcp == 'true' ||
-      needs.detect.outputs.retailer_cart_mcp == 'true' ||
       needs.detect.outputs.ingestion == 'true'
 
     runs-on: ubuntu-latest
@@ -245,19 +248,6 @@ jobs:
             "$FILE"
 
           grep "image:.*moataz189/recipe-mcp:${GITHUB_SHA}" "$FILE"
-
-      - name: Update retailer-cart-mcp image
-        if: needs.detect.outputs.retailer_cart_mcp == 'true'
-        run: |
-          FILE="infra/k8s/${ENV_DIR}/retailer-cart-mcp/retailer-cart-mcp-deployment.yaml"
-
-          test -f "$FILE"
-
-          sed -i -E \
-            "s|(image:[[:space:]]*moataz189/retailer-cart-mcp:).*|\1${GITHUB_SHA}|" \
-            "$FILE"
-
-          grep "image:.*moataz189/retailer-cart-mcp:${GITHUB_SHA}" "$FILE"
 
       - name: Update ingestion image
         if: needs.detect.outputs.ingestion == 'true'
