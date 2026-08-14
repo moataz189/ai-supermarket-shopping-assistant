@@ -259,15 +259,24 @@ jobs:
       - name: Update ingestion image
         if: needs.detect.outputs.ingestion == 'true'
         run: |
-          FILE="infra/k8s/${ENV_DIR}/ingestion/ingestion-cronjob.yaml"
+          # dev and prod don't share a single filename here (dev: one cronjob file;
+          # prod: a one-time full-load Job plus a separate delta CronJob) -- update
+          # every manifest under this directory that actually references the image,
+          # rather than a single hardcoded filename that only ever matched dev's.
+          DIR="infra/k8s/${ENV_DIR}/ingestion"
+          MATCHES=$(grep -rl "moataz189/supermarket-ingestion:" "$DIR"/*.yaml)
 
-          test -f "$FILE"
+          if [ -z "$MATCHES" ]; then
+            echo "No manifest under $DIR references moataz189/supermarket-ingestion" >&2
+            exit 1
+          fi
 
-          sed -i -E \
-            "s|(image:[[:space:]]*moataz189/supermarket-ingestion:).*|\1${GITHUB_SHA}|" \
-            "$FILE"
-
-          grep "image:.*moataz189/supermarket-ingestion:${GITHUB_SHA}" "$FILE"
+          for FILE in $MATCHES; do
+            sed -i -E \
+              "s|(image:[[:space:]]*moataz189/supermarket-ingestion:).*|\1${GITHUB_SHA}|" \
+              "$FILE"
+            grep "image:.*moataz189/supermarket-ingestion:${GITHUB_SHA}" "$FILE"
+          done
 
       - name: Commit and push dev manifest changes
         if: github.ref_name == 'dev'
