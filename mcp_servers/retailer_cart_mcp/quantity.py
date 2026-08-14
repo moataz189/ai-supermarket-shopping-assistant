@@ -79,17 +79,40 @@ def normalize_volume_to_l(quantity: float, unit: str) -> float | None:
 
 DEFAULT_KG_PER_COUNT_UNIT = 0.5
 
+# A recipe's count unit is either "N whole discrete items" (a bare "unit", "large",
+# "medium" -- an egg, an onion, a tomato) or "N small portions of a larger item" (a
+# clove of a garlic bulb, a sprig of an herb, a pinch of a spice, a slice/stalk/wedge of
+# something) -- two categories with wildly different real-world weights, so the same
+# flat 0.5 kg/unit estimate that's a reasonable guess for the first is off by one to two
+# orders of magnitude for the second (real user report, 2026-08-14: "4 clove" of garlic
+# priced as 2 kg against a product sold by weight). Deliberately a second flat constant,
+# not a per-ingredient lookup table this project has no reliable source for (same
+# reasoning DEFAULT_KG_PER_COUNT_UNIT itself already applies to the "whole item"
+# category) -- classified by the unit word itself, general cooking vocabulary, never by
+# which ingredient it's attached to. Mirrors app/agent/quantity.py's identical set/
+# constant exactly (see that module's docstring for why this is duplicated rather than
+# imported).
+_SMALL_PORTION_UNITS = {
+    "clove", "cloves", "sprig", "sprigs", "pinch", "pinches", "dash", "dashes",
+    "slice", "slices", "stalk", "stalks", "sliver", "slivers", "knob", "knobs",
+    "wedge", "wedges", "leaf", "leaves",
+}
+DEFAULT_KG_PER_SMALL_PORTION_UNIT = 0.02
 
-def estimate_weight_kg_for_count(quantity: float) -> float:
+
+def estimate_weight_kg_for_count(quantity: float, unit: str) -> float:
     """Best-effort fallback weight (kg) for a bare unit count against a product this
     retailer only sells by weight (e.g. "1 onion" against loose onions sold by kg), where
     no deterministic conversion exists (see normalize_weight_to_kg). Deliberately coarse
-    -- a flat DEFAULT_KG_PER_COUNT_UNIT per requested unit, not a per-vegetable lookup
-    table this project has no reliable source for. Callers must only use this for a count
-    unit (is_count_unit), never for a volume/weight mismatch: inventing a weight for "200
-    ml" with no density source is a materially riskier guess than for a discrete count,
-    so that case still raises QuantityConversionRequiredError unchanged."""
-    return round(quantity * DEFAULT_KG_PER_COUNT_UNIT, 3)
+    -- a flat per-unit constant, not a per-vegetable lookup table this project has no
+    reliable source for. `unit` picks between the "whole item" and "small portion"
+    estimate (see _SMALL_PORTION_UNITS). Callers must only use this for a count unit
+    (is_count_unit), never for a volume/weight mismatch: inventing a weight for "200 ml"
+    with no density source is a materially riskier guess than for a discrete count, so
+    that case still raises QuantityConversionRequiredError unchanged."""
+    is_small_portion = unit.strip().lower() in _SMALL_PORTION_UNITS
+    per_unit = DEFAULT_KG_PER_SMALL_PORTION_UNIT if is_small_portion else DEFAULT_KG_PER_COUNT_UNIT
+    return round(quantity * per_unit, 3)
 
 
 def is_count_unit(unit: str) -> bool:

@@ -81,6 +81,24 @@ _VOLUME_UNITS = {
 
 DEFAULT_KG_PER_COUNT_UNIT = 0.5
 
+# A recipe's count unit is either "N whole discrete items" (a bare "unit", "large",
+# "medium" -- an egg, an onion, a tomato) or "N small portions of a larger item" (a
+# clove of a garlic bulb, a sprig of an herb, a pinch of a spice, a slice/stalk/wedge of
+# something) -- two categories with wildly different real-world weights, so the same
+# flat 0.5 kg/unit estimate that's a reasonable guess for the first is off by one to two
+# orders of magnitude for the second (real user report, 2026-08-14: "4 clove" of garlic
+# priced as 2 kg -- ₪272.50 for garlic -- against a product sold by weight). Deliberately
+# a second flat constant, not a per-ingredient lookup table this project has no reliable
+# source for (same reasoning DEFAULT_KG_PER_COUNT_UNIT itself already applies to the
+# "whole item" category) -- classified by the unit word itself, general cooking
+# vocabulary, never by which ingredient it's attached to.
+_SMALL_PORTION_UNITS = {
+    "clove", "cloves", "sprig", "sprigs", "pinch", "pinches", "dash", "dashes",
+    "slice", "slices", "stalk", "stalks", "sliver", "slivers", "knob", "knobs",
+    "wedge", "wedges", "leaf", "leaves",
+}
+DEFAULT_KG_PER_SMALL_PORTION_UNIT = 0.02
+
 
 def is_count_unit(unit: str) -> bool:
     """True for anything that reads as "N discrete items" rather than a weight or a
@@ -90,11 +108,15 @@ def is_count_unit(unit: str) -> bool:
     return normalized not in _WEIGHT_TO_KG and normalized not in _VOLUME_UNITS
 
 
-def estimate_weight_kg_for_count(quantity: float) -> float:
+def estimate_weight_kg_for_count(quantity: float, unit: str) -> float:
     """Best-effort fallback weight (kg) for a bare unit count against a product sold by
     weight (e.g. "1 onion" against loose onions priced per kg), for the comparison
     view's price estimate -- real user report: this showed the full per-kg price for an
     item that the real cart-add (see mcp_servers/retailer_cart_mcp/quantity.py's
     identical estimate) actually only adds ~0.5 kg of. Deliberately coarse, matching
-    that module's constant exactly rather than drifting from it."""
-    return round(quantity * DEFAULT_KG_PER_COUNT_UNIT, 3)
+    that module's constant exactly rather than drifting from it. `unit` picks between
+    the "whole item" and "small portion" estimate (see _SMALL_PORTION_UNITS) -- callers
+    must only use this for a count unit (is_count_unit)."""
+    is_small_portion = unit.strip().lower() in _SMALL_PORTION_UNITS
+    per_unit = DEFAULT_KG_PER_SMALL_PORTION_UNIT if is_small_portion else DEFAULT_KG_PER_COUNT_UNIT
+    return round(quantity * per_unit, 3)

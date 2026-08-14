@@ -58,5 +58,18 @@ def test_estimate_weight_kg_for_count_matches_the_retailer_cart_mcp_constant():
     # Same value as mcp_servers/retailer_cart_mcp/quantity.py's
     # estimate_weight_kg_for_count -- the comparison-view price and the real cart-add
     # must agree, or the price shown up front won't match what actually gets bought.
-    assert estimate_weight_kg_for_count(1) == 0.5
-    assert estimate_weight_kg_for_count(2) == 1.0
+    assert estimate_weight_kg_for_count(1, "unit") == 0.5
+    assert estimate_weight_kg_for_count(2, "unit") == 1.0
+
+
+def test_small_portion_units_get_a_much_smaller_estimate_than_a_whole_item():
+    # Real user report (2026-08-14): "4 clove" of garlic against a weight-sold product
+    # priced as if it were 2 kg (4 x the whole-item 0.5 kg/unit default) -- ₪272.50 for
+    # garlic. A clove is a small fraction of a whole bulb, not a whole produce item.
+    assert estimate_weight_kg_for_count(4, "clove") == 0.08
+    assert estimate_weight_kg_for_count(4, "unit") == 2.0
+
+
+def test_small_portion_units_are_recognized_regardless_of_case_or_whitespace():
+    assert estimate_weight_kg_for_count(1, "  Clove  ") == estimate_weight_kg_for_count(1, "clove")
+    assert estimate_weight_kg_for_count(1, "Sprig") == estimate_weight_kg_for_count(1, "sprig")

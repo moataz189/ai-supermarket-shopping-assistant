@@ -263,7 +263,7 @@ class ShufersalAdapter:
                     # quantity.py's estimate_weight_kg_for_count for why this is safe
                     # here but not for the genuine volume/weight mismatch below, which
                     # still raises.
-                    target_kg = estimate_weight_kg_for_count(quantity)
+                    target_kg = estimate_weight_kg_for_count(quantity, unit)
                 else:
                     raise QuantityConversionRequiredError(
                         f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
