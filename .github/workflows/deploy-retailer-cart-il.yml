@@ -1,0 +1,36 @@
+name: Deploy retailer-cart-mcp to il-central-1
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-retailer-cart-il
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Pull latest image and restart
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Require IL_CENTRAL_1_HOST
+        run: |
+          if [ -z "${{ vars.IL_CENTRAL_1_HOST }}" ]; then
+            echo "IL_CENTRAL_1_HOST repo variable is not set — run 'Provision il-central-1 Instance' first." >&2
+            exit 1
+          fi
+
+      - name: Pull and restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.IL_CENTRAL_1_HOST }}
+          username: ubuntu
+          key: ${{ secrets.IL_CENTRAL_1_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/retailer-cart-mcp
+            sudo docker compose pull
+            sudo docker compose up -d

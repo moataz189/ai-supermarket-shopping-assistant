@@ -16,13 +16,6 @@ from app.metrics import (
 
 router = APIRouter()
 
-_INTERRUPT_REASON_TO_STATUS = {
-    "retailer_choice": "retailer_choice",
-    "ambiguous_product": "clarification",
-    "ambiguous_recipe": "clarification",
-    "recipe_ingredient_selection": "clarification",
-}
-
 
 def _record_cart_preparation(retailer_cart_result: dict | None) -> None:
     if retailer_cart_result is None:
@@ -73,8 +66,11 @@ async def chat(request: ChatRequest, agent_app=Depends(get_agent_app)) -> ChatRe
     if "__interrupt__" in result:
         payload = result["__interrupt__"][0].value
         reason = payload["reason"]
-        status = "awaiting_retailer_choice" if reason == "retailer_choice" else "needs_clarification"
-        agent_chat_requests_total.labels(status=_INTERRUPT_REASON_TO_STATUS[reason]).inc()
+        is_retailer_choice = reason == "retailer_choice"
+        status = "awaiting_retailer_choice" if is_retailer_choice else "needs_clarification"
+        agent_chat_requests_total.labels(
+            status="retailer_choice" if is_retailer_choice else "clarification"
+        ).inc()
         return ChatResponse(thread_id=thread_id, status=status, clarification=payload)
 
     final = result["final_result"]

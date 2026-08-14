@@ -77,6 +77,21 @@ def normalize_volume_to_l(quantity: float, unit: str) -> float | None:
     return round(quantity * factor, 6) if factor is not None else None
 
 
+DEFAULT_KG_PER_COUNT_UNIT = 0.5
+
+
+def estimate_weight_kg_for_count(quantity: float) -> float:
+    """Best-effort fallback weight (kg) for a bare unit count against a product this
+    retailer only sells by weight (e.g. "1 onion" against loose onions sold by kg), where
+    no deterministic conversion exists (see normalize_weight_to_kg). Deliberately coarse
+    -- a flat DEFAULT_KG_PER_COUNT_UNIT per requested unit, not a per-vegetable lookup
+    table this project has no reliable source for. Callers must only use this for a count
+    unit (is_count_unit), never for a volume/weight mismatch: inventing a weight for "200
+    ml" with no density source is a materially riskier guess than for a discrete count,
+    so that case still raises QuantityConversionRequiredError unchanged."""
+    return round(quantity * DEFAULT_KG_PER_COUNT_UNIT, 3)
+
+
 def is_count_unit(unit: str) -> bool:
     """True for anything that reads as "N discrete items" rather than a weight or a
     volume. Deliberately classifies by *elimination* (not a recognized weight/volume

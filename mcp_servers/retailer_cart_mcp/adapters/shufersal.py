@@ -97,6 +97,7 @@ from mcp_servers.retailer_cart_mcp.automation import (
 from mcp_servers.retailer_cart_mcp.quantity import (
     AddToCartResult,
     QuantityConversionRequiredError,
+    estimate_weight_kg_for_count,
     is_count_unit,
     normalize_weight_to_kg,
     packages_needed,
@@ -111,6 +112,21 @@ def _find_by_code(results: list[dict], normalized_code: str) -> MatchResult | No
         if site_code == normalized_code:
             return MatchResult(item_code=item["code"], locator=item, matched_by="item_code")
     return None
+
+
+def _legacy_short_code(normalized_code: str) -> str | None:
+    # Shufersal's search index is inconsistent: some products' internal code equals the
+    # full 13-digit GTIN as-is, others use a legacy short code -- the GTIN with its
+    # 3-digit GS1 country prefix and any leading zeros stripped. Confirmed live
+    # (2026-08-13): barcode 7290000060781 finds zero results searched as-is, but "60781"
+    # (its short form) finds the exact same product. Confirmed safe against a false match
+    # too: the same transform applied to a different, already-matching barcode found zero
+    # results rather than colliding with an unrelated product -- so trying this is a
+    # second EXACT-code attempt, not a name/fuzzy guess.
+    if len(normalized_code) != 13 or not normalized_code.isdigit():
+        return None
+    short = normalized_code[3:].lstrip("0")
+    return short or None
 
 
 class ShufersalAdapter:
@@ -190,6 +206,13 @@ class ShufersalAdapter:
             if match is not None:
                 return match
 
+            short_code = _legacy_short_code(normalized_code)
+            if short_code:
+                short_results = await self._search(page, short_code)
+                match = _find_by_code(short_results, short_code)
+                if match is not None:
+                    return match
+
         results = await self._search(page, item_name)
         if not results:
             return None
@@ -232,13 +255,23 @@ class ShufersalAdapter:
         elif is_weighed:
             target_kg = normalize_weight_to_kg(quantity, unit)
             if target_kg is None:
-                raise QuantityConversionRequiredError(
-                    f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
-                    "deterministic weight conversion",
-                    requested_quantity=quantity,
-                    requested_unit=unit,
-                    retailer_selling_method=selling_method,
-                )
+                if is_count_unit(unit):
+                    # A bare count against a weight-sold product (e.g. "1 onion" for
+                    # loose onions sold by kg) has no exact conversion -- estimate rather
+                    # than refuse outright, since this is the single most common
+                    # real-world case (loose produce requested by count). See
+                    # quantity.py's estimate_weight_kg_for_count for why this is safe
+                    # here but not for the genuine volume/weight mismatch below, which
+                    # still raises.
+                    target_kg = estimate_weight_kg_for_count(quantity)
+                else:
+                    raise QuantityConversionRequiredError(
+                        f"{match.item_code} is sold by weight (kg); {quantity} {unit} has no "
+                        "deterministic weight conversion",
+                        requested_quantity=quantity,
+                        requested_unit=unit,
+                        retailer_selling_method=selling_method,
+                    )
             # Confirmed live (CP9 2026-08-08): this site's /cart/add takes an exact kg
             # float with no minimum-increment rounding at all — a request for 0.4 was
             # confirmed back as exactly 0.4, unlike Rami Levy's DOM stepper (0.5kg steps),

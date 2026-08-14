@@ -2462,7 +2462,7 @@ venison loin;פילה בשר צבי;17345;steak,piece,g,oz,serving
 oatmeal;קוואקר;8121;g,ounce,oz,packet,cup,serving,tablespoon
 fatback;שומן חזיר;10004;pound,g,ounce,oz
 pork cutlets;אסקלופים חזיר;10010066;pound,piece,g,chop,oz,serving
-pasta shells;קונכיות פסטה פסטה;11020420;package,g,bag,box,oz,cup,serving
+pasta shells;קונכיות פסטה;11020420;package,g,bag,box,oz,cup,serving
 marshmallows;מרשמלו;19116;piece,g,miniature,bag,oz,regular,cup
 beef kidney;אדומה בקר;13323;g,ounce,oz
 bottle gourd;דלעת מרה בקבוק;99105;g,oz
@@ -3322,7 +3322,8 @@ tempeh;טמפה;16114;package,g,oz,cup
 nougat;נוגט;43046;piece,g,oz
 hominy;תירס הומיני;20030;g,oz,cup
 sorrel;חומעה;93621;handful,g,bunch,oz,cup
-pepper;פלפל;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
+pepper;פלפל שחור;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
+ground pepper;פלפל שחור טחון;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
 bagel;בייגל;18408;mini bagel,piece,g,ounce,medium bagel,small bagel,oz,large bagel
 celery;סלרי;11143;g,rib,oz,cup chopped,tablespoon,head,strip,piece,stalk,stick,bunch,inch,NLEA serving,cup
 pluot;פלואוט;98931;g,oz
@@ -3441,3 +3442,7 @@ ice;קרח;10014412;piece,g,cube,oz,serving
 ale;אייל;10414003;can,gallon,can or bottle,g,bottle,oz,teaspoon,fluid ounce,cup,tablespoon
 jam;ריבה;19297;g,oz,packet,teaspoon,cup,serving,tablespoon
 rum;רום;11114037;g,bottle,oz,teaspoon,fluid ounce,cup,serving,shot,tablespoon
+chili;פלפל חריף;;piece,g,oz,teaspoon,cup,serving,tablespoon
+chilies;פלפל חריף;;piece,g,oz,teaspoon,cup,serving,tablespoon
+chillies;פלפל חריף;;piece,g,oz,teaspoon,cup,serving,tablespoon
+chile;פלפל חריף;;piece,g,oz,teaspoon,cup,serving,tablespoon

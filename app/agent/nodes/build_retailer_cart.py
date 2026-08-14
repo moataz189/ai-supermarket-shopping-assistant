@@ -1,6 +1,24 @@
-from app.agent.quantity import estimated_package_count
+from app.agent.nodes.product_relevance import filter_relevant_candidates
+from app.agent.quantity import estimate_weight_kg_for_count, estimated_package_count, is_count_unit
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
+
+_WEIGHT_PACKAGE_UNITS = {"g", "gram", "grams", "kg", "kilogram", "kilograms"}
+
+
+def _estimated_weight_subtotal(price_info: dict, quantity, unit) -> float | None:
+    """Best-effort price for a bare count against a product sold by weight (e.g. "1
+    onion" against loose onions priced per kg) -- see app/agent/quantity.py's
+    estimate_weight_kg_for_count for why this is the same 0.5 kg/unit estimate the real
+    cart-add uses. Returns None when the mismatch isn't this specific case (count vs.
+    weight-only package), so the caller falls back to its existing behavior unchanged."""
+    package_unit = price_info.get("package_unit")
+    if unit is None or not is_count_unit(unit) or package_unit is None:
+        return None
+    if package_unit.strip().lower() not in _WEIGHT_PACKAGE_UNITS:
+        return None
+    grams = estimate_weight_kg_for_count(quantity) * 1000
+    return round(price_info["unit_price"] * grams, 2)
 
 
 async def _suggest_trade_off(client, retailer: str, most_expensive: dict) -> dict | None:
@@ -35,10 +53,22 @@ def _label_for(name: str, item: dict, resolved_choices: dict, retailer: str) -> 
 
 
 async def _candidates_for(
-    client, retailer: str, name: str, label: str, forbidden: set[str], dietary_conflicts: list[str],
+    client, llm, retailer: str, name: str, label: str, item: dict,
+    forbidden: set[str], dietary_conflicts: list[str],
 ) -> tuple[list[dict], dict | None]:
     """Returns (candidates, missing_entry). `missing_entry` is None when candidates were
-    found; otherwise it's the dict to append to this retailer's `missing_items`."""
+    found; otherwise it's the dict to append to this retailer's `missing_items`.
+
+    This is a fresh, independent catalog search by `label` (the already-resolved product
+    name/search term) — real user report (2026-08-14): resolve_items.py's own relevance
+    filter can correctly narrow *its* candidates, but this search re-queries the catalog
+    from scratch and previously fed the result straight to `min(price)` with no semantic
+    check at all, so a cheap unrelated product containing `label` as a substring (a
+    prepared "mashed potato with onion" dish for a plain "onion" search) could still win
+    on price alone. Relevance-filtered here too, the same way, whenever there's more than
+    one candidate to choose between — the whole point of this second search existing at
+    all is to price the *cheapest genuinely matching* product, not just the cheapest
+    catalog hit."""
     candidates = await client.search_product(label, retailer)
     if forbidden:
         compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
@@ -46,6 +76,11 @@ async def _candidates_for(
             sub_query = find_substitute_query(name, forbidden)
             compliant = await client.search_product(sub_query, retailer) if sub_query else []
         candidates = compliant
+
+    if len(candidates) > 1:
+        relevance_name = item.get("search_name") or item.get("display_name") or name
+        candidates = await filter_relevant_candidates(llm, relevance_name, candidates)
+
     if not candidates:
         reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
         return [], {"name": name, "reason": reason}
@@ -70,7 +105,7 @@ def _estimated_cost(price_info: dict, quantity: float | None, unit: str | None) 
 
 
 async def _add_every_item(
-    client, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
+    client, llm, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
     dietary_conflicts: list[str],
 ) -> tuple[list[dict], list[dict]]:
     """The pre-existing behavior for explicit shopping lists and recipes: every item is
@@ -83,7 +118,7 @@ async def _add_every_item(
         name = item["name"]
         label = _label_for(name, item, resolved_choices, retailer)
         candidates, missing_entry = await _candidates_for(
-            client, retailer, name, label, forbidden, dietary_conflicts
+            client, llm, retailer, name, label, item, forbidden, dietary_conflicts
         )
         if missing_entry is not None:
             missing.append({
@@ -112,7 +147,10 @@ async def _add_every_item(
         count = None
         if quantity is not None and unit is not None and package_size is not None and package_unit is not None:
             count = estimated_package_count(quantity, unit, package_size, package_unit)
-        subtotal = round(price_info["price"] * count, 2) if count is not None else price_info["price"]
+        if count is not None:
+            subtotal = round(price_info["price"] * count, 2)
+        else:
+            subtotal = _estimated_weight_subtotal(price_info, quantity, unit) or price_info["price"]
 
         lines.append({
             "name": name,
@@ -131,7 +169,7 @@ async def _add_every_item(
 
 
 async def _select_items_within_budget(
-    client, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
+    client, llm, retailer: str, items: list[dict], resolved_choices: dict, forbidden: set[str],
     dietary_conflicts: list[str], budget: float,
 ) -> tuple[list[dict], list[dict], float]:
     """Only used for open_ended_budget_selection carts (a budget-only request with no
@@ -154,7 +192,7 @@ async def _select_items_within_budget(
         name = item["name"]
         label = _label_for(name, item, resolved_choices, retailer)
         candidates, missing_entry = await _candidates_for(
-            client, retailer, name, label, forbidden, dietary_conflicts
+            client, llm, retailer, name, label, item, forbidden, dietary_conflicts
         )
         if missing_entry is not None:
             missing.append({
@@ -191,7 +229,7 @@ async def _select_items_within_budget(
     return lines, missing, running_total
 
 
-def make_build_retailer_cart(retailer: str, client):
+def make_build_retailer_cart(retailer: str, client, llm):
     async def build_cart(state: AgentState) -> AgentState:
         parsed = state["parsed_request"]
         forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
@@ -205,12 +243,12 @@ def make_build_retailer_cart(retailer: str, client):
 
         if open_ended and budget is not None:
             lines, missing, total = await _select_items_within_budget(
-                client, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts, budget,
+                client, llm, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts, budget,
             )
             no_items_fit_budget = not lines
         else:
             lines, missing = await _add_every_item(
-                client, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts,
+                client, llm, retailer, parsed["items"], resolved_choices, forbidden, dietary_conflicts,
             )
             total = sum(line["subtotal"] for line in lines)
 

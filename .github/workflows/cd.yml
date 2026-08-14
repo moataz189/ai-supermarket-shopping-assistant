@@ -143,7 +143,14 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64
-          tags: ${{ matrix.image }}:${{ github.sha }}
+          # :latest alongside the SHA tag -- the K8s services get their manifest rewritten
+          # to the SHA tag below (immutable, GitOps-pinned), but retailer-cart-mcp no
+          # longer has a manifest to pin (il-central-1 migration): its EC2 docker-compose
+          # references :latest directly, and deploy-retailer-cart-il.yml's `docker compose
+          # pull` only ever picks up whatever :latest currently points to.
+          tags: |
+            ${{ matrix.image }}:${{ github.sha }}
+            ${{ matrix.image }}:latest
 
       - name: Skip unchanged service
         if: matrix.changed != 'true'
@@ -156,12 +163,15 @@ jobs:
       - detect
       - build
 
+    # retailer-cart-mcp deliberately excluded here: it no longer deploys via a K8s
+    # manifest (see the il-central-1 migration) -- its image is still built/pushed by
+    # the `build` job above, but rolled out to the EC2 instance via the separate
+    # deploy-retailer-cart-il.yml workflow, not by editing a Deployment YAML.
     if: |
       needs.detect.outputs.backend == 'true' ||
       needs.detect.outputs.web == 'true' ||
       needs.detect.outputs.supermarket_mcp == 'true' ||
       needs.detect.outputs.recipe_mcp == 'true' ||
-      needs.detect.outputs.retailer_cart_mcp == 'true' ||
       needs.detect.outputs.ingestion == 'true'
 
     runs-on: ubuntu-latest
@@ -246,31 +256,27 @@ jobs:
 
           grep "image:.*moataz189/recipe-mcp:${GITHUB_SHA}" "$FILE"
 
-      - name: Update retailer-cart-mcp image
-        if: needs.detect.outputs.retailer_cart_mcp == 'true'
-        run: |
-          FILE="infra/k8s/${ENV_DIR}/retailer-cart-mcp/retailer-cart-mcp-deployment.yaml"
-
-          test -f "$FILE"
-
-          sed -i -E \
-            "s|(image:[[:space:]]*moataz189/retailer-cart-mcp:).*|\1${GITHUB_SHA}|" \
-            "$FILE"
-
-          grep "image:.*moataz189/retailer-cart-mcp:${GITHUB_SHA}" "$FILE"
-
       - name: Update ingestion image
         if: needs.detect.outputs.ingestion == 'true'
         run: |
-          FILE="infra/k8s/${ENV_DIR}/ingestion/ingestion-cronjob.yaml"
+          # dev and prod don't share a single filename here (dev: one cronjob file;
+          # prod: a one-time full-load Job plus a separate delta CronJob) -- update
+          # every manifest under this directory that actually references the image,
+          # rather than a single hardcoded filename that only ever matched dev's.
+          DIR="infra/k8s/${ENV_DIR}/ingestion"
+          MATCHES=$(grep -rl "moataz189/supermarket-ingestion:" "$DIR"/*.yaml)
 
-          test -f "$FILE"
+          if [ -z "$MATCHES" ]; then
+            echo "No manifest under $DIR references moataz189/supermarket-ingestion" >&2
+            exit 1
+          fi
 
-          sed -i -E \
-            "s|(image:[[:space:]]*moataz189/supermarket-ingestion:).*|\1${GITHUB_SHA}|" \
-            "$FILE"
-
-          grep "image:.*moataz189/supermarket-ingestion:${GITHUB_SHA}" "$FILE"
+          for FILE in $MATCHES; do
+            sed -i -E \
+              "s|(image:[[:space:]]*moataz189/supermarket-ingestion:).*|\1${GITHUB_SHA}|" \
+              "$FILE"
+            grep "image:.*moataz189/supermarket-ingestion:${GITHUB_SHA}" "$FILE"
+          done
 
       - name: Commit and push dev manifest changes
         if: github.ref_name == 'dev'

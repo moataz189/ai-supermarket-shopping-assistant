@@ -1,3 +1,6 @@
+# Touch to trigger cd.yml's path-based rebuild and re-pin the prod manifest to a SHA
+# that includes the pepper/CSV fixes (the run that would have done this failed on the
+# now-fixed ingestion-manifest bug before it reached the manifest-commit step).
 import os
 from contextlib import asynccontextmanager
 

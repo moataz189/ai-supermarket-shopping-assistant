@@ -1,3 +1,4 @@
+# Touch to trigger cd.yml's path-based rebuild (picks up the new :latest tag).
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
@@ -21,13 +22,21 @@ from mcp_servers.recipe_mcp.spoonacular_client import SpoonacularClient
 def create_server(client) -> FastMCP:
     # FastMCP auto-enables DNS-rebinding protection restricted to localhost (captured at
     # construction time, before __main__ rebinds host to 0.0.0.0 below) — docker-compose
-    # peers reach this server as "recipe-mcp", which the localhost-only default would
-    # reject with 421 Misdirected Request, so that hostname must be allowed explicitly.
+    # peers reach this server as "recipe-mcp", and the Kubernetes Service peers reach it
+    # through is named "recipe-mcp-svc" (see infra/k8s/*/recipe-mcp/recipe-mcp-service.yaml),
+    # a different hostname — the localhost-only default would reject both with 421
+    # Misdirected Request, so both hostnames must be allowed explicitly.
     mcp = FastMCP(
         "recipe",
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*", "recipe-mcp:*"],
+            allowed_hosts=[
+                "127.0.0.1:*",
+                "localhost:*",
+                "[::1]:*",
+                "recipe-mcp:*",
+                "recipe-mcp-svc:*",
+            ],
             allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
         ),
     )

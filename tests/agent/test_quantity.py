@@ -8,7 +8,7 @@ of pasta (a 500 g package) showed "× 1000 g" at a single package's price (₪7.
 instead of "× 2" at ₪15.80.
 """
 
-from app.agent.quantity import estimated_package_count
+from app.agent.quantity import estimate_weight_kg_for_count, estimated_package_count, is_count_unit
 
 
 def test_1000g_needed_in_500g_packages_is_two():
@@ -39,3 +39,24 @@ def test_at_least_one_package_even_for_a_tiny_request():
 def test_incompatible_dimensions_return_none():
     assert estimated_package_count(1000, "g", 1, "unit") is None
     assert estimated_package_count(500, "g", 500, "ml") is None
+
+
+def test_count_units_are_recognized():
+    assert is_count_unit("unit") is True
+    assert is_count_unit("large") is True
+    assert is_count_unit("clove") is True
+
+
+def test_weight_and_volume_units_are_not_count():
+    assert is_count_unit("kg") is False
+    assert is_count_unit("g") is False
+    assert is_count_unit("cup") is False
+    assert is_count_unit("ml") is False
+
+
+def test_estimate_weight_kg_for_count_matches_the_retailer_cart_mcp_constant():
+    # Same value as mcp_servers/retailer_cart_mcp/quantity.py's
+    # estimate_weight_kg_for_count -- the comparison-view price and the real cart-add
+    # must agree, or the price shown up front won't match what actually gets bought.
+    assert estimate_weight_kg_for_count(1) == 0.5
+    assert estimate_weight_kg_for_count(2) == 1.0

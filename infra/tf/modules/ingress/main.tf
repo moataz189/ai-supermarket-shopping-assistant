@@ -85,6 +85,17 @@ resource "aws_lb" "this" {
   security_groups    = [aws_security_group.alb.id]
   subnets            = var.subnet_ids
 
+  # AWS's default (60s) silently kills any idle connection that hasn't sent a byte in
+  # that long -- confirmed live (2026-08-14): a real /api/chat request (LangGraph holds
+  # the connection open, sending nothing back until the whole multi-item retailer-cart
+  # automation finishes) was cut at exactly ~60.00s every time (ingress-nginx logged 499
+  # -- client closed the connection -- with request_time/upstream_response_time both
+  # ~60.00s), well before nginx's own 300s proxy-read-timeout ever got a chance to fire.
+  # 300s matches every other timeout raised for the same underlying reason across this
+  # request path (backend-ingress annotations, the il-central-1 EC2's nginx, the MCP
+  # client's own sse_read_timeout default).
+  idle_timeout = 300
+
   tags = merge(var.tags, { Name = "${var.project_name}-alb" })
 }
 

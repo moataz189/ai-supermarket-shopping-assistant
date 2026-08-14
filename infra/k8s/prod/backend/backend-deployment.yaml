@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: moataz189/supermarket-backend:latest
+          image: moataz189/supermarket-backend:52b8d06984a5ef12b1fc4d37ad72cd9f32b9c525
 
           ports:
             - containerPort: 8000
@@ -55,7 +55,16 @@ spec:
               value: "http://recipe-mcp-svc:8002/mcp"
 
             - name: RETAILER_CART_MCP_URL
-              value: "http://retailer-cart-mcp-svc:8003/mcp"
+              value: "https://retailer-cart.fursa.click/mcp"
+
+            - name: DEPLOYMENT_ENVIRONMENT
+              value: "prod"
+
+            - name: RETAILER_CART_MCP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: retailer-cart-mcp-api-key
+                  key: RETAILER_CART_MCP_API_KEY
 
           resources:
             requests:

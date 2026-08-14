@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 # A small, test-scoped ingredient dictionary (english_name -> hebrew_search_term) for
@@ -95,23 +96,50 @@ class FakeRetailerCartClient:
 
 class FakeLLM:
     """Stand-in for ChatBedrockConverse. Mimics `.with_structured_output(schema,
-    include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape.
+    include_raw=True).ainvoke(...)`'s `{"raw", "parsed", "parsing_error"}` return shape
+    for parse_request.py's call site.
 
-    Returns a canned `parsed` value (typically a ParsedRequestSchema). Pass `parsed=None`
-    with `raw_content` set (a string, or a Bedrock content-block list) to simulate the
-    openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers with plain JSON text
-    instead of a real tool call — `with_structured_output` then has nothing to parse and
-    returns `parsed=None`, which the caller (parse_request.py) must fall back on.
+    Returns a canned `parsed` value (typically a ParsedRequestSchema) for parse_request's
+    call. Pass `parsed=None` with `raw_content` set (a string, or a Bedrock content-block
+    list) to simulate the openai.gpt-oss-20b-1:0-on-Bedrock quirk where the model answers
+    with plain JSON text instead of a real tool call — `with_structured_output` then has
+    nothing to parse and returns `parsed=None`, which the caller (parse_request.py) must
+    fall back on.
+
+    A *separate* call site, product_relevance.py's relevance classification, calls
+    `ainvoke` directly (no `with_structured_output` at all — see that module's docstring:
+    this model doesn't reliably make tool calls, so structured output silently failed to
+    parse for nearly every real query; the real code now parses a plain-text answer
+    instead). Detected here by the prompt's own distinguishing text ("Candidate product
+    names:"), not by `with_structured_output`, since that call is never made for this
+    call site and `self._schema` would otherwise just hold whatever parse_request.py last
+    set it to. `relevant_names=None` (the default) means "no filtering configured" —
+    every candidate name found in the prompt itself is echoed back as relevant, a no-op
+    equivalent to filtering never having run, so existing tests that don't care about
+    this call site need no changes at all. Pass `relevant_names=[...]` to test actual
+    filtering, or `relevant_names=[]` to simulate the model finding nothing relevant.
     """
 
-    def __init__(self, parsed=None, raw_content=None):
+    def __init__(self, parsed=None, raw_content=None, relevant_names=None):
         self._parsed = parsed
         self._raw_content = raw_content
+        self._relevant_names = relevant_names
+        self._schema = None
 
     def with_structured_output(self, schema, include_raw=False):
+        self._schema = schema
         return self
 
-    async def ainvoke(self, messages) -> dict:
+    async def ainvoke(self, messages):
+        if len(messages) >= 2 and "Candidate product names:" in messages[-1][1]:
+            if self._relevant_names is not None:
+                names = self._relevant_names
+            else:
+                # No filtering configured — pass every candidate name mentioned in the
+                # prompt straight through as relevant (see product_relevance.py's "- name"
+                # line format), a no-op equivalent to filtering never having run.
+                names = re.findall(r"^- (.+)$", messages[-1][1], re.MULTILINE)
+            return SimpleNamespace(content="\n".join(names) if names else "NONE")
         return {
             "raw": SimpleNamespace(content=self._raw_content),
             "parsed": self._parsed,
