@@ -326,6 +326,23 @@ async def test_non_actionable_servings_unit_uses_the_ingredient_default_table():
 
 
 async def test_unit_default_ignores_the_servings_count_entirely():
+    # "onion" moved into PER_SERVING_DEFAULTS (see the test below) -- "shiso leaves" has
+    # no table entry at all, so it's still the flat "buy 1" fallback this test covers.
+    fake_client = _ServingsPlaceholderClient()
+    mcp_server = server.create_server(fake_client)
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_ingredients", {"recipe_id": 1, "servings": 20}
+    )
+
+    shiso = next(i for i in structured["ingredients"] if i["name"] == "shiso leaves")
+    assert shiso["amount"] == pytest.approx(1.0)  # still just 1, regardless of servings
+
+
+async def test_onion_per_serving_default_scales_with_servings():
+    # Real user report: a 40-serving recipe still showed a flat "1 unit" of onion --
+    # onion now has a real per-serving count in PER_SERVING_DEFAULTS (0.25/serving), so
+    # this must scale like any other per-serving default, not stay flat.
     fake_client = _ServingsPlaceholderClient()
     mcp_server = server.create_server(fake_client)
 
@@ -334,7 +351,8 @@ async def test_unit_default_ignores_the_servings_count_entirely():
     )
 
     onion = next(i for i in structured["ingredients"] if i["name"] == "onion")
-    assert onion["amount"] == pytest.approx(1.0)  # still just 1, regardless of servings
+    assert onion["amount"] == pytest.approx(5.0)  # 0.25 x 20 servings
+    assert onion["unit"] == "unit"
 
 
 async def test_weight_default_ignores_the_servings_count_entirely():

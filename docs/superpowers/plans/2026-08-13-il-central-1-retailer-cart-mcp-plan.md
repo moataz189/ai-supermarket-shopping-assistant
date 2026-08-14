@@ -982,10 +982,20 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       isn't yours.
 - [ ] `terraform apply` in `infra/tf-il` (locally, or via Task 6's workflow) — creates the
       instance, Elastic IP, and Route53 record.
-- [ ] From the instance itself (SSH in with the Task 6-retrieved private key), run the same
-      cheap verification `curl` used throughout this investigation against both
+- [ ] Retrieve the private key (`terraform output -raw ssh_private_key` from `infra/tf-il`)
+      and set it as the `IL_CENTRAL_1_SSH_KEY` GitHub Secret — required before any of Tasks
+      7/8/9's SSH-based workflows (`sync-retailer-sessions-il.yml`,
+      `deploy-retailer-cart-il.yml`, `sync-retailer-cart-api-key.yml`) can connect; without
+      it they fail with "can't connect without a private SSH key or password".
+- [ ] From the instance itself (SSH in with that same private key), run the same cheap
+      verification `curl` used throughout this investigation against both
       `https://www.shufersal.co.il` and `https://www.rami-levy.co.il`, confirming real
       (non-blocked, non-403) responses — do not proceed until this is confirmed.
+- [ ] From the instance itself, run
+      `sudo certbot --nginx -d retailer-cart.fursa.click --non-interactive --agree-tos -m moataz.ody44@gmail.com --redirect`
+      — TLS is deliberately not set up automatically at boot (see `user-data.sh.tpl`'s
+      comment); DNS must already be resolving to the EIP by this point, which it will be
+      since `terraform apply` already completed.
 - [ ] Generate an API key (`openssl rand -hex 32`), set it as the `RETAILER_CART_MCP_API_KEY`
       GitHub Secret, then run "Sync retailer-cart-mcp API Key" — it writes the same value to
       the instance's `/opt/retailer-cart-mcp/.env` (restarting the container to pick it up)
@@ -1019,8 +1029,8 @@ This task has no code to write — it's the go-live checklist, run by the user, 
       and nothing in this migration removes it automatically.
 - [ ] Delete the now-orphaned `retailer-cart-sessions` Secret in both `dev` and `prod`
       (`kubectl delete secret retailer-cart-sessions -n dev`, same for `prod`) — the
-      Deployment that consumed it is gone (Task 4), but the Secret itself, and the
-      `kubectl`-based `.github/workflows/sync-retailer-sessions.yml` workflow that creates
-      it, both survive untouched. Flagged during the final whole-branch review: either
-      delete that old workflow file or clearly mark it deprecated (there are now two
-      similarly-named "Sync Retailer Sessions" entries in the Actions UI, only one live).
+      Deployment that consumed it is gone (Task 4). The old `kubectl`-based
+      `.github/workflows/sync-retailer-sessions.yml` that used to create this Secret has
+      already been deleted from the repo (there were briefly two similarly-named "Sync
+      Retailer Sessions" entries in the Actions UI; only `sync-retailer-sessions-il.yml`
+      remains).

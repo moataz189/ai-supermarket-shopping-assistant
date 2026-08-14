@@ -32,6 +32,11 @@ PER_SERVING_DEFAULTS: dict[str, tuple[float, str]] = {
     "olive oil": (15.0, "ml"),
     "parmesan": (10.0, "g"),
     "butter": (15.0, "g"),
+    # Unlike a weight/volume ingredient, this is a real fractional *count* per serving
+    # (a quarter onion) -- the same table, a count unit instead of "g"/"ml", scaled by
+    # target_servings exactly like the others (real user report: 40 servings still
+    # bought a flat "1 unit" of onion before this entry existed).
+    "onion": (0.25, "unit"),
 }
 
 WEIGHT_DEFAULTS: dict[str, float] = {  # ingredient name -> default kg

@@ -41,14 +41,21 @@ def test_per_serving_default_scales_by_requested_servings():
     assert default_quantity_for("butter", 4) == (60.0, "g")
 
 
+def test_per_serving_default_supports_a_count_unit_not_just_weight_or_volume():
+    # Real user report: a 40-serving recipe still showed a flat "1 unit" of onion --
+    # unlike a plain weight/volume default, this is a genuine fractional *count* per
+    # serving, scaled the same way as any other PER_SERVING_DEFAULTS entry.
+    assert default_quantity_for("onion", 4) == (1.0, "unit")
+    assert default_quantity_for("onion", 40) == (10.0, "unit")
+    assert default_quantity_for("onion", 8) == (2.0, "unit")
+
+
 def test_per_serving_default_is_case_insensitive():
     assert default_quantity_for("Pasta", 4) == (500.0, "g")
     assert default_quantity_for("OLIVE OIL", 4) == (60.0, "ml")
 
 
-def test_known_unit_sold_produce_always_buys_exactly_one_regardless_of_servings():
-    assert default_quantity_for("onion", 4) == (1.0, "unit")
-    assert default_quantity_for("onion", 20) == (1.0, "unit")
+def test_unit_sold_produce_with_no_table_entry_always_buys_exactly_one_regardless_of_servings():
     assert default_quantity_for("melon", 1) == (1.0, "unit")
     assert default_quantity_for("cabbage", 8) == (1.0, "unit")
 

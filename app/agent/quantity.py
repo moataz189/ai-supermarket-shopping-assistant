@@ -63,3 +63,38 @@ def estimated_package_count(
         return max(1, math.ceil(round(requested_l / package_l, 9)))
 
     return None
+
+
+# Mirrors mcp_servers/retailer_cart_mcp/quantity.py's is_count_unit/
+# estimate_weight_kg_for_count exactly (same constant, so the comparison view's price
+# and the real cart-add agree) -- see that module's docstring for why this is
+# intentionally duplicated rather than imported.
+_VOLUME_UNITS = {
+    "ml", "milliliter", "milliliters", "millilitre", "millilitres",
+    "l", "liter", "liters", "litre", "litres",
+    "cup", "cups",
+    "tbsp", "tablespoon", "tablespoons",
+    "tsp", "teaspoon", "teaspoons",
+    "fl oz", "fluid ounce", "fluid ounces",
+    "pint", "pints", "quart", "quarts", "gallon", "gallons",
+}
+
+DEFAULT_KG_PER_COUNT_UNIT = 0.5
+
+
+def is_count_unit(unit: str) -> bool:
+    """True for anything that reads as "N discrete items" rather than a weight or a
+    volume -- see mcp_servers/retailer_cart_mcp/quantity.py's identical function for the
+    full rationale (classifies by elimination, not an allowlist)."""
+    normalized = unit.strip().lower()
+    return normalized not in _WEIGHT_TO_KG and normalized not in _VOLUME_UNITS
+
+
+def estimate_weight_kg_for_count(quantity: float) -> float:
+    """Best-effort fallback weight (kg) for a bare unit count against a product sold by
+    weight (e.g. "1 onion" against loose onions priced per kg), for the comparison
+    view's price estimate -- real user report: this showed the full per-kg price for an
+    item that the real cart-add (see mcp_servers/retailer_cart_mcp/quantity.py's
+    identical estimate) actually only adds ~0.5 kg of. Deliberately coarse, matching
+    that module's constant exactly rather than drifting from it."""
+    return round(quantity * DEFAULT_KG_PER_COUNT_UNIT, 3)

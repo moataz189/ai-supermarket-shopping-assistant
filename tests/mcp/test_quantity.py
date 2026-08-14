@@ -6,6 +6,7 @@ see mcp_servers/retailer_cart_mcp/quantity.py's module docstring for the full co
 import pytest
 
 from mcp_servers.retailer_cart_mcp.quantity import (
+    estimate_weight_kg_for_count,
     is_count_unit,
     normalize_volume_to_l,
     normalize_weight_to_kg,
@@ -59,6 +60,17 @@ class TestIsCountUnit:
         assert is_count_unit("large") is True
         assert is_count_unit("clove") is True
         assert is_count_unit("") is True
+
+
+class TestEstimateWeightKgForCount:
+    def test_one_unit_is_half_a_kilo(self):
+        assert estimate_weight_kg_for_count(1) == pytest.approx(0.5)
+
+    def test_two_units_is_a_full_kilo(self):
+        assert estimate_weight_kg_for_count(2) == pytest.approx(1.0)
+
+    def test_scales_linearly_for_larger_counts(self):
+        assert estimate_weight_kg_for_count(5) == pytest.approx(2.5)
 
 
 class TestRoundUpToIncrement:

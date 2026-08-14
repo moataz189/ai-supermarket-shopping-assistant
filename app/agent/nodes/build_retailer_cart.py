@@ -1,4 +1,21 @@
-from app.agent.quantity import estimated_package_count
+from app.agent.quantity import estimate_weight_kg_for_count, estimated_package_count, is_count_unit
+
+_WEIGHT_PACKAGE_UNITS = {"g", "gram", "grams", "kg", "kilogram", "kilograms"}
+
+
+def _estimated_weight_subtotal(price_info: dict, quantity, unit) -> float | None:
+    """Best-effort price for a bare count against a product sold by weight (e.g. "1
+    onion" against loose onions priced per kg) -- see app/agent/quantity.py's
+    estimate_weight_kg_for_count for why this is the same 0.5 kg/unit estimate the real
+    cart-add uses. Returns None when the mismatch isn't this specific case (count vs.
+    weight-only package), so the caller falls back to its existing behavior unchanged."""
+    package_unit = price_info.get("package_unit")
+    if unit is None or not is_count_unit(unit) or package_unit is None:
+        return None
+    if package_unit.strip().lower() not in _WEIGHT_PACKAGE_UNITS:
+        return None
+    grams = estimate_weight_kg_for_count(quantity) * 1000
+    return round(price_info["unit_price"] * grams, 2)
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
@@ -112,7 +129,10 @@ async def _add_every_item(
         count = None
         if quantity is not None and unit is not None and package_size is not None and package_unit is not None:
             count = estimated_package_count(quantity, unit, package_size, package_unit)
-        subtotal = round(price_info["price"] * count, 2) if count is not None else price_info["price"]
+        if count is not None:
+            subtotal = round(price_info["price"] * count, 2)
+        else:
+            subtotal = _estimated_weight_subtotal(price_info, quantity, unit) or price_info["price"]
 
         lines.append({
             "name": name,
