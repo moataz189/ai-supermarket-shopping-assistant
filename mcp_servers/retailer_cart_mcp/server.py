@@ -1,3 +1,4 @@
+# Touch to trigger cd.yml's path-based rebuild (picks up the new :latest tag).
 import hmac
 import logging
 import os
