@@ -18,7 +18,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ingestion
-              image: moataz189/supermarket-ingestion:00a5ec4fc07e9f146fd265095f3c90c1232f1527
+              image: moataz189/supermarket-ingestion:c4db7bc9d428057375e59a042d37adc47d9f3978
 
               env:
                 - name: DATABASE_URL
