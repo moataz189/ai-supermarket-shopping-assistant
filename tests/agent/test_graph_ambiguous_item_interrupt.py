@@ -79,6 +79,47 @@ async def test_choosing_different_products_per_retailer_is_preserved_independent
     assert carts["rami_levy"]["items"][0]["item_code"] == "R-PRES"
 
 
+async def test_free_text_resume_while_ambiguity_is_pending_re_asks_instead_of_crashing():
+    # Real production crash (2026-08-14): the chat box's free-text input stays open the
+    # whole time this card is showing (by design, for other clarification types), so
+    # typing something instead of clicking an option sends a bare string as the resume
+    # value -- must re-ask the same question, not crash on `**answer`.
+    llm = FakeLLM(ParsedRequestSchema(items=["butter"]))
+    candidates = {
+        ("butter", "shufersal"): [
+            {"item_code": "S-TNUVA", "name": "Tnuva", "price": 5.0},
+            {"item_code": "S-TARA", "name": "Tara", "price": 5.5},
+        ],
+        ("butter", "rami_levy"): [{"item_code": "R-TNUVA", "name": "Tnuva", "price": 4.8}],
+        ("Tnuva", "shufersal"): [{"item_code": "S-TNUVA", "name": "Tnuva", "price": 5.0}],
+        ("Tnuva", "rami_levy"): [{"item_code": "R-TNUVA", "name": "Tnuva", "price": 4.8}],
+    }
+    prices = {
+        ("shufersal", "S-TNUVA"): {"unit_price": 5.0, "price": 5.0},
+        ("rami_levy", "R-TNUVA"): {"unit_price": 4.8, "price": 4.8},
+    }
+    client = FakeSupermarketDataClient(candidates, prices)
+    app = build_graph(client, llm, MemorySaver())
+    config = {"configurable": {"thread_id": "t-free-text"}}
+
+    first = await app.ainvoke({"raw_message": "butter"}, config=config)
+    first_payload = first["__interrupt__"][0].value
+    assert first_payload["reason"] == "ambiguous_product"
+
+    reasked = await app.ainvoke(Command(resume="I typed something instead"), config=config)
+
+    assert "__interrupt__" in reasked
+    reasked_payload = reasked["__interrupt__"][0].value
+    assert reasked_payload["reason"] == "ambiguous_product"
+    assert reasked_payload["options_by_retailer"] == first_payload["options_by_retailer"]
+
+    final = await app.ainvoke(Command(resume={"shufersal": "Tnuva"}), config=config)
+
+    assert "__interrupt__" in final
+    carts = final["__interrupt__"][0].value["carts"]
+    assert carts["shufersal"]["items"][0]["item_code"] == "S-TNUVA"
+
+
 async def test_retailer_with_a_single_candidate_auto_resolves_without_being_asked():
     # Shufersal has two real candidates (genuinely ambiguous); Rami Levy has exactly one
     # — it must never appear in options_by_retailer, and its own cart must already use

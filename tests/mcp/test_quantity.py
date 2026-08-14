@@ -64,13 +64,24 @@ class TestIsCountUnit:
 
 class TestEstimateWeightKgForCount:
     def test_one_unit_is_half_a_kilo(self):
-        assert estimate_weight_kg_for_count(1) == pytest.approx(0.5)
+        assert estimate_weight_kg_for_count(1, "unit") == pytest.approx(0.5)
 
     def test_two_units_is_a_full_kilo(self):
-        assert estimate_weight_kg_for_count(2) == pytest.approx(1.0)
+        assert estimate_weight_kg_for_count(2, "unit") == pytest.approx(1.0)
 
     def test_scales_linearly_for_larger_counts(self):
-        assert estimate_weight_kg_for_count(5) == pytest.approx(2.5)
+        assert estimate_weight_kg_for_count(5, "unit") == pytest.approx(2.5)
+
+    def test_small_portion_units_get_a_much_smaller_estimate(self):
+        # Real user report (2026-08-14): "4 clove" of garlic against a weight-sold
+        # product priced as if it were 2 kg (4 x the whole-item 0.5 kg/unit default) --
+        # a clove is a small fraction of a whole bulb, not a whole produce item.
+        assert estimate_weight_kg_for_count(4, "clove") == pytest.approx(0.08)
+        assert estimate_weight_kg_for_count(4, "unit") == pytest.approx(2.0)
+
+    def test_small_portion_units_are_recognized_regardless_of_case_or_whitespace(self):
+        assert estimate_weight_kg_for_count(1, "  Clove  ") == estimate_weight_kg_for_count(1, "clove")
+        assert estimate_weight_kg_for_count(1, "Sprig") == estimate_weight_kg_for_count(1, "sprig")
 
 
 class TestRoundUpToIncrement:

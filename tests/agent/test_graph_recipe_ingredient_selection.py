@@ -226,6 +226,29 @@ async def test_clear_all_does_not_build_empty_priced_carts_and_returns_a_friendl
     assert result["final_result"]["message"] == "You already have all the ingredients for this recipe."
 
 
+async def test_free_text_resume_while_ingredient_selection_is_pending_re_asks_instead_of_silently_dropping_everything():
+    # Same class of production bug as resolve_ambiguity.py (2026-08-14): the chat box's
+    # free-text input stays open while this card is showing. A typed string doesn't
+    # crash here (`set(str) & valid_ids` just silently selects nothing), but it must
+    # still re-ask rather than silently proceed as if the user chose to buy nothing.
+    app = _build_app()
+    config = {"configurable": {"thread_id": "t-free-text"}}
+
+    first = await app.ainvoke({"raw_message": "shakshuka for 4"}, config=config)
+    first_payload = first["__interrupt__"][0].value
+
+    reasked = await app.ainvoke(Command(resume="I typed something instead"), config=config)
+
+    assert "__interrupt__" in reasked
+    reasked_payload = reasked["__interrupt__"][0].value
+    assert reasked_payload["reason"] == "recipe_ingredient_selection"
+    assert reasked_payload["ingredients"] == first_payload["ingredients"]
+
+    result = await app.ainvoke(Command(resume=["eggs", "tomatoes"]), config=config)
+
+    assert "olive oil" not in result["item_candidates"]
+
+
 async def test_normal_grocery_list_flow_never_hits_the_ingredient_selection_interrupt():
     llm = FakeLLM(ParsedRequestSchema(items=["milk"]))
     candidates = {

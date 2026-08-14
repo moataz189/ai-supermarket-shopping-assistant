@@ -33,11 +33,20 @@ async def resolve_ambiguity(state):
     # {"shufersal": "Tara", "rami_levy": "President"} — never a single flat string;
     # a retailer this node didn't ask about is simply absent from `answer` and stays
     # whatever resolve_items.py already resolved it to (or left unresolved).
-    answer: dict[str, str] = interrupt({
+    payload = {
         "reason": "ambiguous_product",
         "question": f"I found a few options for '{item_name}' — which one did you mean?",
         "options_by_retailer": options_by_retailer,
-    })
+    }
+    answer = interrupt(payload)
+    while not isinstance(answer, dict):
+        # Real production crash (2026-08-14): the chat box's free-text input stays open
+        # the whole time a clarification is pending (by design -- some clarifications,
+        # like resolve_weekly_shop_profile's, genuinely accept typed text). Typing
+        # something here instead of clicking an option sends a bare string, which doesn't
+        # fit this clarification's per-retailer shape -- re-asks the same question rather
+        # than crashing on `**answer`.
+        answer = interrupt(payload)
     resolved = dict(state.get("resolved_choices", {}))
     resolved[item_name] = {**resolved.get(item_name, {}), **answer}
     return {"resolved_choices": resolved, "pending_clarification_item": None}
