@@ -9,7 +9,7 @@ story; these tests pin down the plain-text parsing that replaced it.
 
 from types import SimpleNamespace
 
-from app.agent.nodes.product_relevance import filter_relevant_candidates
+from app.agent.nodes.product_relevance import RELEVANCE_PROMPT, filter_relevant_candidates
 
 CANDIDATES = [
     {"name": "שוק.ריטר חלב אגוז שלם"},
@@ -104,3 +104,38 @@ async def test_unrecognized_names_in_response_are_silently_dropped():
     result = await filter_relevant_candidates(llm, "חלב", CANDIDATES)
 
     assert result == []
+
+
+async def test_non_food_product_containing_the_query_word_is_excluded():
+    # Real user report (2026-08-14): a "rice" search ("אורז") surfaced party balloon
+    # products whose name happens to contain the word "אורז" ("מיקי מאוס - VFM שקית 3
+    # בלונים אורז") -- not a food item at all, unlike the flavor/ingredient/appliance
+    # confusions this filter already handled (rice cooker, milk chocolate, etc). Pins
+    # the parsing/filtering mechanics for this shape of response; RELEVANCE_PROMPT's own
+    # content (asserted separately below) is what actually steers the live model here.
+    candidates = [
+        {"name": "מיקי מאוס - VFM שקית 3 בלונים אורז"},
+        {"name": "פרוזן - VFM שקית 3 בלונים אורז"},
+        {"name": "אורז בסמטי טילדה 1 ק\"ג"},
+        {"name": "אורז יסמין תאילנדי 1 ק\"ג"},
+    ]
+    llm = _StubLLM(content="אורז בסמטי טילדה 1 ק\"ג\nאורז יסמין תאילנדי 1 ק\"ג")
+
+    result = await filter_relevant_candidates(llm, "אורז", candidates)
+
+    assert result == [
+        {"name": "אורז בסמטי טילדה 1 ק\"ג"},
+        {"name": "אורז יסמין תאילנדי 1 ק\"ג"},
+    ]
+
+
+def test_relevance_prompt_explicitly_rejects_non_food_products():
+    # Real user report (2026-08-14): confirmed live against Bedrock that the *previous*
+    # prompt wording (silent on non-food items entirely) let a genuinely ambiguous-looking
+    # product name ("...3 בלונים אורז") flip-flop between included/excluded across
+    # identical calls at temperature=0 -- the model already has non-determinism on
+    # borderline cases; leaving a whole rejection category unstated makes it worse.
+    # Confirmed live afterwards: the strengthened wording below held the correct answer
+    # (rice balloons excluded) across 4 consecutive identical calls.
+    assert "not itself an edible food product" in RELEVANCE_PROMPT
+    assert "toys" in RELEVANCE_PROMPT or "balloons" in RELEVANCE_PROMPT
