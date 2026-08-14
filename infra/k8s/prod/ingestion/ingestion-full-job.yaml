@@ -18,7 +18,7 @@ spec:
       restartPolicy: OnFailure
       containers:
         - name: ingestion-full
-          image: moataz189/supermarket-ingestion:latest
+          image: moataz189/supermarket-ingestion:521bae86a6d316c2b3a7e9781001517541eae34f
           # Overrides the image's own default CMD (--source fixtures, used by dev and local
           # docker-compose) — downloads and ingests the live PriceFull baseline for both
           # retailers (app/ingestion/downloaders/{shufersal,rami_levy}.py), one retailer's
