@@ -10,9 +10,14 @@ metadata:
     # multi-item retailer-cart request (each item is a full Playwright navigate/search/
     # add-to-cart cycle against a live site) — same failure mode already fixed for the
     # same reason in web/nginx.conf and infra/tf-il/user-data.sh.tpl; this Ingress is a
-    # third hop in front of backend-svc that needed the identical fix.
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "180"
+    # third hop in front of backend-svc that needed the identical fix. 300s (not 180s)
+    # confirmed live: an 8-item Rami Levy cart (slower per-item than Shufersal — DOM
+    # clicks, modal dismissal, weighed-item click loops) still 504'd at 180s even with
+    # this exact annotation correctly deployed — matches the MCP client's own existing
+    # sse_read_timeout ceiling (mcp/client/streamable_http.py's unmodified default,
+    # 60*5s), so this is the true end-to-end ceiling, not an arbitrarily larger number.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
 spec:
   ingressClassName: nginx
   rules:
