@@ -191,3 +191,20 @@ def test_pasta_shells_resolves_to_a_clean_non_duplicated_hebrew_term():
     dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
 
     assert dictionary["pasta shells"] == "קונכיות פסטה"
+
+
+def test_bare_pepper_no_longer_collides_with_bell_pepper():
+    # Real data bug: "pepper" (the spice) and "bell pepper" (the vegetable) both
+    # resolved to the identical bare Hebrew term "פלפל" -- a genuine homonym in Hebrew
+    # (unlike English, which distinguishes "pepper" from "bell pepper") -- so a spice
+    # search returned a mixed pool of spice/vegetable/condiment candidates and the
+    # relevance filter had no way to tell which the recipe actually meant. "pepper" now
+    # resolves to the unambiguous "פלפל שחור" (black pepper); "bell pepper" is
+    # unaffected -- still bare "פלפל" (the ordinary Israeli grocery term for the
+    # vegetable), no longer colliding with the spice since the spice moved away.
+    dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
+
+    assert dictionary["pepper"] == "פלפל שחור"
+    assert dictionary["ground pepper"] == "פלפל שחור טחון"
+    assert dictionary["bell pepper"] == "פלפל"
+    assert dictionary["black pepper"] == "פלפל שחור"

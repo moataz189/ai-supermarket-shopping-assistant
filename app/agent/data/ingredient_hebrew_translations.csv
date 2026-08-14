@@ -3322,7 +3322,8 @@ tempeh;טמפה;16114;package,g,oz,cup
 nougat;נוגט;43046;piece,g,oz
 hominy;תירס הומיני;20030;g,oz,cup
 sorrel;חומעה;93621;handful,g,bunch,oz,cup
-pepper;פלפל;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
+pepper;פלפל שחור;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
+ground pepper;פלפל שחור טחון;1002030;pinch,g,oz,dash,teaspoon,serving,tablespoon
 bagel;בייגל;18408;mini bagel,piece,g,ounce,medium bagel,small bagel,oz,large bagel
 celery;סלרי;11143;g,rib,oz,cup chopped,tablespoon,head,strip,piece,stalk,stick,bunch,inch,NLEA serving,cup
 pluot;פלואוט;98931;g,oz
