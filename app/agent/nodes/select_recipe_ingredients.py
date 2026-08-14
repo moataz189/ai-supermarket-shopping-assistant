@@ -51,7 +51,7 @@ async def select_recipe_ingredients(state: AgentState) -> AgentState:
     parsed = state["parsed_request"]
     recipe_items = parsed["items"]
 
-    answer = interrupt({
+    payload = {
         "reason": "recipe_ingredient_selection",
         "question": "Which ingredients do you need to buy?",
         "ingredients": _build_ingredient_options(recipe_items),
@@ -59,7 +59,15 @@ async def select_recipe_ingredients(state: AgentState) -> AgentState:
         # retailer_choice interrupt) so the selection screen can show the same header
         # without a second, redundant recipe-summary field.
         "recipe": recipe_info(state),
-    })
+    }
+    answer = interrupt(payload)
+    while not isinstance(answer, list):
+        # Same class of bug as resolve_ambiguity.py (2026-08-14): the chat box's free-text
+        # input stays open while this card is showing. A typed string isn't a crash here
+        # (`set(str) & valid_ids` just silently selects nothing, since valid_ids are full
+        # ingredient names, not single characters) but it's still the wrong answer to the
+        # wrong question -- re-asks instead of silently discarding every ingredient.
+        answer = interrupt(payload)
 
     selected_items = _filter_selected(recipe_items, answer)
 
