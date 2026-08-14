@@ -17,7 +17,7 @@ def _estimated_weight_subtotal(price_info: dict, quantity, unit) -> float | None
         return None
     if package_unit.strip().lower() not in _WEIGHT_PACKAGE_UNITS:
         return None
-    grams = estimate_weight_kg_for_count(quantity) * 1000
+    grams = estimate_weight_kg_for_count(quantity, unit) * 1000
     return round(price_info["unit_price"] * grams, 2)
 
 
