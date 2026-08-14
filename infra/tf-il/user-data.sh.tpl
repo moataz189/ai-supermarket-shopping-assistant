@@ -34,10 +34,14 @@ server {
         # nginx's default proxy_read_timeout (60s) is too short for a real Playwright
         # cart run against a retailer's live site — see web/nginx.conf's own fix for the
         # same failure mode on the backend proxy. proxy_connect_timeout stays short since
-        # connecting to 127.0.0.1:8003 is near-instant.
+        # connecting to 127.0.0.1:8003 is near-instant. 300s (not 180s) confirmed live:
+        # an 8-item Rami Levy cart still 504'd at 180s end-to-end (this instance was not
+        # the confirmed bottleneck, but every hop in the chain must tolerate the same
+        # ceiling) — matches the MCP client's own existing sse_read_timeout default
+        # (mcp/client/streamable_http.py, 60*5s), the true end-to-end ceiling.
         proxy_connect_timeout 10s;
-        proxy_send_timeout 180s;
-        proxy_read_timeout 180s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
 
         # MCP's streamable-HTTP/SSE connection needs these in addition to the timeouts
         # above: buffering off so events stream through as they arrive instead of being
