@@ -147,6 +147,56 @@ def test_hebrew_plural_singular_variant_returns_none_for_words_too_short_or_unma
     assert _hebrew_plural_singular_variant("ות") is None  # too short for the swap to be meaningful
 
 
+def test_search_candidates_excludes_word_fused_inside_a_different_word(session):
+    # Real user report (2026-08-14): a plain substring ILIKE for "חלב" ("milk") also
+    # matched חלבון/חלבה/סחלב ("protein"/"halva"/"orchid") -- unrelated words that merely
+    # contain the same three letters with no space boundary -- burying the ~20 genuine
+    # milk products among hundreds of false positives (436 total matches for "חלב" at one
+    # retailer) well past the retrieval limit.
+    session.add(_make_product("rami_levy", "1", "אבקת חלבון וניל", "39"))  # חלבון, not חלב
+    session.add(_make_product("rami_levy", "2", "סחלב פלנופסיס", "39"))  # סחלב, not חלב
+    session.add(_make_product("rami_levy", "3", "חלבה קלאסית 400 גרם", "39"))  # חלבה, not חלב
+    session.add(_make_product("rami_levy", "4", "חלב תנובה 1% 1 לי", "39"))  # real milk
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("חלב", retailer="rami_levy")
+
+    assert [p.item_code for p in results] == ["4"]
+
+
+def test_search_candidates_matches_word_at_every_token_position(session):
+    # The word-boundary check must match a token at the start, middle, end, or as the
+    # entire name -- not just one position.
+    session.add(_make_product("shufersal", "1", "חלב תנובה", "413"))  # leading
+    session.add(_make_product("shufersal", "2", "משקה חלב בטעם בננה", "413"))  # interior
+    session.add(_make_product("shufersal", "3", "רמת הגולן חלב", "413"))  # trailing
+    session.add(_make_product("shufersal", "4", "חלב", "413"))  # exact
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("חלב", retailer="shufersal")
+
+    assert {p.item_code for p in results} == {"1", "2", "3", "4"}
+
+
+def test_search_candidates_orders_shorter_names_first(session):
+    # Real user report (2026-08-14): with no ordering, a plain product ("עגבניה"/"בננה")
+    # was routinely arbitrary-sliced out of the results by whichever longer, unrelated
+    # compound product (tomato puree, a banana-flavored snack) happened to match too --
+    # a shorter name containing the same token is far more likely to be the plain base
+    # product than a longer, more qualified one.
+    session.add(_make_product("shufersal", "1", "עגבניה מרוסק ובזיליקום 230 גרם משומרת", "413"))
+    session.add(_make_product("shufersal", "2", "עגבניה", "413"))
+    session.add(_make_product("shufersal", "3", "עגבניה ארוזה 4 יחידות", "413"))
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("עגבניה", retailer="shufersal")
+
+    assert [p.item_code for p in results] == ["2", "3", "1"]
+
+
 def test_get_product_returns_none_when_missing(session):
     repo = ProductRepository(session)
     assert repo.get_product("shufersal", "does-not-exist") is None
