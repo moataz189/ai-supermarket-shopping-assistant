@@ -37,6 +37,15 @@ PER_SERVING_DEFAULTS: dict[str, tuple[float, str]] = {
     # target_servings exactly like the others (real user report: 40 servings still
     # bought a flat "1 unit" of onion before this entry existed).
     "onion": (0.25, "unit"),
+    # Real user report (2026-08-14): the flat "1 unit" fallback (see
+    # default_quantity_for below) reached a fixed 100 g spice package, and
+    # build_retailer_cart.py's own "bare count against a weight-sold product"
+    # estimate (0.5 kg/unit -- correct for loose produce sold by weight) fired on it
+    # too, pricing "1 unit" of ground pepper as if it meant 0.5 kg of it (~₪63 instead
+    # of one ₪12.70 packet). A real per-serving gram amount here sidesteps that
+    # entirely -- ~0.5 g/serving (a pinch) is a realistic seasoning amount.
+    "ground pepper": (0.5, "g"),
+    "pepper": (0.5, "g"),
 }
 
 WEIGHT_DEFAULTS: dict[str, float] = {  # ingredient name -> default kg

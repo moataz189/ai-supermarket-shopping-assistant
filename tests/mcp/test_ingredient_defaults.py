@@ -47,6 +47,17 @@ def test_per_serving_default_supports_a_count_unit_not_just_weight_or_volume():
     # serving, scaled the same way as any other PER_SERVING_DEFAULTS entry.
     assert default_quantity_for("onion", 4) == (1.0, "unit")
     assert default_quantity_for("onion", 40) == (10.0, "unit")
+
+
+def test_ground_pepper_gets_a_real_gram_default_not_a_bare_unit_count():
+    # Real user report: "ground pepper" fell through to the flat "1 unit" fallback (no
+    # table entry existed), which then hit build_retailer_cart.py's own "bare count
+    # against a weight-sold product" 0.5 kg/unit estimate (correct for loose produce,
+    # wrong for a fixed spice packet) -- priced "1 unit" of pepper as if it meant half
+    # a kilo (~₪63 instead of one ~₪13 packet). A real per-serving gram default
+    # sidesteps that unit-vs-weight ambiguity entirely.
+    assert default_quantity_for("ground pepper", 4) == (2.0, "g")
+    assert default_quantity_for("pepper", 4) == (2.0, "g")
     assert default_quantity_for("onion", 8) == (2.0, "unit")
 
 
