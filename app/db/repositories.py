@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import RetailerProduct
@@ -9,6 +9,25 @@ UNIT_TO_BASE = {"g": 1, "kg": 1000, "ml": 1, "l": 1000, "unit": 1}
 def unit_price(price: float, package_size: float, package_unit: str) -> float:
     base_qty = package_size * UNIT_TO_BASE[package_unit]
     return price / base_qty if base_qty else price
+
+
+def _hebrew_plural_singular_variant(word: str) -> str | None:
+    """Hebrew's most common feminine-noun inflection: a singular ending in ה swaps with
+    a plural ending in ות (e.g. קונכיה <-> קונכיות, "shell(s)"). Real user report
+    (2026-08-14): our translated "pasta shells" query used the plural form, but a real
+    Shufersal product used the singular ("פסטה ניוקטי סרדי קונכיה") -- a plain substring
+    match can't bridge the two, since neither word is a substring of the other.
+
+    Deliberately narrow: this swaps one specific, well-defined suffix for another
+    complete word form -- it is not general stemming (which would match on a bare
+    truncated prefix and risk pulling in unrelated words that merely start the same way).
+    Returns None for words too short for the swap to be meaningful, and for words that
+    don't end in either suffix at all."""
+    if word.endswith("ות") and len(word) > 3:
+        return word[:-2] + "ה"
+    if word.endswith("ה") and len(word) > 2:
+        return word[:-1] + "ות"
+    return None
 
 
 class ProductRepository:
@@ -29,9 +48,19 @@ class ProductRepository:
         # downstream never got a real chance to find the genuine match among them. Still
         # a plain substring match per word, not a ranked/fuzzy search -- semantic
         # correctness is judged downstream by product_relevance.py, not here.
+        #
+        # Each word also tries its Hebrew plural/singular variant (see
+        # _hebrew_plural_singular_variant) as an OR alternative -- real user report:
+        # "קונכיות" (plural) never matched a real product's "קונכיה" (singular).
         stmt = select(RetailerProduct).where(RetailerProduct.retailer == retailer)
         for word in query.split():
-            stmt = stmt.where(RetailerProduct.name.ilike(f"%{word}%"))
+            variant = _hebrew_plural_singular_variant(word)
+            if variant:
+                stmt = stmt.where(
+                    or_(RetailerProduct.name.ilike(f"%{word}%"), RetailerProduct.name.ilike(f"%{variant}%"))
+                )
+            else:
+                stmt = stmt.where(RetailerProduct.name.ilike(f"%{word}%"))
         stmt = stmt.limit(limit)
         return list(self.session.scalars(stmt))
 
