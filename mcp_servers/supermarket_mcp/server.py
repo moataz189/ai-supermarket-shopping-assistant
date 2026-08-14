@@ -1,4 +1,7 @@
-# Touch to trigger cd.yml's path-based rebuild (picks up the new :latest tag).
+# Touch to trigger cd.yml's path-based rebuild and re-pin the prod manifest to a SHA
+# that includes the search_candidates retrieval fix (the run that would have done this
+# failed on the now-fixed ingestion-manifest bug before it reached the manifest-commit
+# step).
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
