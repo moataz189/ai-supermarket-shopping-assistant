@@ -56,9 +56,28 @@ function App() {
     }
   }
 
-  function isAwaitingAnswer(): boolean {
+  function lastClarification() {
     const lastDone = [...turns].reverse().find((t) => t.role === 'assistant' && t.status === 'done')
-    return Boolean(lastDone && lastDone.role === 'assistant' && lastDone.status === 'done' && lastDone.response.clarification)
+    return lastDone && lastDone.role === 'assistant' && lastDone.status === 'done'
+      ? lastDone.response.clarification
+      : null
+  }
+
+  function isAwaitingAnswer(): boolean {
+    return Boolean(lastClarification())
+  }
+
+  // Real production crash (2026-08-14): the chat box below stays open while a
+  // clarification card is showing (some clarifications, like the weekly-shop-profile
+  // question, genuinely accept typed text), but 'ambiguous_product' and
+  // 'recipe_ingredient_selection' only accept their structured answer (one choice per
+  // retailer / the selected ingredient ids) -- free text sent as their resume value
+  // either crashed the backend or silently discarded every ingredient. Disabling the
+  // input for just these two reasons keeps free text working everywhere it's actually
+  // meant to (profile picker, custom list, retailer choice).
+  function isAwaitingStructuredAnswer(): boolean {
+    const reason = lastClarification()?.reason
+    return reason === 'ambiguous_product' || reason === 'recipe_ingredient_selection'
   }
 
   function sendMessage(
@@ -157,7 +176,7 @@ function App() {
             />
           </div>
           <div className="sticky bottom-0 border-t border-zinc-200 bg-zinc-50/95 px-4 py-4 backdrop-blur">
-            <ChatInput variant="bar" onSend={handleSend} disabled={isBusy} />
+            <ChatInput variant="bar" onSend={handleSend} disabled={isBusy || isAwaitingStructuredAnswer()} />
           </div>
         </div>
       )}
