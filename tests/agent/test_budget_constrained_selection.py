@@ -137,10 +137,13 @@ async def test_weighted_item_quantity_used_for_budget_math():
 
     cart = result["__interrupt__"][0].value["carts"]["shufersal"]
     chicken = next(i for i in cart["items"] if i["name"] == "חזה עוף")
-    # 0.4 kg at ₪20/kg (unit_price 0.02 ₪/g) -> 0.02 * 0.4 * 1000 = ₪8.00, NOT the raw
-    # ₪20.0 package price a qty=1 assumption would have used.
-    assert chicken["subtotal"] == 8.0
-    assert cart["total"] == 8.0
+    # 0.4 kg requested, but חזה עוף is whole-kg-only (2026-08-16 fix) -> normalized to
+    # 1.0 kg before pricing. 1.0 kg at ₪20/kg (unit_price 0.02 ₪/g) -> 0.02 * 1.0 * 1000
+    # = ₪20.00, NOT the raw fractional 0.4 kg price (₪8.00) this test asserted before
+    # that fix, and NOT the ₪20.0 raw package price a qty=1 assumption would have used.
+    assert chicken["requested_quantity"] == 1.0
+    assert chicken["subtotal"] == 20.0
+    assert cart["total"] == 20.0
 
 
 async def test_explicit_shopping_list_with_budget_keeps_every_requested_item():

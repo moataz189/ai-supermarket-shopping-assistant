@@ -1,10 +1,41 @@
 import asyncio
+import math
 
 from app.agent.nodes.product_relevance import filter_relevant_candidates
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
 
 RETAILERS = ["shufersal", "rami_levy"]
+
+# Chicken breast is only orderable in whole-kilogram increments for both retailers in
+# the currently supported flow -- real user report (2026-08-16): a fractional kg
+# request (e.g. the weekly-shop "one_person" profile's real 0.4 kg serving size) priced
+# the comparison view at 0.4 kg while the real Retailer-Cart MCP add would buy a whole
+# kg regardless, so the displayed price/quantity and what actually got bought disagreed.
+# Deliberately scoped to this one item by explicit product decision -- NOT a general
+# kg-rounding rule: loose "tomato" at 0.5 kg must stay fractional, since fractional
+# weight genuinely works for that product; only chicken breast has this whole-kg-only
+# constraint. Matched by name (both the Hebrew weekly-shop-profile name and the English
+# recipe-ingredient name), not by unit, since this is a per-product retailer constraint,
+# not a general quantity-classification rule (contrast with app/agent/quantity.py,
+# which classifies by unit string alone and explicitly avoids per-product rules).
+_WHOLE_KG_ONLY_ITEMS = {"חזה עוף", "chicken breast"}
+
+
+def _normalize_quantity(item: dict) -> dict:
+    """Rounds a whole-kg-only item's requested kg quantity UP to the next whole
+    kilogram (0 < x <= 1 -> 1, 1 < x <= 2 -> 2, ...) -- see _WHOLE_KG_ONLY_ITEMS. Applied
+    once, here, before any pricing/budget/payload logic ever reads `item["quantity"]`,
+    so the normalized value is the single source of truth for the comparison-view
+    price, the cart total, the budget check, the Retailer-Cart MCP payload, and the
+    final "Requested/Added" result -- all of which only ever copy this same field
+    forward, never re-derive it independently. Every other item (including a whole-kg
+    chicken-breast request already at 1.0/2.0/... kg) passes through unchanged."""
+    name = (item.get("name") or "").strip().lower()
+    quantity, unit = item.get("quantity"), item.get("unit")
+    if name in _WHOLE_KG_ONLY_ITEMS and unit == "kg" and quantity is not None and quantity > 0:
+        return {**item, "quantity": float(math.ceil(quantity))}
+    return item
 
 # A DISPLAY limit only (2026-08-14 fix) -- how many relevant candidates to show the user
 # in the ambiguity UI when there's a real choice to make. Must never gate what reaches
@@ -109,7 +140,8 @@ async def _resolve_item(
 
 def make_resolve_items(client, llm):
     async def resolve_items(state: AgentState) -> AgentState:
-        parsed = state["parsed_request"]
+        parsed = dict(state["parsed_request"])
+        parsed["items"] = [_normalize_quantity(item) for item in parsed["items"]]
         item_candidates = dict(state.get("item_candidates", {}))
         # item name -> retailer -> resolved product name (CP9 follow-up, 2026-08-08 —
         # previously item name -> a single label shared across every retailer, which
@@ -225,6 +257,7 @@ def make_resolve_items(client, llm):
                 ambiguous_item = name
 
         return {
+            "parsed_request": parsed,
             "item_candidates": item_candidates,
             "resolved_choices": resolved_choices,
             "pending_clarification_item": ambiguous_item,
