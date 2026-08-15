@@ -1,3 +1,5 @@
+import asyncio
+
 from app.agent.nodes.product_relevance import filter_relevant_candidates
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
@@ -116,52 +118,98 @@ def make_resolve_items(client, llm):
         # places this per-retailer shape now flows through).
         resolved_choices = {k: dict(v) for k, v in state.get("resolved_choices", {}).items()}
         dietary_conflicts = list(state.get("dietary_conflicts", []))
-        ambiguous_item = None
         forbidden = forbidden_tags(parsed.get("dietary_constraints", []))
 
-        for item in parsed["items"]:
-            name = item["name"]
-            if name in dietary_conflicts:
-                continue
-            # Recipe-derived items carry an English canonical `name` (Spoonacular) and a
-            # `search_name` that's *always* tried in Hebrew when a translation exists
-            # (see get_recipe_ingredients.py) — the real catalog is Hebrew-only
-            # regardless of what language this conversation is in, so searching with the
-            # English name never matches even when the equivalent product genuinely
-            # exists (confirmed live, twice: once for a Hebrew-language conversation,
-            # then again for an English one — `display_name` alone isn't enough, since it
-            # follows the conversation's own language and stays English there).
-            # Grocery-list items have no search_name/display_name at all (already typed
-            # in the user's own language), so this is a no-op fallback for them.
-            search_name = item.get("search_name") or item.get("display_name") or name
-            if name not in item_candidates:
-                item_candidates[name] = await _candidates_by_retailer(client, search_name, forbidden)
-            by_retailer = item_candidates[name]
+        # Every item's own candidate search, dietary substitution, and relevance-filter
+        # decision is fully independent of every other item's (and, within an item,
+        # independent per retailer) -- real user report (2026-08-15): a 6-item recipe
+        # across 2 retailers made up to 12 sequential relevance-filter LLM calls, each a
+        # real network round trip, confirmed live to take tens of seconds. Below runs
+        # each phase concurrently (asyncio.gather) instead of one item/retailer at a
+        # time; the actual item_candidates/resolved_choices/dietary_conflicts merge
+        # still happens in a single-threaded pass afterwards, in the original list
+        # order, so which item becomes `pending_clarification_item` and every other
+        # observable outcome is unchanged -- only wall-clock time improves.
+        items = [item for item in parsed["items"] if item["name"] not in dietary_conflicts]
+        # Recipe-derived items carry an English canonical `name` (Spoonacular) and a
+        # `search_name` that's *always* tried in Hebrew when a translation exists (see
+        # get_recipe_ingredients.py) — the real catalog is Hebrew-only regardless of
+        # what language this conversation is in, so searching with the English name
+        # never matches even when the equivalent product genuinely exists (confirmed
+        # live, twice: once for a Hebrew-language conversation, then again for an
+        # English one — `display_name` alone isn't enough, since it follows the
+        # conversation's own language and stays English there). Grocery-list items have
+        # no search_name/display_name at all (already typed in the user's own
+        # language), so this is a no-op fallback for them.
+        search_names = {
+            item["name"]: item.get("search_name") or item.get("display_name") or item["name"]
+            for item in items
+        }
 
-            if not any(by_retailer.values()) and forbidden:
-                sub_query = find_substitute_query(name, forbidden)
-                if sub_query is None:
-                    dietary_conflicts.append(name)
-                    continue
-                by_retailer = await _candidates_by_retailer(client, sub_query, forbidden)
+        to_search = [item["name"] for item in items if item["name"] not in item_candidates]
+        if to_search:
+            searched = await asyncio.gather(
+                *(_candidates_by_retailer(client, search_names[name], forbidden) for name in to_search)
+            )
+            for name, by_retailer in zip(to_search, searched, strict=True):
                 item_candidates[name] = by_retailer
 
-            # Ambiguity is judged, and resolved, independently per retailer — a retailer
-            # with exactly one candidate auto-resolves immediately without ever asking;
-            # only a retailer that's genuinely ambiguous on its own candidates blocks on
-            # the user, and it doesn't hold up any other retailer that already resolved.
-            item_resolved = dict(resolved_choices.get(name, {}))
-            still_ambiguous_here = False
-            for retailer, candidates in by_retailer.items():
+        # A retailer-wide miss under a dietary constraint retries with a substitute
+        # query — also independent per item.
+        needs_substitute = [
+            item["name"] for item in items
+            if forbidden and not any(item_candidates[item["name"]].values())
+        ]
+        substitute_queries = {name: find_substitute_query(name, forbidden) for name in needs_substitute}
+        to_resubstitute = [name for name in needs_substitute if substitute_queries[name] is not None]
+        if to_resubstitute:
+            resubstituted = await asyncio.gather(
+                *(_candidates_by_retailer(client, substitute_queries[name], forbidden) for name in to_resubstitute)
+            )
+            for name, by_retailer in zip(to_resubstitute, resubstituted, strict=True):
+                item_candidates[name] = by_retailer
+        for name in needs_substitute:
+            if substitute_queries[name] is None:
+                dietary_conflicts.append(name)
+
+        # Ambiguity is judged, and resolved, independently per retailer — a retailer
+        # with exactly one candidate auto-resolves immediately without ever asking;
+        # only a retailer that's genuinely ambiguous on its own candidates blocks on
+        # the user, and it doesn't hold up any other retailer that already resolved.
+        remaining_items = [item for item in items if item["name"] not in dietary_conflicts]
+        pending: list[tuple[str, str]] = []
+        for item in remaining_items:
+            name = item["name"]
+            item_resolved = resolved_choices.get(name, {})
+            for retailer, candidates in item_candidates[name].items():
                 if retailer in item_resolved or not candidates:
                     # Already resolved, or nothing found at all for this retailer — the
                     # latter isn't ambiguity, just a miss; build_retailer_cart.py's own
                     # search_name fallback covers it when no entry exists here.
                     continue
-                label, still_ambiguous, effective_candidates = await _resolve_item(
-                    llm, search_name, _dedupe_by_name(candidates),
+                pending.append((name, retailer))
+
+        outcomes = {}
+        if pending:
+            results = await asyncio.gather(*(
+                _resolve_item(
+                    llm, search_names[name], _dedupe_by_name(item_candidates[name][retailer]),
                     parsed.get("brand_preference"), parsed.get("selection_preference", "no_preference"),
                 )
+                for name, retailer in pending
+            ))
+            outcomes = dict(zip(pending, results, strict=True))
+
+        ambiguous_item = None
+        for item in remaining_items:
+            name = item["name"]
+            by_retailer = item_candidates[name]
+            item_resolved = dict(resolved_choices.get(name, {}))
+            still_ambiguous_here = False
+            for retailer in by_retailer:
+                if (name, retailer) not in outcomes:
+                    continue
+                label, still_ambiguous, effective_candidates = outcomes[(name, retailer)]
                 # Persisted so resolve_ambiguity.py's later display reflects relevance
                 # filtering too, not just this function's own resolve/still-ambiguous
                 # decision — it independently re-reads item_candidates from state.
