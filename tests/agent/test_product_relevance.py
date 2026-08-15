@@ -139,3 +139,28 @@ def test_relevance_prompt_explicitly_rejects_non_food_products():
     # (rice balloons excluded) across 4 consecutive identical calls.
     assert "not itself an edible food product" in RELEVANCE_PROMPT
     assert "toys" in RELEVANCE_PROMPT or "balloons" in RELEVANCE_PROMPT
+
+
+async def test_prepared_snack_made_from_the_query_ingredient_is_excluded():
+    # Real user report (2026-08-15): an "onion" search ("בצל") surfaced "טבעות בצל"
+    # (fried onion rings, a snack) alongside real fresh/dry onion products -- genuinely
+    # made from onion, but a different (cooked, battered) product, the same class of
+    # confusion as "banana-flavored cereal is not a banana" but for a snack made *from*
+    # the ingredient rather than merely flavored like it. Pins the parsing/filtering
+    # mechanics; RELEVANCE_PROMPT's own content (asserted separately below) is what
+    # actually steers the live model here.
+    candidates = [
+        {"name": "בצל יבש"},
+        {"name": "בצל אדום"},
+        {"name": "טבעות בצל 45 גר"},
+    ]
+    llm = _StubLLM(content="בצל יבש\nבצל אדום")
+
+    result = await filter_relevant_candidates(llm, "בצל", candidates)
+
+    assert result == [{"name": "בצל יבש"}, {"name": "בצל אדום"}]
+
+
+def test_relevance_prompt_explicitly_rejects_prepared_snacks_made_from_the_ingredient():
+    assert "onion rings" in RELEVANCE_PROMPT
+    assert "prepared snack or dish made from it" in RELEVANCE_PROMPT
