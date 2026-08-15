@@ -450,6 +450,7 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
     # unit=None (the same "silently just 1" bug as recipes, just for a different source) —
     # each STARTER_LISTS entry now carries a real quantity/unit sized for that profile
     # (see resolve_weekly_shop_profile.py), and that's what reaches the Retailer-Cart MCP.
+    from app.agent.nodes.resolve_items import _normalize_quantity
     from app.agent.nodes.resolve_weekly_shop_profile import STARTER_LISTS
 
     llm = FakeLLM(ParsedRequestSchema(request_type="grocery_list", items=[], budget=100))
@@ -457,6 +458,12 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
     prices: dict[tuple[str, str], dict] = {}
     for i, entry in enumerate(STARTER_LISTS["one_person"]):
         name = entry["name"]
+        # חזה עוף (chicken breast) is whole-kg-only (2026-08-16 fix) -- resolve_items.py
+        # rounds its raw STARTER_LISTS amount UP to the next whole kg before pricing
+        # ever sees it, so the price this test expects must be calibrated against that
+        # normalized quantity, not the raw one, or the budget-fitting math below would
+        # silently assume an amount that's no longer what's actually priced.
+        priced_quantity = _normalize_quantity(entry)["quantity"]
         for retailer, prefix, price in [("shufersal", "S", 10.0 + i), ("rami_levy", "R", 9.0 + i)]:
             item_code = f"{prefix}-{i}"
             candidates[(name, retailer)] = [{"item_code": item_code, "name": name, "price": price}]
@@ -469,7 +476,7 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
             # so the whole list (summing to well under this test's ₪110 allowed_max)
             # fits exactly as intended and every item's quantity/unit is still verified.
             if entry["unit"] == "kg":
-                unit_price = price / (entry["quantity"] * 1000)
+                unit_price = price / (priced_quantity * 1000)
             else:
                 unit_price = price
             prices[(retailer, item_code)] = {"unit_price": unit_price, "price": price}
@@ -490,10 +497,15 @@ async def test_weekly_shop_profile_items_send_their_real_per_profile_quantities(
     _, called_items = retailer_cart_client.calls[0]
     by_name = {i["name"]: i for i in called_items}
     for entry in STARTER_LISTS["one_person"]:
-        assert by_name[entry["name"]]["quantity"] == entry["quantity"]
+        expected_quantity = _normalize_quantity(entry)["quantity"]
+        assert by_name[entry["name"]]["quantity"] == expected_quantity
         assert by_name[entry["name"]]["unit"] == entry["unit"]
-    # a household-size-scaled example, explicitly: tomatoes for one person is 0.5 kg.
+    # a household-size-scaled example, explicitly: tomatoes for one person is 0.5 kg --
+    # a plain kg item stays fractional (contrast with חזה עוף below).
     assert by_name["עגבניה"] == {
         "name": "עגבניה", "item_code": "S-6", "quantity": 0.5, "unit": "kg",
         "package_size": None, "package_unit": None,
     }
+    # חזה עוף (chicken breast): whole-kg-only (2026-08-16 fix) -- STARTER_LISTS' raw
+    # 0.4 kg for "one_person" rounds UP to 1.0 kg before ever reaching the MCP payload.
+    assert by_name["חזה עוף"]["quantity"] == 1.0
