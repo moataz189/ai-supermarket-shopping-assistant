@@ -78,3 +78,41 @@ async def test_second_search_skips_the_llm_call_for_a_single_candidate():
     assert missing == []
     assert len(lines) == 1
     assert lines[0]["item_code"] == "S-ONION"
+
+
+async def test_second_search_skips_the_llm_call_when_a_candidate_matches_the_label_exactly():
+    # Real user report (2026-08-16): a "tomato" search kept adding "רוטב עגבניות"
+    # (tomato sauce, ₪14.50) instead of the plain "עגבניה" (tomato, ₪2.00) product sitting
+    # right there in the same candidate list -- resolve_items.py's own _resolve_item has
+    # an exact-match shortcut that skips the LLM entirely, but this second, independent
+    # search had no equivalent, so it stayed exposed to relevance-filter LLM
+    # non-determinism even when a deterministic exact match existed. Configuring
+    # relevant_names=[] on the FakeLLM would make this test fail loudly (falling back to
+    # "not_found") if the shortcut were missing and the LLM's (wrong) answer were trusted.
+    sauce = {"item_code": "S-SAUCE", "name": "רוטב עגבניות", "price": 14.5}
+    real_tomato = {"item_code": "S-TOM", "name": "עגבניה", "price": 2.0}
+    client = _StubClient([sauce, real_tomato])
+    llm = FakeLLM(relevant_names=[])
+    items = [{"name": "tomato", "search_name": "עגבניה"}]
+
+    lines, missing = await _add_every_item(client, llm, "shufersal", items, {}, set(), [])
+
+    assert missing == []
+    assert len(lines) == 1
+    assert lines[0]["item_code"] == "S-TOM"
+    assert lines[0]["product_name"] == "עגבניה"
+
+
+async def test_second_search_still_relevance_filters_when_no_candidate_matches_the_label_exactly():
+    # The exact-match shortcut must not swallow genuine ambiguity -- when nothing matches
+    # the label verbatim (both candidates are qualified/compound names), relevance
+    # filtering still runs as before.
+    client = _StubClient([WRONG_BUT_CHEAPER, REAL_ONION])
+    llm = FakeLLM(relevant_names=["בצל אדום"])
+    items = [{"name": "onion", "search_name": "בצל"}]
+
+    lines, missing = await _add_every_item(client, llm, "shufersal", items, {}, set(), [])
+
+    assert missing == []
+    assert len(lines) == 1
+    assert lines[0]["item_code"] == "S-ONION"
