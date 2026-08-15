@@ -100,6 +100,17 @@ _SMALL_PORTION_UNITS = {
 DEFAULT_KG_PER_SMALL_PORTION_UNIT = 0.02
 
 
+def is_small_portion_unit(unit: str) -> bool:
+    """True for a clove/sprig/pinch/dash/slice/stalk/sliver/knob/wedge/leaf -- a small
+    portion of a larger item, not a request for "N whole items/packages" (see
+    _SMALL_PORTION_UNITS). Real user report (2026-08-15): a non-weighed, whole-package
+    product (e.g. dried garlic sold as a fixed package, not by weight) requested as "4
+    clove" added 4 whole packages -- the same "small portion misread as N whole units"
+    confusion estimate_weight_kg_for_count already fixes for the weight-sold case,
+    exposed here in the whole-package add_to_cart path instead."""
+    return unit.strip().lower() in _SMALL_PORTION_UNITS
+
+
 def estimate_weight_kg_for_count(quantity: float, unit: str) -> float:
     """Best-effort fallback weight (kg) for a bare unit count against a product this
     retailer only sells by weight (e.g. "1 onion" against loose onions sold by kg), where

@@ -413,6 +413,21 @@ async def test_by_unit_product_with_count_unit_uses_recipe_count_directly():
     assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 3}]
 
 
+async def test_by_unit_product_with_small_portion_unit_buys_one_package_not_the_raw_count():
+    # Real user report (2026-08-15): "4 clove" of garlic matched to a whole-package (not
+    # weighed) product added 4 whole packages -- a clove is a small portion of a bulb,
+    # not a request for 4 separate garlic packages.
+    page = FakePage(search_results=[_ok([
+        {"code": "P1", "name": "Dried Garlic", "cartStatus": {"inCart": True, "qty": 1}},
+    ])])
+
+    result = await ShufersalAdapter().add_to_cart(page, _by_unit_match(), 4, "clove")
+
+    assert result.quantity == 1
+    assert result.unit == "unit"
+    assert page.add_calls == [{"productCode": "P1", "sellingMethod": "BY_UNIT", "qty": 1}]
+
+
 async def test_by_unit_product_with_weight_unit_buys_one_whole_package():
     # "250 g pasta" matched to a product sold as a whole package -> buy 1 of it, not an
     # invented package count.

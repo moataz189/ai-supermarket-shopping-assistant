@@ -99,6 +99,7 @@ from mcp_servers.retailer_cart_mcp.quantity import (
     QuantityConversionRequiredError,
     estimate_weight_kg_for_count,
     is_count_unit,
+    is_small_portion_unit,
     normalize_weight_to_kg,
     packages_needed,
 )
@@ -277,6 +278,13 @@ class ShufersalAdapter:
             # confirmed back as exactly 0.4, unlike Rami Levy's DOM stepper (0.5kg steps),
             # so there is nothing to round up to here; the recipe's own weight is used as-is.
             send_qty, result_unit = target_kg, "kg"
+        elif is_count_unit(unit) and is_small_portion_unit(unit):
+            # A clove/sprig/pinch/... is a small portion of a larger item, not a request
+            # for `quantity` whole packages -- real user report (2026-08-15): "4 clove"
+            # of garlic against a whole-package (not weighed) product added 4 whole
+            # packages instead of the one that actually covers it. See quantity.py's
+            # is_small_portion_unit.
+            send_qty, result_unit = 1, "unit"
         elif is_count_unit(unit):
             send_qty, result_unit = quantity, "unit"
         else:
