@@ -188,3 +188,26 @@ async def test_sauce_made_from_the_query_ingredient_is_excluded():
 def test_relevance_prompt_explicitly_rejects_sauces_made_from_the_ingredient():
     assert "tomato sauce" in RELEVANCE_PROMPT
     assert "sauce/paste/puree/concentrate made from it" in RELEVANCE_PROMPT
+
+
+async def test_branded_flavored_snack_naming_the_fruit_directly_is_excluded():
+    # Real user report (2026-08-16): a "banana" search surfaced "דניאלה בננה 88 גרם"
+    # (a branded wafer/chocolate snack, banana-flavored) alongside a real banana product
+    # -- the existing "banana-flavored cereal is not a banana" example didn't reliably
+    # stop this recurring, so an explicit branded example was added. Pins the parsing/
+    # filtering mechanics; RELEVANCE_PROMPT's own content (asserted separately below) is
+    # what actually steers the live model here.
+    candidates = [
+        {"name": "בננה"},
+        {"name": "דניאלה בננה 88 גרם"},
+    ]
+    llm = _StubLLM(content="בננה")
+
+    result = await filter_relevant_candidates(llm, "בננה", candidates)
+
+    assert result == [{"name": "בננה"}]
+
+
+def test_relevance_prompt_explicitly_rejects_the_danielle_banana_snack_example():
+    assert "Danielle" in RELEVANCE_PROMPT
+    assert "Banana" in RELEVANCE_PROMPT
