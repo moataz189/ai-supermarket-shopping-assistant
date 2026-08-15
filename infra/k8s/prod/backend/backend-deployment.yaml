@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: moataz189/supermarket-backend:bb3f2746331727a8cafcd845b3461b5ee749b239
+          image: moataz189/supermarket-backend:f02cfd30050c6b220e6e441d03872f1ef18cf65d
 
           ports:
             - containerPort: 8000
