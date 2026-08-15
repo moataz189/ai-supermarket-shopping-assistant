@@ -164,3 +164,27 @@ async def test_prepared_snack_made_from_the_query_ingredient_is_excluded():
 def test_relevance_prompt_explicitly_rejects_prepared_snacks_made_from_the_ingredient():
     assert "onion rings" in RELEVANCE_PROMPT
     assert "prepared snack or dish made from it" in RELEVANCE_PROMPT
+
+
+async def test_sauce_made_from_the_query_ingredient_is_excluded():
+    # Real user report (2026-08-16): a "tomato" search surfaced "רוטב עגבניות" (tomato
+    # sauce) alongside real fresh tomato products -- genuinely made from tomato, but a
+    # different (cooked, processed) product, same class of confusion as onion rings
+    # (2026-08-15) but for a sauce/paste rather than a fried snack. Pins the parsing/
+    # filtering mechanics; RELEVANCE_PROMPT's own content (asserted separately below) is
+    # what actually steers the live model here.
+    candidates = [
+        {"name": "עגבניה"},
+        {"name": "עגבניה ארוזה 4 יחידות"},
+        {"name": "רוטב עגבניות פריניר 100 גר"},
+    ]
+    llm = _StubLLM(content="עגבניה\nעגבניה ארוזה 4 יחידות")
+
+    result = await filter_relevant_candidates(llm, "עגבניה", candidates)
+
+    assert result == [{"name": "עגבניה"}, {"name": "עגבניה ארוזה 4 יחידות"}]
+
+
+def test_relevance_prompt_explicitly_rejects_sauces_made_from_the_ingredient():
+    assert "tomato sauce" in RELEVANCE_PROMPT
+    assert "sauce/paste/puree/concentrate made from it" in RELEVANCE_PROMPT
