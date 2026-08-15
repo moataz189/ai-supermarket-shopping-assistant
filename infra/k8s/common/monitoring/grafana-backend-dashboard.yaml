@@ -238,7 +238,7 @@ data:
               "expr": "histogram_quantile(\n  0.99,\n  sum by (le) (\n    rate(agent_chat_request_duration_seconds_bucket{namespace=~\"$namespace\"}[5m])\n  )\n)",
               "hide": false,
               "instant": false,
-              "legendFormat": "p95",
+              "legendFormat": "p99",
               "range": true,
               "refId": "C"
             }
