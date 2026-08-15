@@ -1,4 +1,9 @@
-from app.agent.nodes.resolve_items import MAX_CANDIDATES_SHOWN, _dedupe_by_name, _resolve_item
+from app.agent.nodes.resolve_items import (
+    MAX_CANDIDATES_SHOWN,
+    _dedupe_by_name,
+    _normalize_quantity,
+    _resolve_item,
+)
 from tests.agent.fakes import FakeLLM
 
 
@@ -236,3 +241,76 @@ async def test_cheapest_preference_picks_among_relevant_candidates_not_raw_candi
     assert label == "Jasmine Rice"  # cheapest of the two RELEVANT candidates, not the raw cooker
     assert still_ambiguous is False
     assert {c["item_code"] for c in effective} == {"S2", "S3"}  # the raw cooker never enters the result
+
+
+# ---------------------------------------------------------------------------
+# Chicken breast whole-kg normalization (2026-08-16): both retailers only sell chicken
+# breast in whole-kg increments in the currently supported flow -- a fractional request
+# (e.g. the weekly-shop "one_person" profile's real 0.4 kg) must round UP to the next
+# whole kg before pricing/budget/payload ever sees it. Deliberately scoped to this one
+# item, NOT a general kg-rounding rule -- other kg items (tomato) must stay fractional.
+# ---------------------------------------------------------------------------
+
+
+def test_chicken_breast_04kg_rounds_up_to_1kg():
+    item = {"name": "חזה עוף", "quantity": 0.4, "unit": "kg"}
+
+    assert _normalize_quantity(item) == {"name": "חזה עוף", "quantity": 1.0, "unit": "kg"}
+
+
+def test_chicken_breast_08kg_rounds_up_to_1kg():
+    item = {"name": "חזה עוף", "quantity": 0.8, "unit": "kg"}
+
+    assert _normalize_quantity(item)["quantity"] == 1.0
+
+
+def test_chicken_breast_10kg_stays_at_1kg():
+    item = {"name": "חזה עוף", "quantity": 1.0, "unit": "kg"}
+
+    assert _normalize_quantity(item)["quantity"] == 1.0
+
+
+def test_chicken_breast_14kg_rounds_up_to_2kg():
+    item = {"name": "chicken breast", "quantity": 1.4, "unit": "kg"}
+
+    assert _normalize_quantity(item)["quantity"] == 2.0
+
+
+def test_chicken_breast_21kg_rounds_up_to_3kg():
+    item = {"name": "chicken breast", "quantity": 2.1, "unit": "kg"}
+
+    assert _normalize_quantity(item)["quantity"] == 3.0
+
+
+def test_chicken_breast_matches_regardless_of_case():
+    item = {"name": "Chicken Breast", "quantity": 0.4, "unit": "kg"}
+
+    assert _normalize_quantity(item)["quantity"] == 1.0
+
+
+def test_tomato_at_half_kg_stays_fractional_not_a_general_kg_rounding_rule():
+    # Real product decision: this must NOT become a blanket "round up any kg quantity"
+    # rule -- loose produce genuinely sells (and prices) fractionally.
+    item = {"name": "tomato", "quantity": 0.5, "unit": "kg"}
+
+    assert _normalize_quantity(item) == {"name": "tomato", "quantity": 0.5, "unit": "kg"}
+
+
+def test_chicken_breast_with_a_non_kg_unit_is_left_untouched():
+    # Only the whole-kg constraint is being fixed here -- a chicken-breast item that
+    # somehow carries a different unit (e.g. a count) has no basis for this rounding.
+    item = {"name": "חזה עוף", "quantity": 3, "unit": "large"}
+
+    assert _normalize_quantity(item) == {"name": "חזה עוף", "quantity": 3, "unit": "large"}
+
+
+def test_chicken_breast_with_no_quantity_is_left_untouched():
+    item = {"name": "חזה עוף", "quantity": None, "unit": None}
+
+    assert _normalize_quantity(item) == {"name": "חזה עוף", "quantity": None, "unit": None}
+
+
+def test_unrelated_item_is_left_completely_unchanged():
+    item = {"name": "milk", "quantity": 1, "unit": "unit", "search_name": "חלב"}
+
+    assert _normalize_quantity(item) == item
