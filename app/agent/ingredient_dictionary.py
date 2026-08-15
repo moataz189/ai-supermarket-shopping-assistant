@@ -55,6 +55,22 @@ _OF_EXTRACTION_HEADS = {"juice", "zest", "peel", "rind"}
 _OF_PATTERN = re.compile(r"^(?:" + "|".join(_OF_EXTRACTION_HEADS) + r")s? of (.+)$")
 
 
+def _singular_candidates(word: str):
+    """Yields plausible singular forms of a plural English word -- deliberately simple
+    (the common patterns: tomatoes -> tomato, cherries -> cherry, onions -> onion),
+    never a full lemmatizer. Multiple candidates because the suffix alone is ambiguous
+    (both "es"->"" and "s"->"" apply to a word like "olives" -- one of "oliv"/"olive" is
+    the real word, and it's cheaper to try both and let the dictionary miss on the wrong
+    one than to hand-encode English pluralization rules). Real user report (2026-08-15):
+    "tomatoes" had no dictionary entry even though "tomato" did -- reported "Missing"."""
+    if word.endswith("ies") and len(word) > 4:
+        yield word[:-3] + "y"
+    if word.endswith("es") and len(word) > 3:
+        yield word[:-2]
+    if word.endswith("s") and len(word) > 3:
+        yield word[:-1]
+
+
 class IngredientTranslation(TypedDict):
     english_name: str
     hebrew_search_name: str
@@ -90,6 +106,9 @@ def _normalized_candidates(name: str):
     match = _OF_PATTERN.match(name)
     if match:
         yield match.group(1)
+    if words:
+        for singular in _singular_candidates(words[-1]):
+            yield " ".join([*words[:-1], singular])
 
 
 def translate_ingredient(dictionary: dict[str, str], english_name: str) -> IngredientTranslation:
