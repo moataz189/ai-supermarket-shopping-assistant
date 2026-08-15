@@ -193,6 +193,70 @@ def test_pasta_shells_resolves_to_a_clean_non_duplicated_hebrew_term():
     assert dictionary["pasta shells"] == "קונכיות פסטה"
 
 
+def test_es_plural_is_stripped_on_a_miss():
+    # Real user report (2026-08-15): "tomatoes" reported Missing even though the
+    # dictionary has "tomato" -- no rule normalized the plural away before this fix.
+    dictionary = {"tomato": "עגבנייה"}
+
+    result = translate_ingredient(dictionary, "tomatoes")
+
+    assert result == {"english_name": "tomatoes", "hebrew_search_name": "עגבנייה", "resolved": True}
+
+
+def test_s_plural_is_stripped_on_a_miss():
+    dictionary = {"onion": "בצל"}
+
+    result = translate_ingredient(dictionary, "onions")
+
+    assert result == {"english_name": "onions", "hebrew_search_name": "בצל", "resolved": True}
+
+
+def test_ies_plural_is_stripped_on_a_miss():
+    dictionary = {"cherry": "דובדבן"}
+
+    result = translate_ingredient(dictionary, "cherries")
+
+    assert result == {"english_name": "cherries", "hebrew_search_name": "דובדבן", "resolved": True}
+
+
+def test_es_plural_of_a_word_already_ending_in_e_still_resolves():
+    # "olives" is ambiguous by suffix alone (both "es"->"" and "s"->"" apply) -- only
+    # "olive" (the "s"->"" candidate) is a real word/dictionary entry; "oliv" (the
+    # "es"->"" candidate) simply misses and is skipped, not a wrong match.
+    dictionary = {"olive": "זית"}
+
+    result = translate_ingredient(dictionary, "olives")
+
+    assert result == {"english_name": "olives", "hebrew_search_name": "זית", "resolved": True}
+
+
+def test_plural_strip_applies_to_the_last_word_of_a_multi_word_name():
+    dictionary = {"cherry tomato": "עגבניית שרי"}
+
+    result = translate_ingredient(dictionary, "cherry tomatoes")
+
+    assert result == {"english_name": "cherry tomatoes", "hebrew_search_name": "עגבניית שרי", "resolved": True}
+
+
+def test_exact_plural_entry_wins_over_the_singular_strip():
+    # If the plural itself already has its own real, independently curated entry, the
+    # exact phrase must win outright -- never falling through to the singular.
+    dictionary = {"tomatoes in juice": "מיץ עגבניות", "tomato": "עגבנייה"}
+
+    result = translate_ingredient(dictionary, "tomatoes in juice")
+
+    assert result == {"english_name": "tomatoes in juice", "hebrew_search_name": "מיץ עגבניות", "resolved": True}
+
+
+def test_tomatoes_resolves_against_the_real_dictionary():
+    dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
+
+    assert dictionary["tomato"] == "עגבנייה"
+    assert "tomatoes" not in dictionary  # the gap this normalization fills, not a data fix
+    result = translate_ingredient(dictionary, "tomatoes")
+    assert result == {"english_name": "tomatoes", "hebrew_search_name": "עגבנייה", "resolved": True}
+
+
 def test_bare_pepper_no_longer_collides_with_bell_pepper():
     # Real data bug: "pepper" (the spice) and "bell pepper" (the vegetable) both
     # resolved to the identical bare Hebrew term "פלפל" -- a genuine homonym in Hebrew
