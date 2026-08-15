@@ -78,8 +78,18 @@ async def _candidates_for(
         candidates = compliant
 
     if len(candidates) > 1:
-        relevance_name = item.get("search_name") or item.get("display_name") or name
-        candidates = await filter_relevant_candidates(llm, relevance_name, candidates)
+        # A candidate matching `label` verbatim is unambiguous -- resolve_items.py's own
+        # _resolve_item already has this exact-match shortcut for its first search; this
+        # second, independent search had no equivalent protection, so it stayed exposed
+        # to relevance-filter LLM non-determinism even when a deterministic exact match
+        # was sitting right there (real user report, 2026-08-16: a "tomato sauce"
+        # candidate kept winning here over an exact-match plain "tomato" product).
+        exact = [c for c in candidates if c["name"].strip().lower() == label.strip().lower()]
+        if len(exact) == 1:
+            candidates = exact
+        else:
+            relevance_name = item.get("search_name") or item.get("display_name") or name
+            candidates = await filter_relevant_candidates(llm, relevance_name, candidates)
 
     if not candidates:
         reason = "dietary_conflict" if name in dietary_conflicts else "not_found"
