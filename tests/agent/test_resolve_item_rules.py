@@ -1,10 +1,11 @@
 from app.agent.nodes.resolve_items import (
     MAX_CANDIDATES_SHOWN,
+    _candidates_by_retailer,
     _dedupe_by_name,
     _normalize_quantity,
     _resolve_item,
 )
-from tests.agent.fakes import FakeLLM
+from tests.agent.fakes import FakeLLM, FakeSupermarketDataClient
 
 
 async def test_single_candidate_auto_resolves():
@@ -314,3 +315,49 @@ def test_unrelated_item_is_left_completely_unchanged():
     item = {"name": "milk", "quantity": 1, "unit": "unit", "search_name": "חלב"}
 
     assert _normalize_quantity(item) == item
+
+
+# ---------------------------------------------------------------------------
+# Known item_code override (2026-08-16): "pasta shells" at Shufersal is pinned directly
+# to its real item_code rather than another attempt at a general search fix -- see
+# _KNOWN_ITEM_OVERRIDES's own docstring for the full history of why.
+# ---------------------------------------------------------------------------
+
+
+async def test_known_override_skips_search_and_uses_the_pinned_item_code():
+    # search_product is never given a real query result for "pasta shells" at
+    # shufersal -- if the override weren't applied, this would return no candidates.
+    client = FakeSupermarketDataClient(
+        candidates={},
+        prices={("shufersal", "8008912010331"): {"unit_price": 8.9, "price": 8.9}},
+    )
+
+    result = await _candidates_by_retailer(client, "קונכיות", set(), item_name="pasta shells")
+
+    assert result["shufersal"] == [
+        {"item_code": "8008912010331", "name": "ניוקטי סרדי קונכיה500גר", "price": 8.9}
+    ]
+
+
+async def test_known_override_only_applies_to_its_own_retailer():
+    # Rami Levy has no override for "pasta shells" -- it must still go through the
+    # normal catalog search, unaffected by Shufersal's override.
+    client = FakeSupermarketDataClient(
+        candidates={("קונכיות", "rami_levy"): [{"item_code": "R1", "name": "קונכיות פסטה", "price": 5.0}]},
+        prices={("shufersal", "8008912010331"): {"unit_price": 8.9, "price": 8.9}},
+    )
+
+    result = await _candidates_by_retailer(client, "קונכיות", set(), item_name="pasta shells")
+
+    assert result["rami_levy"] == [{"item_code": "R1", "name": "קונכיות פסטה", "price": 5.0}]
+
+
+async def test_unrelated_item_never_triggers_the_override():
+    client = FakeSupermarketDataClient(
+        candidates={("חלב", "shufersal"): [{"item_code": "S1", "name": "חלב תנובה", "price": 6.0}]},
+        prices={},
+    )
+
+    result = await _candidates_by_retailer(client, "חלב", set(), item_name="milk")
+
+    assert result["shufersal"] == [{"item_code": "S1", "name": "חלב תנובה", "price": 6.0}]

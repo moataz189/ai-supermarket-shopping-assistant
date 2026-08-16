@@ -103,6 +103,24 @@ async def test_second_search_skips_the_llm_call_when_a_candidate_matches_the_lab
     assert lines[0]["product_name"] == "עגבניה"
 
 
+async def test_second_search_skips_entirely_for_a_known_item_code_override():
+    # Real user report (2026-08-16): "pasta shells" at Shufersal is pinned directly to
+    # its real item_code (resolve_items.py's _KNOWN_ITEM_OVERRIDES) -- this second,
+    # independent search must use the same override rather than re-querying the catalog
+    # by the resolved label, which would be a redundant round trip searching for the
+    # exact product name as if it were a search term.
+    client = _StubClient([{"item_code": "8008912010331", "name": "ניוקטי סרדי קונכיה500גר", "price": 8.9}])
+    llm = FakeLLM(relevant_names=[])  # would fail loudly (not_found) if search ran instead
+    items = [{"name": "pasta shells", "search_name": "קונכיות"}]
+
+    lines, missing = await _add_every_item(client, llm, "shufersal", items, {}, set(), [])
+
+    assert missing == []
+    assert len(lines) == 1
+    assert lines[0]["item_code"] == "8008912010331"
+    assert lines[0]["product_name"] == "ניוקטי סרדי קונכיה500גר"
+
+
 async def test_second_search_still_relevance_filters_when_no_candidate_matches_the_label_exactly():
     # The exact-match shortcut must not swallow genuine ambiguity -- when nothing matches
     # the label verbatim (both candidates are qualified/compound names), relevance

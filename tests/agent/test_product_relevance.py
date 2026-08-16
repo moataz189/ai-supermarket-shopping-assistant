@@ -254,6 +254,37 @@ async def test_branded_pet_food_whose_name_does_not_say_pet_is_excluded():
     assert result == [{"name": "טונה במי מלח"}]
 
 
+async def test_known_pet_food_brands_are_excluded_even_if_the_llm_would_have_approved_them():
+    # The real reliability guarantee: known pet-food brands/indicators are removed
+    # deterministically *before* the LLM ever sees them (see _is_pet_food) -- real user
+    # report (2026-08-16): the LLM kept wrongly approving these even with the prompt
+    # explicitly naming them. The stub LLM here is deliberately configured to answer as
+    # if *everything* (including the pet food) were relevant -- if the deterministic
+    # filter weren't applied first, this test would incorrectly include the pet food.
+    candidates = [
+        {"name": "טונה במי מלח"},
+        {"name": "פריסקיז טייסטי טונה 156 גר"},
+        {"name": "נייטיב ווי טונה"},
+        {"name": "סופר קט טונה 3 ק\"ג"},
+    ]
+    llm = _StubLLM(content="\n".join(c["name"] for c in candidates))  # "approves" all 4
+
+    result = await filter_relevant_candidates(llm, "טונה", candidates)
+
+    assert result == [{"name": "טונה במי מלח"}]
+
+
+def test_is_pet_food_matches_known_brands_and_indicators_as_whole_words():
+    from app.agent.nodes.product_relevance import _is_pet_food
+
+    assert _is_pet_food("פריסקיז טייסטי טונה 156 גר") is True
+    assert _is_pet_food("נייטיב ווי טונה") is True
+    assert _is_pet_food("סופר קט טונה 3 ק\"ג") is True
+    assert _is_pet_food("שלוקים לחתול טעם טונה") is True
+    assert _is_pet_food("טונה במי מלח") is False
+    assert _is_pet_food("סטייק טונה אלבקור") is False
+
+
 def test_relevance_prompt_explicitly_names_friskies_as_a_pet_food_brand():
     assert "Friskies" in RELEVANCE_PROMPT
     assert "cat food" in RELEVANCE_PROMPT
