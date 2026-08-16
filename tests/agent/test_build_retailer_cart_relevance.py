@@ -64,13 +64,25 @@ async def test_second_search_falls_back_to_not_found_when_nothing_is_relevant():
     assert missing == [{"name": "onion", "reason": "not_found"}]
 
 
-async def test_second_search_skips_the_llm_call_for_a_single_candidate():
-    # Matches the same cheap-path optimization used throughout resolve_items.py -- a lone
-    # candidate is accepted directly, no LLM round trip for something there's no choice
-    # to make about. Configuring relevant_names=[] on the FakeLLM would make this test
-    # fail loudly if the filter were (incorrectly) invoked anyway.
-    client = _StubClient([REAL_ONION])
+async def test_second_search_still_relevance_filters_a_single_candidate():
+    # Real user report (2026-08-16): a plain "onion" search ("בצל") that happened to
+    # return exactly one raw hit -- "קראנצוס בצל", a crunchy onion-flavored snack -- was
+    # previously accepted with no relevance check at all just because it was the only
+    # hit. A lone candidate must still go through the same relevance filter as any other.
+    snack = {"item_code": "S-SNACK", "name": "קראנצוס בצל", "price": 6.9}
+    client = _StubClient([snack])
     llm = FakeLLM(relevant_names=[])
+    items = [{"name": "onion", "search_name": "בצל"}]
+
+    lines, missing = await _add_every_item(client, llm, "shufersal", items, {}, set(), [])
+
+    assert lines == []
+    assert missing == [{"name": "onion", "reason": "not_found"}]
+
+
+async def test_second_search_accepts_a_single_genuinely_relevant_candidate():
+    client = _StubClient([REAL_ONION])
+    llm = FakeLLM(relevant_names=["בצל אדום"])
     items = [{"name": "onion", "search_name": "בצל"}]
 
     lines, missing = await _add_every_item(client, llm, "shufersal", items, {}, set(), [])

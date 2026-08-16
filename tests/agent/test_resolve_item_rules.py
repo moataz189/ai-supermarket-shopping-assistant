@@ -8,7 +8,9 @@ from app.agent.nodes.resolve_items import (
 from tests.agent.fakes import FakeLLM, FakeSupermarketDataClient
 
 
-async def test_single_candidate_auto_resolves():
+async def test_single_relevant_candidate_resolves():
+    # No relevance filtering configured on the FakeLLM (relevant_names=None) — a no-op
+    # pass-through, echoing the single candidate back as relevant.
     candidates = [{"item_code": "S1", "name": "Kiwi", "price": 3.0}]
 
     label, still_ambiguous, effective = await _resolve_item(FakeLLM(), "kiwi", candidates, None, "no_preference")
@@ -16,6 +18,22 @@ async def test_single_candidate_auto_resolves():
     assert label == "Kiwi"
     assert still_ambiguous is False
     assert effective == candidates
+
+
+async def test_single_irrelevant_candidate_is_rejected_not_auto_accepted():
+    # Real user report (2026-08-16): a plain "onion" search ("בצל") that happened to
+    # return exactly one raw hit -- "קראנצוס בצל", a crunchy onion-flavored snack, not a
+    # real onion -- was previously auto-accepted with no relevance check at all just
+    # because it was the only hit. A single candidate must still go through relevance
+    # filtering, not be blindly trusted just because there's no choice to make.
+    candidates = [{"item_code": "S1", "name": "קראנצוס בצל", "price": 6.9}]
+    llm = FakeLLM(relevant_names=[])
+
+    label, still_ambiguous, effective = await _resolve_item(llm, "בצל", candidates, None, "no_preference")
+
+    assert label == "בצל"  # treated as a miss, not the wrong product
+    assert still_ambiguous is False
+    assert effective == []
 
 
 async def test_exact_name_match_auto_resolves():
