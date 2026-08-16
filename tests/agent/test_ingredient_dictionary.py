@@ -184,13 +184,18 @@ def test_chilies_and_chillies_resolve_against_the_real_dictionary():
     assert dictionary["chillies"] == "פלפל חריף"
 
 
-def test_pasta_shells_resolves_to_a_clean_non_duplicated_hebrew_term():
-    # Real data bug: the CSV's own stored value was malformed ("קונכיות פסטה פסטה" --
-    # "shells pasta pasta", the word duplicated) -- a data fix, not a lookup/normalization
-    # issue (this was already an exact key).
+def test_pasta_shells_resolves_to_just_the_shape_word_not_a_two_word_phrase():
+    # Real data bug (2026-08-14): the CSV's own stored value was malformed ("קונכיות פסטה
+    # פסטה" -- "shells pasta pasta", the word duplicated), fixed to "קונכיות פסטה".
+    # Real user report (2026-08-16): that two-word term still missed a real live product
+    # ("ניוקטי סרדי קונכיה500גר") whose name never includes the generic word "פסטה" at
+    # all -- search_candidates requires every word of the query to be present, so the
+    # mandatory second word excluded a genuine match. "קונכיות" (the specific shape
+    # name) is unambiguous enough on its own in a grocery-catalog search; dropping the
+    # redundant "פסטה" only ever finds a superset of what the two-word term already did.
     dictionary = load_ingredient_dictionary(REAL_DICTIONARY_PATH)
 
-    assert dictionary["pasta shells"] == "קונכיות פסטה"
+    assert dictionary["pasta shells"] == "קונכיות"
 
 
 def test_es_plural_is_stripped_on_a_miss():
