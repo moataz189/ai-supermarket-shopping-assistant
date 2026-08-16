@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: recipe-mcp
-          image: moataz189/recipe-mcp:2cb6f49b3250b5536f2c70059c77f1ff05f0b492
+          image: moataz189/recipe-mcp:08cbc0c973ac56943d4b0c45a44b31c5345058eb
 
           ports:
             - containerPort: 8002

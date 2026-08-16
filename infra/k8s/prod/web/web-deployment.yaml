@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: web
-          image: moataz189/supermarket-web:8e13c787342bf98e3e20a7443cb24d873c5482b3
+          image: moataz189/supermarket-web:08cbc0c973ac56943d4b0c45a44b31c5345058eb
           # No AGENT_INTERNAL_URL-equivalent env var (unlike the reference frontend):
           # web/nginx.conf proxies /api/ to a build-time-baked "http://backend:8000/" for
           # local docker-compose, where the backend service is literally named "backend".
