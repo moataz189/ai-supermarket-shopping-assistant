@@ -3,6 +3,17 @@
   "title": "Shakshuka",
   "servings": 4,
   "readyInMinutes": 30,
+  "instructions": "<ol><li>Heat the olive oil in a pan and cook the onion until soft.</li><li>Add the tomatoes and simmer for 10 minutes.</li><li>Crack the eggs into the sauce and cook until set.</li></ol>",
+  "analyzedInstructions": [
+    {
+      "name": "",
+      "steps": [
+        { "number": 1, "step": "Heat the olive oil in a pan and cook the onion until soft." },
+        { "number": 2, "step": "Add the tomatoes and simmer for 10 minutes." },
+        { "number": 3, "step": "Crack the eggs into the sauce and cook until set." }
+      ]
+    }
+  ],
   "extendedIngredients": [
     {
       "id": 1123,

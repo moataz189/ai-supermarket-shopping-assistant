@@ -20,6 +20,9 @@ class RecipeIngredient(BaseModel):
 
 
 class RecipeInfo(BaseModel):
+    id: int | None = None  # the Spoonacular recipe id -- lets the frontend later fetch
+    # this exact recipe's cooking instructions via POST /recipe-instructions, without
+    # resuming this conversation's LangGraph thread (see app/api/routes/recipe.py).
     title: str | None = None
     servings: int | None = None
     ingredients: list[RecipeIngredient]
@@ -127,6 +130,21 @@ class RetailerCartResult(BaseModel):
     blocked: bool
     blocked_reason: str | None = None
     cart_url: str | None = None
+
+
+class RecipeInstructionsRequest(BaseModel):
+    recipe_id: int
+
+
+class RecipeInstructionStep(BaseModel):
+    number: int
+    step: str
+
+
+class RecipeInstructionsResponse(BaseModel):
+    recipe_id: int
+    instructions: str | None = None
+    steps: list[RecipeInstructionStep] | None = None
 
 
 class ChatResponse(BaseModel):

@@ -15,6 +15,10 @@ def recipe_info(state) -> dict | None:
         return None
     chosen_recipe = state.get("chosen_recipe") or {}
     return {
+        # The Spoonacular recipe id -- carried through so a later, separate request (see
+        # app/api/routes/recipe.py) can fetch this exact recipe's cooking instructions
+        # without needing to resume this conversation's LangGraph thread at all.
+        "id": chosen_recipe.get("id"),
         "title": chosen_recipe.get("display_title") or chosen_recipe.get("title"),
         "servings": chosen_recipe.get("servings"),
         "ingredients": [

@@ -46,6 +46,7 @@ class RecipeClient(Protocol):
     async def search_recipes(self, query: str) -> list[dict]: ...
     async def get_recipe(self, recipe_id: int) -> dict | None: ...
     async def get_recipe_ingredients(self, recipe_id: int, servings: int | None = None) -> dict | None: ...
+    async def get_recipe_instructions(self, recipe_id: int) -> dict | None: ...
 
 
 class McpRecipeClient:
@@ -79,6 +80,9 @@ class McpRecipeClient:
         return await self._call(
             "get_recipe_ingredients", {"recipe_id": recipe_id, "servings": servings}
         )
+
+    async def get_recipe_instructions(self, recipe_id: int) -> dict | None:
+        return await self._call("get_recipe_instructions", {"recipe_id": recipe_id})
 
 
 class RetailerCartClient(Protocol):
