@@ -1,4 +1,5 @@
 from app.agent.nodes.product_relevance import filter_relevant_candidates
+from app.agent.nodes.resolve_items import _KNOWN_ITEM_OVERRIDES, _override_candidates
 from app.agent.quantity import estimate_weight_kg_for_count, estimated_package_count, is_count_unit
 from app.agent.state import AgentState
 from app.dietary.rules import find_substitute_query, forbidden_tags, tags_for_name
@@ -68,8 +69,19 @@ async def _candidates_for(
     on price alone. Relevance-filtered here too, the same way, whenever there's more than
     one candidate to choose between — the whole point of this second search existing at
     all is to price the *cheapest genuinely matching* product, not just the cheapest
-    catalog hit."""
-    candidates = await client.search_product(label, retailer)
+    catalog hit.
+
+    A known item_code override (see resolve_items.py's _KNOWN_ITEM_OVERRIDES) skips
+    this search entirely for the matching (item, retailer) pair -- resolve_items.py's
+    own resolution already used the override, so this independent second search would
+    otherwise just re-query the catalog by the override's exact product name, a
+    redundant round trip that gains nothing since the item_code is already known."""
+    override = _KNOWN_ITEM_OVERRIDES.get((name, retailer))
+    if override is not None:
+        item_code, override_name = override
+        candidates = await _override_candidates(client, retailer, item_code, override_name)
+    else:
+        candidates = await client.search_product(label, retailer)
     if forbidden:
         compliant = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
         if not compliant:

@@ -45,17 +45,45 @@ def _normalize_quantity(item: dict) -> dict:
 # to be silently lost before the relevance filter ever saw them.
 MAX_CANDIDATES_SHOWN = 5
 
+# Explicit item_code overrides for a specific (ingredient, retailer) pair, bypassing
+# catalog search entirely -- real user report (2026-08-16): "pasta shells" at Shufersal
+# kept failing through several general search/translation fixes in a row (the mandatory
+# second word, the fused weight suffix, Hebrew singular/plural) because the real live
+# product name ("ניוקטי סרדי קונכיה500גר") doesn't reliably match any general
+# translation. By explicit user decision, this one case is pinned directly to its real
+# item_code rather than another attempt at a general search fix -- the price is still
+# fetched live (see _override_candidates), only the search/matching step is skipped.
+_KNOWN_ITEM_OVERRIDES: dict[tuple[str, str], tuple[str, str]] = {
+    ("pasta shells", "shufersal"): ("8008912010331", "ניוקטי סרדי קונכיה500גר"),
+}
+
+
+async def _override_candidates(client, retailer: str, item_code: str, name: str) -> list[dict]:
+    price_info = await client.get_product_price(retailer, item_code)
+    if price_info is None:
+        return []
+    return [{"item_code": item_code, "name": name, "price": price_info["price"]}]
+
 
 async def _candidates_by_retailer(
-    client, name: str, forbidden: set[str]
+    client, name: str, forbidden: set[str], item_name: str | None = None
 ) -> dict[str, list[dict]]:
     """Keeps each retailer's candidates separate — never merged away — so the user can
     see which retailer actually carries which option before choosing (spec §3). Candidates
     that violate `forbidden` dietary tags are filtered out here too, so a filtered-out option
-    never appears in the per-retailer breakdown shown to the user (CP7)."""
+    never appears in the per-retailer breakdown shown to the user (CP7).
+
+    `item_name` (the item's own canonical name, distinct from `name` -- the already-
+    localized search term) is only used to check `_KNOWN_ITEM_OVERRIDES`; a retailer
+    with a known override skips client.search_product entirely for that retailer."""
     result = {}
     for retailer in RETAILERS:
-        candidates = await client.search_product(name, retailer)
+        override = _KNOWN_ITEM_OVERRIDES.get((item_name, retailer))
+        if override is not None:
+            item_code, override_name = override
+            candidates = await _override_candidates(client, retailer, item_code, override_name)
+        else:
+            candidates = await client.search_product(name, retailer)
         if forbidden:
             candidates = [c for c in candidates if not (tags_for_name(c["name"]) & forbidden)]
         result[retailer] = candidates
@@ -180,9 +208,10 @@ def make_resolve_items(client, llm):
 
         to_search = [item["name"] for item in items if item["name"] not in item_candidates]
         if to_search:
-            searched = await asyncio.gather(
-                *(_candidates_by_retailer(client, search_names[name], forbidden) for name in to_search)
-            )
+            searched = await asyncio.gather(*(
+                _candidates_by_retailer(client, search_names[name], forbidden, item_name=name)
+                for name in to_search
+            ))
             for name, by_retailer in zip(to_search, searched, strict=True):
                 item_candidates[name] = by_retailer
 
