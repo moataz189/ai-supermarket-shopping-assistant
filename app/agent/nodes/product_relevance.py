@@ -1,6 +1,44 @@
 import logging
+import re
 
 logger = logging.getLogger(__name__)
+
+# Deterministic pet-food brand/indicator exclusion, applied BEFORE the LLM ever sees a
+# candidate -- real user report (2026-08-16): the LLM kept selecting known pet-food
+# products ("פריסקיז טייסטי טונה", "נייטיב ווי טונה", "סופר קט טונה") for a plain
+# "tuna" search even after RELEVANCE_PROMPT explicitly named these brands -- genuine,
+# repeated non-determinism the prompt alone couldn't reliably prevent. A short,
+# deterministic, word-boundary-matched (not substring) word list removes the known
+# cases with 100% reliability, leaving only the genuinely judgment-based exclusions
+# (sauce/snack/appliance/etc.) to the LLM. General across every ingredient search, not
+# specific to tuna -- classified by brand/indicator word, exactly like the existing
+# non-food-item category already is, not by which grocery item was requested.
+_PET_FOOD_INDICATORS = {
+    "לחתול", "לחתולים", "לכלב", "לכלבים", "לגורים",
+    "פריסקיז", "וויסקס", "שיבא", "פליקס", "קט",
+}
+# Multi-word brand names, matched as a plain phrase rather than a single word -- "נייטיב
+# ווי" ("Native Wet", a real pet food line, 2026-08-16) doesn't reduce to any single safe
+# indicator word ("ווי"/"wet" alone is far too short and common to word-boundary-match
+# without real false-positive risk).
+_PET_FOOD_PHRASES = {"נייטיב ווי"}
+_HEBREW_LETTERS = "א-ת"
+
+
+def _word_boundary_pattern(word: str) -> re.Pattern[str]:
+    """Matches `word` only when it isn't fused directly onto another Hebrew letter on
+    either side -- mirrors app/db/repositories.py's identical helper (see that module's
+    docstring for the full rationale); duplicated rather than imported since this
+    module operates on already-retrieved candidate name strings, not database queries,
+    and the two layers are kept independent on purpose."""
+    escaped = re.escape(word)
+    return re.compile(rf"(?<![{_HEBREW_LETTERS}]){escaped}(?![{_HEBREW_LETTERS}])")
+
+
+def _is_pet_food(name: str) -> bool:
+    if any(phrase in name for phrase in _PET_FOOD_PHRASES):
+        return True
+    return any(_word_boundary_pattern(word).search(name) for word in _PET_FOOD_INDICATORS)
 
 RELEVANCE_PROMPT = (
     "You are the product-relevance component of an AI supermarket shopping assistant. "
@@ -77,7 +115,16 @@ async def filter_relevant_candidates(llm, item_name: str, candidates: list[dict]
     `candidates` unfiltered — exactly the pre-existing behavior — rather than raising. A
     successful call that judges *no* candidate relevant returns an empty list; that's a
     real, respected answer (the same way "nothing matched" is treated elsewhere in this
-    codebase), not a failure to fall back from."""
+    codebase), not a failure to fall back from.
+
+    A known pet-food brand/indicator (see _is_pet_food) is removed deterministically
+    before the LLM ever sees it — real user report (2026-08-16): the LLM kept selecting
+    known pet-food products even after RELEVANCE_PROMPT explicitly named the brand,
+    repeated non-determinism a prompt instruction alone couldn't reliably prevent."""
+    candidates = [c for c in candidates if not _is_pet_food(c["name"])]
+    if not candidates:
+        return []
+
     candidate_names = [c["name"] for c in candidates]
     user_message = (
         f"Requested item: {item_name}\n\nCandidate product names:\n"
