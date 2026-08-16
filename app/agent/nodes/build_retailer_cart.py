@@ -66,10 +66,13 @@ async def _candidates_for(
     from scratch and previously fed the result straight to `min(price)` with no semantic
     check at all, so a cheap unrelated product containing `label` as a substring (a
     prepared "mashed potato with onion" dish for a plain "onion" search) could still win
-    on price alone. Relevance-filtered here too, the same way, whenever there's more than
-    one candidate to choose between — the whole point of this second search existing at
-    all is to price the *cheapest genuinely matching* product, not just the cheapest
-    catalog hit.
+    on price alone. Relevance-filtered here too, the same way, for any nonempty result —
+    including a single candidate (real user report, 2026-08-16: a plain "onion" search
+    that happened to return exactly one raw hit, "קראנצוס בצל" -- a crunchy onion-flavored
+    snack -- was accepted with no relevance check at all just because it was the only hit)
+    — the whole point of this second search existing at all is to price the *cheapest
+    genuinely matching* product, not just the cheapest catalog hit, and "the only hit"
+    is not the same thing as "a genuine match".
 
     A known item_code override (see resolve_items.py's _KNOWN_ITEM_OVERRIDES) skips
     this search entirely for the matching (item, retailer) pair -- resolve_items.py's
@@ -89,7 +92,11 @@ async def _candidates_for(
             compliant = await client.search_product(sub_query, retailer) if sub_query else []
         candidates = compliant
 
-    if len(candidates) > 1:
+    # A known item_code override is already a trusted, explicit (ingredient, retailer)
+    # mapping -- resolve_items.py's own resolution already skipped search/matching for
+    # it the same way; relevance-filtering it again here would just risk the LLM
+    # second-guessing a pairing a human already pinned down deterministically.
+    if candidates and override is None:
         # A candidate matching `label` verbatim is unambiguous -- resolve_items.py's own
         # _resolve_item already has this exact-match shortcut for its first search; this
         # second, independent search had no equivalent protection, so it stayed exposed
