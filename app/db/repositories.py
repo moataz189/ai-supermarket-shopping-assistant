@@ -1,9 +1,18 @@
-from sqlalchemy import func, or_, select
+import re
+
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import RetailerProduct
 
 UNIT_TO_BASE = {"g": 1, "kg": 1000, "ml": 1, "l": 1000, "unit": 1}
+
+_HEBREW_LETTERS = "א-ת"
+
+# Safety valve on the raw SQL fetch, before the Python-side boundary filter (see
+# _word_boundary_pattern) narrows it down -- not the real precision mechanism, just a
+# bound against a pathological word matching thousands of rows. Generous on purpose.
+_MAX_RAW_MATCHES = 500
 
 
 def unit_price(price: float, package_size: float, package_unit: str) -> float:
@@ -30,28 +39,42 @@ def _hebrew_plural_singular_variant(word: str) -> str | None:
     return None
 
 
-def _word_token_conditions(word: str):
-    """Matches `word` as a complete, space-delimited token in `RetailerProduct.name` --
-    not merely a substring fused inside a longer word. Real user report (2026-08-14): a
-    plain `ILIKE '%חלב%'` ("milk") also matched חלבון/חלבה/חלבי/סחלב ("protein"/"halva"/
-    "dairy [adj]"/"orchid") -- unrelated words that merely happen to contain the same three
-    letters -- burying the ~20 genuine milk products among hundreds of false positives well
-    past the retrieval limit, so the relevance filter downstream never saw them at all.
+def _word_boundary_pattern(word: str) -> re.Pattern[str]:
+    """Matches `word` only when it isn't fused directly onto another Hebrew letter (a
+    different word) on either side. Real user report (2026-08-14): a plain
+    `ILIKE '%חלב%'` ("milk") also matched חלבון/חלבה/חלבי/סחלב ("protein"/"halva"/
+    "dairy [adj]"/"orchid") -- unrelated words that merely happen to contain the same
+    three letters -- burying the ~20 genuine milk products among hundreds of false
+    positives well past the retrieval limit, so the relevance filter downstream never
+    saw them at all.
 
-    Four ilike patterns cover every position a token can occupy (whole name, leading,
-    trailing, or interior), using plain space-delimited boundaries -- portable across
-    Postgres and SQLite alike, unlike a DB-specific regex/`\\y` word-boundary (already
-    ruled out for that reason -- see search_candidates). This still won't catch every
-    false positive (e.g. "ריבת חלב", dulce de leche -- "חלב" genuinely is its own word
-    there, just the wrong product category); that's a semantic distinction left to
-    product_relevance.py's LLM filter, which can only do its job once the real candidates
-    actually make it into the pool this function returns."""
-    return or_(
-        RetailerProduct.name.ilike(word),
-        RetailerProduct.name.ilike(f"{word} %"),
-        RetailerProduct.name.ilike(f"% {word}"),
-        RetailerProduct.name.ilike(f"% {word} %"),
-    )
+    Deliberately treats a transition from a Hebrew letter to *anything else* (a digit,
+    punctuation, whitespace, or the string's own start/end) as a real word boundary, not
+    only whitespace -- real user report (2026-08-16): retailer feeds routinely fuse a
+    weight/count suffix directly onto the preceding word with no space at all (e.g.
+    "קונכיה500גר", "טונה4*160ג") -- a whitespace-only boundary check (this function's
+    previous, SQL-side implementation) missed these genuine matches entirely, while
+    still correctly needing to exclude two Hebrew letters directly touching (סחלב) as
+    fusion into a different word. Implemented in Python (not SQL) specifically so this
+    distinction is checkable at all: portability across Postgres/SQLite already ruled
+    out a DB-side regex/`\\y` word-boundary (see search_candidates), and plain
+    space-delimited LIKE patterns can't express "boundary unless the next character is
+    a Hebrew letter" either. This still won't catch every false positive (e.g. "ריבת
+    חלב", dulce de leche -- "חלב" genuinely is its own word there, just the wrong
+    product category); that's a semantic distinction left to product_relevance.py's LLM
+    filter, which can only do its job once the real candidates actually make it into
+    the pool this function returns."""
+    escaped = re.escape(word)
+    return re.compile(rf"(?<![{_HEBREW_LETTERS}]){escaped}(?![{_HEBREW_LETTERS}])")
+
+
+def _matches_word(name: str, word: str) -> bool:
+    """True if `word` (or its Hebrew plural/singular variant) appears in `name` as a
+    genuine token per _word_boundary_pattern."""
+    if _word_boundary_pattern(word).search(name):
+        return True
+    variant = _hebrew_plural_singular_variant(word)
+    return bool(variant and _word_boundary_pattern(variant).search(name))
 
 
 class ProductRepository:
@@ -66,9 +89,12 @@ class ProductRepository:
         # since retailer product names don't reliably use the same word order a
         # translated multi-word ingredient name does.
         #
-        # Each word also tries its Hebrew plural/singular variant (see
-        # _hebrew_plural_singular_variant) as an OR alternative -- real user report:
-        # "קונכיות" (plural) never matched a real product's "קונכיה" (singular).
+        # The SQL stage is a broad, plain substring pass per word (still ANDed) -- just
+        # wide enough to bound the query, per _MAX_RAW_MATCHES. The actual word-boundary
+        # precision (see _matches_word/_word_boundary_pattern, including the Hebrew
+        # plural/singular variant) happens in Python afterward, since it needs
+        # Hebrew-letter-vs-anything-else adjacency checks a portable SQL LIKE can't
+        # express.
         #
         # Results are ordered shortest-name-first before the limit is applied -- real user
         # report (2026-08-14): with no ordering, a plain product ("עגבניה"/"בננה", tomato/
@@ -77,15 +103,22 @@ class ProductRepository:
         # tomato puree, a banana-flavored snack) survived the cut. A shorter name
         # containing the same token is far more likely to *be* the plain base product
         # than a longer, more qualified/flavored one.
+        words = query.split()
         stmt = select(RetailerProduct).where(RetailerProduct.retailer == retailer)
-        for word in query.split():
+        for word in words:
             variant = _hebrew_plural_singular_variant(word)
-            word_match = _word_token_conditions(word)
             if variant:
-                word_match = or_(word_match, _word_token_conditions(variant))
-            stmt = stmt.where(word_match)
-        stmt = stmt.order_by(func.length(RetailerProduct.name)).limit(limit)
-        return list(self.session.scalars(stmt))
+                stmt = stmt.where(
+                    or_(RetailerProduct.name.ilike(f"%{word}%"), RetailerProduct.name.ilike(f"%{variant}%"))
+                )
+            else:
+                stmt = stmt.where(RetailerProduct.name.ilike(f"%{word}%"))
+        stmt = stmt.limit(_MAX_RAW_MATCHES)
+        raw = list(self.session.scalars(stmt))
+
+        matched = [p for p in raw if all(_matches_word(p.name, word) for word in words)]
+        matched.sort(key=lambda p: len(p.name))
+        return matched[:limit]
 
     def get_product(self, retailer: str, item_code: str) -> RetailerProduct | None:
         stmt = select(RetailerProduct).where(
