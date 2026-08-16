@@ -128,8 +128,6 @@ async def _resolve_item(
     retailer's own catalog later — not an item_code."""
     if not candidates:
         return search_name, False, candidates  # nothing matched anywhere; let per-retailer building report it missing
-    if len(candidates) == 1:
-        return candidates[0]["name"], False, candidates
 
     exact = [c for c in candidates if c["name"].strip().lower() == search_name.strip().lower()]
     if len(exact) == 1:
