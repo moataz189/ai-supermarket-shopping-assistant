@@ -4,7 +4,7 @@ import { NavBar } from '@/components/layout/NavBar'
 import { Hero } from '@/components/layout/Hero'
 import { MessageThread } from '@/components/chat/MessageThread'
 import { ChatInput } from '@/components/chat/ChatInput'
-import { postChat } from '@/api'
+import { postChat, postRecipeInstructions } from '@/api'
 import type { Phase, Turn } from '@/types'
 
 function newId() {
@@ -147,6 +147,37 @@ function App() {
     sendMessage(displayLabel, JSON.stringify(selectedIds), false, threadId)
   }
 
+  // "Would you like to see how to prepare X?" (see RecipeInstructionsView) — a plain,
+  // stateless fetch against POST /recipe-instructions, not a chat message: it doesn't
+  // touch the LangGraph thread at all, just updates this turn's own instructions state.
+  async function handleShowInstructions(turnId: string, recipeId: number) {
+    setTurns((prev) =>
+      prev.map((t) =>
+        t.id === turnId && t.role === 'assistant' && t.status === 'done'
+          ? { ...t, instructions: { status: 'loading' } }
+          : t,
+      ),
+    )
+    try {
+      const data = await postRecipeInstructions(recipeId)
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === turnId && t.role === 'assistant' && t.status === 'done'
+            ? { ...t, instructions: { status: 'loaded', data } }
+            : t,
+        ),
+      )
+    } catch {
+      setTurns((prev) =>
+        prev.map((t) =>
+          t.id === turnId && t.role === 'assistant' && t.status === 'done'
+            ? { ...t, instructions: { status: 'error' } }
+            : t,
+        ),
+      )
+    }
+  }
+
   function handleRetry(turnId: string) {
     if (isBusy) return
     const turn = turns.find((t) => t.id === turnId)
@@ -172,6 +203,7 @@ function App() {
               onSelectOption={handleSelectOption}
               onSelectMultipleOption={handleSelectMultipleOption}
               onSelectIngredients={handleSelectIngredients}
+              onShowInstructions={handleShowInstructions}
               onRetry={handleRetry}
             />
           </div>

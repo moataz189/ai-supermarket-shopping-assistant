@@ -385,6 +385,10 @@ async def test_finalize_exposes_the_scaled_recipe_ingredient_list():
     recipe = result["final_result"]["recipe"]
     assert recipe["title"] == "Shakshuka"
     assert recipe["servings"] == 8
+    # The Spoonacular recipe id, carried through to the final response so a later,
+    # separate request can fetch this exact recipe's cooking instructions without
+    # resuming this conversation's LangGraph thread (see app/api/routes/recipe.py).
+    assert recipe["id"] == 1
     ingredients_by_name = {i["name"]: i for i in recipe["ingredients"]}
     assert ingredients_by_name["tomatoes"]["quantity"] == 800.0
     assert ingredients_by_name["tomatoes"]["unit"] == "g"

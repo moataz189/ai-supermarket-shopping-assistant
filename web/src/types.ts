@@ -1,4 +1,14 @@
-import type { ChatResponse } from './api'
+import type { ChatResponse, RecipeInstructionsResponse } from './api'
+
+// Tracks the "Would you like to see how to prepare X?" offer on a completed recipe
+// turn (see MessageThread.tsx) — undefined means the offer hasn't been acted on yet.
+// Fetching is a plain stateless call to POST /recipe-instructions (see
+// app/api/routes/recipe.py), entirely independent of the LangGraph thread/checkpointer,
+// so it's tracked here rather than by re-sending a chat message.
+export interface RecipeInstructionsState {
+  status: 'loading' | 'loaded' | 'error'
+  data?: RecipeInstructionsResponse
+}
 
 export type Turn =
   | { id: string; role: 'user'; text: string }
@@ -15,6 +25,7 @@ export type Turn =
       // Only set after answering a 'recipe_ingredient_selection' clarification (CP10) —
       // the ingredient ids the user chose to buy.
       answeredIngredientIds?: string[]
+      instructions?: RecipeInstructionsState
     }
   | {
       id: string

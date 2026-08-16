@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.routes.chat import router as chat_router
+from app.api.routes.recipe import router as recipe_router
 from app.metrics import router as metrics_router
 
 
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Supermarket Shopping Assistant", lifespan=lifespan)
 app.include_router(chat_router)
+app.include_router(recipe_router)
 app.include_router(metrics_router)
 
 # Generic per-route HTTP request count/duration/status metrics (http_requests_total,

@@ -9,13 +9,16 @@ from app.agent.mcp_clients import McpRecipeClient, McpRetailerCartClient, McpSup
 
 
 @lru_cache
+def get_recipe_client() -> McpRecipeClient:
+    return McpRecipeClient(base_url=os.environ.get("RECIPE_MCP_URL", "http://localhost:8002/mcp"))
+
+
+@lru_cache
 def get_agent_app():
     client = McpSupermarketDataClient(
         base_url=os.environ.get("SUPERMARKET_MCP_URL", "http://localhost:8001/mcp")
     )
-    recipe_client = McpRecipeClient(
-        base_url=os.environ.get("RECIPE_MCP_URL", "http://localhost:8002/mcp")
-    )
+    recipe_client = get_recipe_client()
     retailer_cart_client = McpRetailerCartClient(
         base_url=os.environ.get("RETAILER_CART_MCP_URL", "http://localhost:8003/mcp"),
         api_key=os.environ.get("RETAILER_CART_MCP_API_KEY"),

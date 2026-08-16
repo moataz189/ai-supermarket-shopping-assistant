@@ -11,9 +11,21 @@ export interface RecipeIngredient {
 }
 
 export interface RecipeInfo {
+  id?: number | null
   title?: string | null
   servings?: number | null
   ingredients: RecipeIngredient[]
+}
+
+export interface RecipeInstructionStep {
+  number: number
+  step: string
+}
+
+export interface RecipeInstructionsResponse {
+  recipe_id: number
+  instructions?: string | null
+  steps?: RecipeInstructionStep[] | null
 }
 
 export interface IngredientSelectionOption {
@@ -112,4 +124,16 @@ export async function postChat(threadId: string | null, message: string): Promis
     throw new Error(`Chat request failed: ${response.status}`)
   }
   return (await response.json()) as ChatResponse
+}
+
+export async function postRecipeInstructions(recipeId: number): Promise<RecipeInstructionsResponse> {
+  const response = await fetch('/api/recipe-instructions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ recipe_id: recipeId }),
+  })
+  if (!response.ok) {
+    throw new Error(`Recipe instructions request failed: ${response.status}`)
+  }
+  return (await response.json()) as RecipeInstructionsResponse
 }

@@ -51,6 +51,67 @@ async def test_get_recipe_returns_servings(mcp_server):
     assert structured["servings"] == fixture["servings"]
 
 
+async def test_get_recipe_instructions_returns_plain_text_and_structured_steps(mcp_server):
+    fixture = _recipe_fixture()
+
+    _, structured = await mcp_server.call_tool(
+        "get_recipe_instructions", {"recipe_id": fixture["id"]}
+    )
+
+    assert structured["recipe_id"] == fixture["id"]
+    assert structured["instructions"] == fixture["instructions"]
+    assert [s["step"] for s in structured["steps"]] == [
+        s["step"] for s in fixture["analyzedInstructions"][0]["steps"]
+    ]
+
+
+async def test_get_recipe_instructions_flattens_multiple_named_sections(mcp_server):
+    # A handful of real recipes split analyzedInstructions into several named sections
+    # (e.g. "For the sauce" / "For the pasta") -- flattened in Spoonacular's own given
+    # order, since nothing downstream needs the section grouping.
+    client = FakeSpoonacularClient()
+    client._recipes_by_id[999] = {
+        "id": 999,
+        "title": "Two-Part Recipe",
+        "servings": 2,
+        "instructions": "<ol><li>Make the sauce.</li><li>Make the pasta.</li></ol>",
+        "analyzedInstructions": [
+            {"name": "Sauce", "steps": [{"number": 1, "step": "Simmer the tomatoes."}]},
+            {"name": "Pasta", "steps": [{"number": 1, "step": "Boil the pasta."}]},
+        ],
+        "extendedIngredients": [],
+    }
+    server_with_extra_recipe = server.create_server(client)
+
+    _, structured = await server_with_extra_recipe.call_tool(
+        "get_recipe_instructions", {"recipe_id": 999}
+    )
+
+    assert [s["step"] for s in structured["steps"]] == ["Simmer the tomatoes.", "Boil the pasta."]
+
+
+async def test_get_recipe_instructions_is_none_when_spoonacular_has_none_parsed(mcp_server):
+    # Real, documented Spoonacular case: instructions/analyzedInstructions can both be
+    # empty for a recipe Spoonacular hasn't parsed instructions for -- not an error.
+    client = FakeSpoonacularClient()
+    client._recipes_by_id[888] = {
+        "id": 888,
+        "title": "No Instructions Recipe",
+        "servings": 2,
+        "instructions": "",
+        "analyzedInstructions": [],
+        "extendedIngredients": [],
+    }
+    server_with_extra_recipe = server.create_server(client)
+
+    _, structured = await server_with_extra_recipe.call_tool(
+        "get_recipe_instructions", {"recipe_id": 888}
+    )
+
+    assert structured["instructions"] is None
+    assert structured["steps"] is None
+
+
 async def test_get_recipe_ingredients_scales_amounts(mcp_server):
     fixture = _recipe_fixture()
     doubled_servings = fixture["servings"] * 2
