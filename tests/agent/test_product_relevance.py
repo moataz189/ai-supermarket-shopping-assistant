@@ -233,4 +233,27 @@ async def test_pet_food_containing_the_query_ingredient_is_excluded():
 
 def test_relevance_prompt_explicitly_rejects_pet_food():
     assert "pet food" in RELEVANCE_PROMPT
+
+
+async def test_branded_pet_food_whose_name_does_not_say_pet_is_excluded():
+    # Real user report (2026-08-16): a "tuna" search kept selecting "פריסקיז טייסטי
+    # טונה" (Friskies, a cat food brand) even after the general pet-food exclusion was
+    # added -- unlike "נייטיב ווי"/"סופר קט" (which contain a Hebrew word hinting at
+    # "cat"), a bare brand name gives the model no textual hint at all that it's pet
+    # food without already knowing the brand. Pins the parsing/filtering mechanics;
+    # RELEVANCE_PROMPT's own content (asserted separately below) is what actually
+    # steers the live model here.
+    candidates = [
+        {"name": "טונה במי מלח"},
+        {"name": "פריסקיז טייסטי טונה 156 גר"},
+    ]
+    llm = _StubLLM(content="טונה במי מלח")
+
+    result = await filter_relevant_candidates(llm, "טונה", candidates)
+
+    assert result == [{"name": "טונה במי מלח"}]
+
+
+def test_relevance_prompt_explicitly_names_friskies_as_a_pet_food_brand():
+    assert "Friskies" in RELEVANCE_PROMPT
     assert "cat food" in RELEVANCE_PROMPT
