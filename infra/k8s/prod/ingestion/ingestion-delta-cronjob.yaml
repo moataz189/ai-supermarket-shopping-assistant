@@ -19,7 +19,7 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: ingestion-delta
-              image: moataz189/supermarket-ingestion:49bfd960289d48ea7dc23f48c27ed6eb2d13e21c
+              image: moataz189/supermarket-ingestion:0c2c257f28fc1be4e7ffba47f33f86ff3d1342b3
               # already_processed() (app/ingestion/pipeline.py) makes re-running this against
               # an unchanged upstream file a safe no-op — the newest Price file doesn't
               # necessarily change every hour.
