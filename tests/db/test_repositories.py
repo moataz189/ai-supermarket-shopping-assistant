@@ -197,6 +197,46 @@ def test_search_candidates_orders_shorter_names_first(session):
     assert [p.item_code for p in results] == ["2", "3", "1"]
 
 
+def test_search_candidates_matches_a_word_fused_directly_onto_a_trailing_weight_suffix(session):
+    # Real user report (2026-08-16): the live Shufersal feed listed pasta shells as
+    # "ניוקטי סרדי  קונכיה500גר" -- "קונכיה" fused directly onto "500גר" with no space at
+    # all. A whitespace-only word-boundary check (this function's previous
+    # implementation) missed this real match entirely; a Hebrew-letter-to-digit
+    # transition must still count as a genuine word boundary.
+    session.add(_make_product("shufersal", "1", "ניוקטי סרדי  קונכיה500גר", "413"))
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("קונכיות", retailer="shufersal")
+
+    assert [p.item_code for p in results] == ["1"]
+
+
+def test_search_candidates_matches_a_word_fused_onto_a_multiplication_and_weight_suffix(session):
+    # Same real-world pattern, a second live example: "טונה4*160ג" -- "טונה" fused
+    # directly onto a count/weight suffix with no space.
+    session.add(_make_product("shufersal", "1", "טונה במי מלח4*160ג", "413"))
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("טונה", retailer="shufersal")
+
+    assert [p.item_code for p in results] == ["1"]
+
+
+def test_search_candidates_still_excludes_a_word_fused_onto_another_hebrew_letter(session):
+    # The digit/punctuation boundary above must not become a loose "any fusion is fine"
+    # rule -- fusion into *another Hebrew letter* (a genuinely different word, e.g.
+    # "סחלב"/orchid vs "חלב"/milk) must still be excluded, same as before.
+    session.add(_make_product("shufersal", "1", "סחלב פלנופסיס", "413"))
+    session.commit()
+
+    repo = ProductRepository(session)
+    results = repo.search_candidates("חלב", retailer="shufersal")
+
+    assert results == []
+
+
 def test_get_product_returns_none_when_missing(session):
     repo = ProductRepository(session)
     assert repo.get_product("shufersal", "does-not-exist") is None
