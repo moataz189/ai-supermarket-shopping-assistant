@@ -211,3 +211,26 @@ async def test_branded_flavored_snack_naming_the_fruit_directly_is_excluded():
 def test_relevance_prompt_explicitly_rejects_the_danielle_banana_snack_example():
     assert "Danielle" in RELEVANCE_PROMPT
     assert "Banana" in RELEVANCE_PROMPT
+
+
+async def test_pet_food_containing_the_query_ingredient_is_excluded():
+    # Real user report (2026-08-16): a "tuna" search surfaced "נייטיב ווי טונה" (a cat
+    # food brand containing tuna) alongside real human tuna products -- genuinely made
+    # with tuna, but not human food, a dimension ("who is this food for") none of the
+    # existing exclusion categories (flavor/snack/sauce/non-food) covered. Pins the
+    # parsing/filtering mechanics; RELEVANCE_PROMPT's own content (asserted separately
+    # below) is what actually steers the live model here.
+    candidates = [
+        {"name": "מונג נתחי טונה 100 גרם"},
+        {"name": "נייטיב ווי טונה"},
+    ]
+    llm = _StubLLM(content="מונג נתחי טונה 100 גרם")
+
+    result = await filter_relevant_candidates(llm, "טונה", candidates)
+
+    assert result == [{"name": "מונג נתחי טונה 100 גרם"}]
+
+
+def test_relevance_prompt_explicitly_rejects_pet_food():
+    assert "pet food" in RELEVANCE_PROMPT
+    assert "cat food" in RELEVANCE_PROMPT
