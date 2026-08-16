@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: supermarket-mcp
-          image: moataz189/supermarket-mcp:49bfd960289d48ea7dc23f48c27ed6eb2d13e21c
+          image: moataz189/supermarket-mcp:0c2c257f28fc1be4e7ffba47f33f86ff3d1342b3
 
           ports:
             - containerPort: 8001
