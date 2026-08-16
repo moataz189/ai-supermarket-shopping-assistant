@@ -32,3 +32,22 @@ class GetRecipeIngredientsResponse(BaseModel):
     recipe_id: int
     servings: int
     ingredients: list[Ingredient]
+
+
+class InstructionStep(BaseModel):
+    number: int
+    step: str
+
+
+class RecipeInstructions(BaseModel):
+    recipe_id: int
+    # Spoonacular's plain HTML/text form -- None when Spoonacular has no parsed
+    # instructions for this recipe at all (a real, documented, non-error case, not
+    # something to guess a fallback for).
+    instructions: str | None = None
+    # Spoonacular's structured analyzedInstructions, flattened across every named
+    # section (most recipes have exactly one unnamed section; a handful have several,
+    # e.g. "For the sauce" / "For the pasta" -- flattened in Spoonacular's own given
+    # order rather than kept nested, since nothing downstream needs the section
+    # grouping). None under the same "nothing parsed" condition as `instructions`.
+    steps: list[InstructionStep] | None = None

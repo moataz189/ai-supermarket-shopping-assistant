@@ -12,7 +12,9 @@ from mcp_servers.recipe_mcp.quantity import is_precise_metric_unit
 from mcp_servers.recipe_mcp.schemas import (
     GetRecipeIngredientsResponse,
     Ingredient,
+    InstructionStep,
     RecipeDetail,
+    RecipeInstructions,
     RecipeSummary,
     SearchRecipesResponse,
 )
@@ -56,6 +58,26 @@ def create_server(client) -> FastMCP:
     def get_recipe(recipe_id: int) -> RecipeDetail:
         data = client.get_recipe(recipe_id)
         return RecipeDetail(id=data["id"], title=data["title"], servings=data["servings"])
+
+    @mcp.tool()
+    def get_recipe_instructions(recipe_id: int) -> RecipeInstructions:
+        # Same Spoonacular endpoint get_recipe/get_recipe_ingredients already call (see
+        # spoonacular_client.get_recipe) -- no new Spoonacular API call, just reading two
+        # fields of the same response those tools already fetch and discard. Never
+        # LLM-generated: this is the recipe's own Spoonacular instructions, verbatim.
+        data = client.get_recipe(recipe_id)
+        # `or None` normalizes Spoonacular's documented "no parsed instructions for this
+        # recipe" case (an empty string / empty list, not a missing key) to the same
+        # `None` a missing key would produce -- one signal for "nothing available" at
+        # every layer above this, not two.
+        instructions = data.get("instructions") or None
+        analyzed = data.get("analyzedInstructions") or []
+        steps = [
+            InstructionStep(number=step["number"], step=step["step"])
+            for section in analyzed
+            for step in section.get("steps", [])
+        ] or None
+        return RecipeInstructions(recipe_id=recipe_id, instructions=instructions, steps=steps)
 
     @mcp.tool()
     def get_recipe_ingredients(

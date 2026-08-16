@@ -10,6 +10,7 @@ import { RetailerComparison } from '@/components/retailers/RetailerComparison'
 import { RetailerComparisonSkeleton } from '@/components/retailers/RetailerCardSkeleton'
 import { RetailerCartResultView } from '@/components/RetailerCartResultView'
 import { RecipeIngredientsView } from '@/components/RecipeIngredientsView'
+import { RecipeInstructionsView } from '@/components/RecipeInstructionsView'
 import { WarningsList } from './WarningsList'
 import { formatRetailerName } from '@/format'
 
@@ -18,6 +19,7 @@ interface MessageThreadProps {
   onSelectOption: (turnId: string, optionId: string, label: string) => void
   onSelectMultipleOption: (turnId: string, answersByRetailer: Record<string, string>, displayLabel: string) => void
   onSelectIngredients: (turnId: string, selectedIds: string[], displayLabel: string) => void
+  onShowInstructions: (turnId: string, recipeId: number) => void
   onRetry: (turnId: string) => void
 }
 
@@ -32,6 +34,7 @@ export function MessageThread({
   onSelectOption,
   onSelectMultipleOption,
   onSelectIngredients,
+  onShowInstructions,
   onRetry,
 }: MessageThreadProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -71,7 +74,7 @@ export function MessageThread({
             )
           }
 
-          const { response, answeredOptionId, answeredByRetailer, answeredIngredientIds } = turn
+          const { response, answeredOptionId, answeredByRetailer, answeredIngredientIds, instructions } = turn
           const clarification = response.clarification
 
           if (clarification && clarification.reason === 'recipe_ingredient_selection') {
@@ -175,6 +178,15 @@ export function MessageThread({
                 )}
                 {!response.retailer_cart_result && response.warnings.length === 0 && (
                   <AssistantBubble>All done.</AssistantBubble>
+                )}
+                {response.recipe?.id != null && (
+                  <div className="flex justify-start">
+                    <RecipeInstructionsView
+                      recipe={response.recipe}
+                      instructions={instructions}
+                      onRequest={() => onShowInstructions(turn.id, response.recipe!.id!)}
+                    />
+                  </div>
                 )}
               </div>
             )

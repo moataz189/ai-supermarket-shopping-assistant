@@ -57,6 +57,16 @@ class FakeRecipeClient:
             ],
         }
 
+    async def get_recipe_instructions(self, recipe_id: int) -> dict | None:
+        recipe = self._recipes.get(recipe_id)
+        if recipe is None:
+            return None
+        return {
+            "recipe_id": recipe_id,
+            "instructions": recipe.get("instructions"),
+            "steps": recipe.get("steps"),
+        }
+
 
 class FakeSupermarketDataClient:
     """In-memory stand-in for McpSupermarketDataClient. Never makes network calls.
