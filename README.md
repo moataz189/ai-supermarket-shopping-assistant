@@ -226,10 +226,9 @@ flowchart LR
 | Observability | Prometheus, Grafana, Alertmanager, Amazon SNS |
 | Testing | pytest, pytest-asyncio, pytest-cov, Ruff, Playwright, oxlint |
 
-## Screenshots / Demo
 
-_To add: chat UI, cart comparison view, and Grafana dashboard screenshots. Place image files
-under `docs/images/` and reference them here._
+
+
 
 ## Project Scope & Safety
 
