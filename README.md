@@ -92,6 +92,68 @@ Context Protocol:
 | **Supermarket Data MCP** | Product search and pricing | PostgreSQL (Israeli supermarket price-transparency data) |
 | **Retailer Cart MCP** | Drives the real retailer website and builds the cart | Playwright |
 
+### The Agent Graph
+
+Generated directly from the compiled graph (`app/agent/graph.py`, via LangGraph's own
+`get_graph().draw_mermaid()`) — not hand-drawn, so it always matches the real node/edge wiring.
+Solid arrows are unconditional edges; dashed arrows are conditional routing (e.g. recipe vs.
+grocery-list vs. general chat, or whether a product needs user clarification).
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	parse_request(parse_request)
+	general_chat(general_chat)
+	search_recipes(search_recipes)
+	recipe_not_found(recipe_not_found)
+	resolve_recipe_ambiguity(resolve_recipe_ambiguity)
+	get_recipe_ingredients(get_recipe_ingredients)
+	select_recipe_ingredients(select_recipe_ingredients)
+	no_ingredients_to_buy(no_ingredients_to_buy)
+	resolve_weekly_shop_profile(resolve_weekly_shop_profile)
+	resolve_items(resolve_items)
+	resolve_ambiguity(resolve_ambiguity)
+	build_shufersal_cart(build_shufersal_cart)
+	build_rami_levy_cart(build_rami_levy_cart)
+	choose_retailer(choose_retailer)
+	prepare_retailer_cart(prepare_retailer_cart)
+	finalize(finalize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> parse_request;
+	build_rami_levy_cart --> choose_retailer;
+	build_shufersal_cart --> build_rami_levy_cart;
+	choose_retailer -.-> finalize;
+	choose_retailer -.-> prepare_retailer_cart;
+	get_recipe_ingredients --> select_recipe_ingredients;
+	parse_request -.-> general_chat;
+	parse_request -.-> resolve_items;
+	parse_request -.-> resolve_weekly_shop_profile;
+	parse_request -.-> search_recipes;
+	prepare_retailer_cart --> finalize;
+	resolve_ambiguity --> resolve_items;
+	resolve_items -.-> build_shufersal_cart;
+	resolve_items -.-> resolve_ambiguity;
+	resolve_recipe_ambiguity --> get_recipe_ingredients;
+	resolve_weekly_shop_profile --> resolve_items;
+	search_recipes -.-> get_recipe_ingredients;
+	search_recipes -.-> recipe_not_found;
+	search_recipes -.-> resolve_recipe_ambiguity;
+	select_recipe_ingredients -.-> no_ingredients_to_buy;
+	select_recipe_ingredients -.-> resolve_items;
+	finalize --> __end__;
+	general_chat --> __end__;
+	no_ingredients_to_buy --> __end__;
+	recipe_not_found --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
+```
+
 ## Infrastructure
 
 This project runs on **plain AWS EC2, not Amazon EKS.** The Kubernetes cluster is a manually
